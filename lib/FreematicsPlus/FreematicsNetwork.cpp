@@ -73,6 +73,10 @@ String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* p
     header += "\r\nContent-length: ";
     header += String(payloadSize);
   }
+  if (m_bearerToken && *m_bearerToken) {
+    header += "\r\nAuthorization: Bearer ";
+    header += m_bearerToken;
+  }
   header += "\r\n\r\n";
   return header;
 }
@@ -914,6 +918,11 @@ bool CellHTTP::open(const char* host, uint16_t port)
         sendCommand("AT+SHAHEAD=\"Cache-control\",\"no-cache\"\r");
         sendCommand("AT+SHAHEAD=\"Connection\",\"keep-alive\"\r");
         sendCommand("AT+SHAHEAD=\"Accept\",\"*/*\"\r");
+        if (m_bearerToken && *m_bearerToken) {
+          snprintf(m_buffer, RECV_BUF_SIZE,
+            "AT+SHAHEAD=\"Authorization\",\"Bearer %s\"\r", m_bearerToken);
+          if (!sendCommand(m_buffer)) return false;
+        }
         m_state = HTTP_CONNECTED;
         return true;
       }
@@ -925,6 +934,14 @@ bool CellHTTP::open(const char* host, uint16_t port)
     }
     sendCommand("AT+HTTPINIT\r");
     sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r");
+    if (m_bearerToken && *m_bearerToken) {
+      snprintf(m_buffer, RECV_BUF_SIZE,
+        "AT+HTTPPARA=\"USERDATA\",\"Authorization: Bearer %s\"\r", m_bearerToken);
+      if (!sendCommand(m_buffer)) {
+        m_state = HTTP_ERROR;
+        return false;
+      }
+    }
     return true;
   } else {
     memset(m_buffer, 0, RECV_BUF_SIZE);
