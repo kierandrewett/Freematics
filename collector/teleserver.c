@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include "data2kml.h"
 #include "httpd.h"
@@ -36,6 +37,7 @@ int uhChannelsXML(UrlHandlerParam* param);
 int uhNotify(UrlHandlerParam* param);
 int uhCommand(UrlHandlerParam* param);
 int uhTest(UrlHandlerParam* param);
+int uhMetrics(UrlHandlerParam* param);
 
 int uhTrip(UrlHandlerParam* param);
 int uhHistory(UrlHandlerParam* param);
@@ -44,6 +46,7 @@ int uhQuery(UrlHandlerParam* param);
 int phData(void* _hp, int op, char* buf, int len);
 
 UrlHandler urlHandlerList[]={
+	{"metrics", uhMetrics},
 	{"api/post", uhPost},
 	{"api/push", uhPush},
 	{"api/get", uhGet},
@@ -78,6 +81,133 @@ char serverKey[256] = { 0 };
 int noGUI = 0;
 
 CHANNEL_DATA ld[MAX_CHANNELS];
+
+typedef struct {
+	uint16_t pid;
+	const char* name;
+	const char* description;
+	const char* unit;
+} OBD_PID_META;
+
+static const OBD_PID_META obdPidCatalog[] = {
+#define OBD_PID(pid, name, description, unit, priority) {0x100 | pid, #name, description, unit},
+#include "../obd_pids.h"
+};
+
+static const OBD_PID_META* findOBDPIDMeta(uint16_t pid)
+{
+	for (unsigned int i = 0; i < sizeof(obdPidCatalog) / sizeof(obdPidCatalog[0]); i++) {
+		if (obdPidCatalog[i].pid == pid) return obdPidCatalog + i;
+	}
+	return NULL;
+}
+
+static int appendScalarMetric(char* buf, int bs, int l, const char* metric,
+	const char* devid, const PID_DATA* data, double scale)
+{
+	if (!data->ts || l >= bs - 1) return l;
+	char* end = NULL;
+	double value = strtod(data->value, &end);
+	if (end == data->value) return l;
+	return l + snprintf(buf + l, bs - l, "%s{device_id=\"%s\"} %.10g\n",
+		metric, devid, value * scale);
+}
+
+int uhMetrics(UrlHandlerParam* param)
+{
+	uint64_t tick = GetTickCount64();
+	char* buf = param->pucBuffer;
+	int bs = param->bufSize;
+	int l = 0;
+
+	l += snprintf(buf + l, bs - l,
+		"# HELP freematics_device_connected Whether telemetry arrived within the channel timeout.\n"
+		"# TYPE freematics_device_connected gauge\n"
+		"# HELP freematics_device_data_age_seconds Age of the newest telemetry packet.\n"
+		"# TYPE freematics_device_data_age_seconds gauge\n"
+		"# HELP freematics_device_data_received_bytes_total Telemetry bytes accepted by the collector.\n"
+		"# TYPE freematics_device_data_received_bytes_total counter\n"
+		"# HELP freematics_device_sample_rate_per_minute Samples received per minute.\n"
+		"# TYPE freematics_device_sample_rate_per_minute gauge\n"
+		"# HELP freematics_device_rssi_dbm Cellular or Wi-Fi received signal strength.\n"
+		"# TYPE freematics_device_rssi_dbm gauge\n"
+		"# HELP freematics_obd_value Latest decoded value for an ECU-advertised Mode 01 PID.\n"
+		"# TYPE freematics_obd_value gauge\n"
+		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value.\n"
+		"# TYPE freematics_obd_value_age_seconds gauge\n"
+		"# HELP freematics_acceleration_g Vehicle acceleration by device axis.\n"
+		"# TYPE freematics_acceleration_g gauge\n");
+
+	for (int n = 0; n < MAX_CHANNELS && l < bs - 1; n++) {
+		CHANNEL_DATA* pld = ld + n;
+		if (!pld->id) continue;
+		unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
+		l += snprintf(buf + l, bs - l,
+			"freematics_device_connected{device_id=\"%s\"} %u\n"
+			"freematics_device_data_age_seconds{device_id=\"%s\"} %.3f\n"
+			"freematics_device_data_received_bytes_total{device_id=\"%s\"} %u\n"
+			"freematics_device_sample_rate_per_minute{device_id=\"%s\"} %.3f\n"
+			"freematics_device_rssi_dbm{device_id=\"%s\"} %d\n",
+			pld->devid, (pld->flags & FLAG_RUNNING) ? 1 : 0,
+			pld->devid, age / 1000.0,
+			pld->devid, pld->dataReceived,
+			pld->devid, pld->sampleRate,
+			pld->devid, (int)pld->rssi);
+
+		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->data + PID_DEVICE_TEMP, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->data + PID_GPS_LATITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->data + PID_GPS_LONGITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_altitude_metres", pld->devid, pld->data + PID_GPS_ALTITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_speed_kilometres_per_hour", pld->devid, pld->data + PID_GPS_SPEED, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_heading_degrees", pld->devid, pld->data + PID_GPS_HEADING, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_satellites", pld->devid, pld->data + PID_GPS_SAT_COUNT, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_hdop", pld->devid, pld->data + PID_GPS_HDOP, 0.1);
+		l = appendScalarMetric(buf, bs, l, "freematics_trip_distance_kilometres", pld->devid, pld->data + PID_TRIP_DISTANCE, 1);
+
+		if (pld->data[PID_ACC].ts) {
+			double x, y, z;
+			if (sscanf(pld->data[PID_ACC].value, "%lf;%lf;%lf", &x, &y, &z) == 3) {
+				l += snprintf(buf + l, bs - l,
+					"freematics_acceleration_g{device_id=\"%s\",axis=\"x\"} %.10g\n"
+					"freematics_acceleration_g{device_id=\"%s\",axis=\"y\"} %.10g\n"
+					"freematics_acceleration_g{device_id=\"%s\",axis=\"z\"} %.10g\n",
+					pld->devid, x, pld->devid, y, pld->devid, z);
+			}
+		}
+		if (pld->data[0x25].ts) {
+			double yaw, pitch, roll;
+			if (sscanf(pld->data[0x25].value, "%lf;%lf;%lf", &yaw, &pitch, &roll) == 3) {
+				l += snprintf(buf + l, bs - l,
+					"freematics_orientation_degrees{device_id=\"%s\",axis=\"yaw\"} %.10g\n"
+					"freematics_orientation_degrees{device_id=\"%s\",axis=\"pitch\"} %.10g\n"
+					"freematics_orientation_degrees{device_id=\"%s\",axis=\"roll\"} %.10g\n",
+					pld->devid, yaw, pld->devid, pitch, pld->devid, roll);
+			}
+		}
+
+		for (unsigned int pid = 0x100; pid < 0x200 && l < bs - 1; pid++) {
+			PID_DATA* value = pld->data + pid;
+			if (!value->ts) continue;
+			const OBD_PID_META* meta = findOBDPIDMeta(pid);
+			if (!meta) continue;
+			char* end = NULL;
+			double number = strtod(value->value, &end);
+			if (end == value->value) continue;
+			unsigned int valueAge = age;
+			if (pld->deviceTick >= value->ts) valueAge += pld->deviceTick - value->ts;
+			l += snprintf(buf + l, bs - l,
+				"freematics_obd_value{device_id=\"%s\",pid=\"0x%03X\",name=\"%s\",description=\"%s\",unit=\"%s\"} %.10g\n"
+				"freematics_obd_value_age_seconds{device_id=\"%s\",pid=\"0x%03X\",name=\"%s\"} %.3f\n",
+				pld->devid, pid, meta->name, meta->description, meta->unit, number,
+				pld->devid, pid, meta->name, valueAge / 1000.0);
+		}
+	}
+
+	param->contentLength = l;
+	param->contentType = HTTPFILETYPE_TEXT;
+	return FLAG_DATA_RAW;
+}
 
 uint8_t hex2uint8(const char *p)
 {
@@ -354,6 +484,8 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		char *value = ++p;
 		p = strchr(p, ',');
 		if (p) *(p++) = 0;
+		char* checksum = strchr(value, '*');
+		if (checksum) *checksum = 0;
 		size_t len = strlen(value);
 		if (len >= MAX_PID_DATA_LEN) len = MAX_PID_DATA_LEN - 1;
 		// now we have pid and value
