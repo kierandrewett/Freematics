@@ -33,6 +33,7 @@ public:
 	OBD_STATES getState() { return m_state; }
 	// read specified OBD-II PID value
 	bool readPID(byte pid, int& result);
+	bool readPID(byte pid, float& result);
 	// read multiple OBD-II PID values, return number of values obtained
 	byte readPID(const byte pid[], byte count, int result[]);
 	// set device into low power mode
@@ -78,7 +79,7 @@ protected:
 	uint16_t getLargeValue(char* data);
 	uint8_t getSmallValue(char* data);
 	int16_t getTemperatureValue(char* data);
-	int normalizeData(byte pid, char* data);
+	float normalizeData(byte pid, char* data);
 	byte checkErrorMessage(const char* buffer);
 	char* getResultValue(char* buf);
 	OBD_STATES m_state = OBD_DISCONNECTED;

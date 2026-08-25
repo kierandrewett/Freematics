@@ -74,6 +74,14 @@ byte hex2uint8(const char *p)
 
 bool COBD::readPID(byte pid, int& result)
 {
+	float value;
+	if (!readPID(pid, value)) return false;
+	result = (int)value;
+	return true;
+}
+
+bool COBD::readPID(byte pid, float& result)
+{
 	char buffer[64];
 	char* data = 0;
 	sprintf(buffer, "%02X%02X\r", dataMode, pid);
@@ -159,16 +167,15 @@ void COBD::clearDTC()
 	link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_LONG);
 }
 
-int COBD::normalizeData(byte pid, char* data)
+float COBD::normalizeData(byte pid, char* data)
 {
-	int result;
+	float result;
 	switch (pid) {
 	case PID_RPM:
-	case PID_EVAP_SYS_VAPOR_PRESSURE: // kPa
-		result = getLargeValue(data) >> 2;
+		result = getLargeValue(data) / 4.0f;
 		break;
 	case PID_FUEL_PRESSURE: // kPa
-		result = getSmallValue(data) * 3;
+		result = getSmallValue(data) * 3.0f;
 		break;
 	case PID_COOLANT_TEMP:
 	case PID_INTAKE_TEMP:
@@ -191,14 +198,26 @@ int COBD::normalizeData(byte pid, char* data)
 	case PID_ABSOLUTE_ENGINE_LOAD:
 	case PID_ETHANOL_FUEL:
 	case PID_HYBRID_BATTERY_PERCENTAGE:
-		result = getPercentageValue(data);
+	case PID_ACCELERATOR_POS_RELATIVE:
+		result = getSmallValue(data) * 100.0f / 255.0f;
+		break;
+	case PID_O2_B1S1_VOLTAGE:
+	case PID_O2_B1S2_VOLTAGE:
+	case PID_O2_B1S3_VOLTAGE:
+	case PID_O2_B1S4_VOLTAGE:
+	case PID_O2_B2S1_VOLTAGE:
+	case PID_O2_B2S2_VOLTAGE:
+	case PID_O2_B2S3_VOLTAGE:
+	case PID_O2_B2S4_VOLTAGE:
+		result = getSmallValue(data) / 200.0f;
 		break;
 	case PID_MAF_FLOW: // grams/sec
-		result = getLargeValue(data) / 100;
+		result = getLargeValue(data) / 100.0f;
 		break;
 	case PID_TIMING_ADVANCE:
-		result = (int)(getSmallValue(data) / 2) - 64;
+		result = getSmallValue(data) / 2.0f - 64.0f;
 		break;
+	case PID_FREEZE_DTC:
 	case PID_DISTANCE: // km
 	case PID_DISTANCE_WITH_MIL: // km
 	case PID_TIME_WITH_MIL: // minute
@@ -208,11 +227,44 @@ int COBD::normalizeData(byte pid, char* data)
 	case PID_ENGINE_REF_TORQUE: // Nm
 		result = getLargeValue(data);
 		break;
+	case PID_FUEL_RAIL_PRESSURE_RELATIVE:
+		result = (int16_t)getLargeValue(data) / 4.0f;
+		break;
+	case PID_FUEL_RAIL_PRESSURE_DIRECT:
+	case PID_ABS_EVAP_SYS_VAPOR_PRESSURE:
+		result = getLargeValue(data) / 200.0f;
+		break;
+	case PID_EVAP_SYS_VAPOR_PRESSURE:
+		result = (int16_t)getLargeValue(data) / 4.0f;
+		break;
+	case PID_EVAP_SYS_VAPOR_PRESSURE_ALT:
+		result = getLargeValue(data) - 32767.0f;
+		break;
+	case PID_O2_S1_WR_VOLTAGE:
+	case PID_O2_S2_WR_VOLTAGE:
+	case PID_O2_S3_WR_VOLTAGE:
+	case PID_O2_S4_WR_VOLTAGE:
+	case PID_O2_S5_WR_VOLTAGE:
+	case PID_O2_S6_WR_VOLTAGE:
+	case PID_O2_S7_WR_VOLTAGE:
+	case PID_O2_S8_WR_VOLTAGE:
+		result = getLargeValue(data + 6) * 8.0f / 65536.0f;
+		break;
+	case PID_O2_S1_WR_CURRENT:
+	case PID_O2_S2_WR_CURRENT:
+	case PID_O2_S3_WR_CURRENT:
+	case PID_O2_S4_WR_CURRENT:
+	case PID_O2_S5_WR_CURRENT:
+	case PID_O2_S6_WR_CURRENT:
+	case PID_O2_S7_WR_CURRENT:
+	case PID_O2_S8_WR_CURRENT:
+		result = getLargeValue(data + 6) / 256.0f - 128.0f;
+		break;
 	case PID_CONTROL_MODULE_VOLTAGE: // V
-		result = getLargeValue(data) / 1000;
+		result = getLargeValue(data) / 1000.0f;
 		break;
 	case PID_ENGINE_FUEL_RATE: // L/h
-		result = getLargeValue(data) / 20;
+		result = getLargeValue(data) / 20.0f;
 		break;
 	case PID_ENGINE_TORQUE_DEMANDED: // %
 	case PID_ENGINE_TORQUE_PERCENTAGE: // %
@@ -223,26 +275,27 @@ int COBD::normalizeData(byte pid, char* data)
 	case PID_SHORT_TERM_FUEL_TRIM_2:
 	case PID_LONG_TERM_FUEL_TRIM_2:
 	case PID_EGR_ERROR:
-		result = ((int)getSmallValue(data) - 128) * 100 / 128;
+		result = ((int)getSmallValue(data) - 128) * 100.0f / 128.0f;
 		break;
 	case PID_FUEL_INJECTION_TIMING:
-		result = ((int32_t)getLargeValue(data) - 26880) / 128;
+		result = getLargeValue(data) / 128.0f - 210.0f;
 		break;
 	case PID_CATALYST_TEMP_B1S1:
 	case PID_CATALYST_TEMP_B2S1:
 	case PID_CATALYST_TEMP_B1S2:
 	case PID_CATALYST_TEMP_B2S2:
-		result = getLargeValue(data) / 10 - 40;
+		result = getLargeValue(data) / 10.0f - 40.0f;
 		break;
-	case PID_AIR_FUEL_EQUIV_RATIO: // 0~200
-		result = (long)getLargeValue(data) * 200 / 65536;
+	case PID_AIR_FUEL_EQUIV_RATIO:
+		result = getLargeValue(data) / 32768.0f;
 		break;
-	case PID_ODOMETER:
+	case PID_ODOMETER: {
 		if (strlen(data) < 11)
 			result = -1;
 		else
-			result = (uint32_t)hex2uint8(data) << 24 | (uint32_t)hex2uint8(data + 3) << 16 | (uint32_t)hex2uint8(data + 6) << 8 | hex2uint8(data + 9);
+			result = ((uint32_t)hex2uint8(data) << 24 | (uint32_t)hex2uint8(data + 3) << 16 | (uint32_t)hex2uint8(data + 6) << 8 | hex2uint8(data + 9)) / 10.0f;
 		break;
+	}
 	default:
 		result = getSmallValue(data);
 	}
