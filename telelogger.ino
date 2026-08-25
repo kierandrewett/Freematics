@@ -47,21 +47,17 @@
 
 typedef struct {
   byte pid;
-  byte tier;
-  int value;
+  byte priority;
+  float value;
   uint32_t ts;
 } PID_POLLING_INFO;
 
 PID_POLLING_INFO obdData[]= {
-  {PID_SPEED, 1},
-  {PID_RPM, 1},
-  {PID_THROTTLE, 1},
-  {PID_ENGINE_LOAD, 1},
-  {PID_FUEL_PRESSURE, 2},
-  {PID_TIMING_ADVANCE, 2},
-  {PID_COOLANT_TEMP, 3},
-  {PID_INTAKE_TEMP, 3},
+#define OBD_PID(pid, name, description, unit, priority) {pid, priority, 0, 0},
+#include "obd_pids.h"
 };
+
+#define OBD_AUX_PIDS_PER_CYCLE 8
 
 CBufferManager bufman;
 Task subtask;
@@ -238,39 +234,43 @@ int handlerLiveData(UrlHandlerParam* param)
 #if ENABLE_OBD
 void processOBD(CBuffer* buffer)
 {
-  static int idx[2] = {0, 0};
-  int tier = 1;
-  for (byte i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
-    if (obdData[i].tier > tier) {
-        // reset previous tier index
-        idx[tier - 2] = 0;
-        // keep new tier number
-        tier = obdData[i].tier;
-        // move up current tier index
-        i += idx[tier - 2]++;
-        // check if into next tier
-        if (obdData[i].tier != tier) {
-            idx[tier - 2]= 0;
-            i--;
-            continue;
-        }
+  static byte auxIndex = 0;
+  const byte count = sizeof(obdData) / sizeof(obdData[0]);
+
+  // Core driving metrics are sampled every cycle for near-real-time panels.
+  for (byte i = 0; i < count; i++) {
+    if (obdData[i].priority != 1 || !obd.isValidPID(obdData[i].pid)) continue;
+    float value;
+    if (!obd.readPID(obdData[i].pid, value)) {
+      timeoutsOBD++;
+      printTimeoutStats();
+      return;
     }
-    byte pid = obdData[i].pid;
-    if (!obd.isValidPID(pid)) continue;
-    int value;
-    if (obd.readPID(pid, value)) {
-        obdData[i].ts = millis();
-        obdData[i].value = value;
-        buffer->add((uint16_t)pid | 0x100, ELEMENT_INT32, &value, sizeof(value));
-    } else {
-        timeoutsOBD++;
-        printTimeoutStats();
-        break;
-    }
-    if (tier > 1) break;
+    obdData[i].ts = millis();
+    obdData[i].value = value;
+    buffer->add((uint16_t)obdData[i].pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+    if (obdData[i].pid == PID_SPEED && value >= 2) lastMotionTime = millis();
   }
-  int kph = obdData[0].value;
-  if (kph >= 2) lastMotionTime = millis();
+
+  // Rotate through every other ECU-advertised PID without saturating the bus.
+  byte sampled = 0;
+  byte visited = 0;
+  while (sampled < OBD_AUX_PIDS_PER_CYCLE && visited < count) {
+    if (auxIndex >= count) auxIndex = 0;
+    PID_POLLING_INFO& item = obdData[auxIndex++];
+    visited++;
+    if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
+    float value;
+    if (!obd.readPID(item.pid, value)) {
+      timeoutsOBD++;
+      printTimeoutStats();
+      return;
+    }
+    item.ts = millis();
+    item.value = value;
+    buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+    sampled++;
+  }
 }
 #endif
 
@@ -1351,15 +1351,15 @@ void processBLE(int timeout)
     byte pid = hex2uint8(cmd + 2);
     for (byte i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
       if (obdData[i].pid == pid) {
-        n += snprintf(buf + n, bufsize - n, "%d", obdData[i].value);
+        n += snprintf(buf + n, bufsize - n, "%.2f", obdData[i].value);
         pid = 0;
         break;
       }
     }
     if (pid) {
-      int value;
+      float value;
       if (obd.readPID(pid, value)) {
-        n += snprintf(buf + n, bufsize - n, "%d", value);
+        n += snprintf(buf + n, bufsize - n, "%.2f", value);
       } else {
         n += snprintf(buf + n, bufsize - n, "N/A");
       }
