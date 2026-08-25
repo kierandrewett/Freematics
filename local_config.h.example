@@ -15,6 +15,7 @@
 #define SERVER_PORT 443
 #define SERVER_PROTOCOL PROTOCOL_HTTPS_POST
 #define SERVER_PATH "/api"
+// Supply the 64-character FREEMATICS_TOKEN environment variable at build time.
 
 #define CELL_APN "simbase"
 #define APN_USERNAME NULL
