@@ -52,13 +52,16 @@ static bool systemTimeIsValid()
   time(&now);
   if (now >= 1704067200) return true; // 2024-01-01
 
+  Serial.println("[TIME] Synchronising ESP32 clock by NTP over Wi-Fi");
   configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
   uint32_t started = millis();
   do {
     delay(100);
     time(&now);
   } while (now < 1704067200 && millis() - started < 10000);
-  return now >= 1704067200;
+  bool valid = now >= 1704067200;
+  if (valid) Serial.println("[TIME] ESP32 clock synchronised by NTP over Wi-Fi");
+  return valid;
 }
 
 String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize)
@@ -832,11 +835,14 @@ void CellHTTP::init()
     // mobile network's NITZ time and fall back to NTP over the active PDP link.
     sendCommand("AT+CTZU=1\r");
     bool validClock = false;
+    bool usedNtp = false;
     if (sendCommand("AT+CCLK?\r")) {
       char* p = strstr(m_buffer, "+CCLK: \"");
       validClock = p && atoi(p + 8) >= 24;
     }
     if (!validClock) {
+      usedNtp = true;
+      Serial.println("[TIME] Mobile network time unavailable; trying NTP over cellular");
       sendCommand("AT+CNTP=\"pool.ntp.org\",0\r");
       sendCommand("AT+CNTP\r", 15000, "+CNTP:");
       if (sendCommand("AT+CCLK?\r")) {
@@ -848,6 +854,8 @@ void CellHTTP::init()
       Serial.println("[TLS] Modem time unavailable");
       return;
     }
+    Serial.print("[TIME] Modem clock ready from ");
+    Serial.println(usedNtp ? "NTP over cellular" : "the mobile network");
 
     bool certReady = sendCommand("AT+CCERTLIST\r") && strstr(m_buffer, certName);
     if (!certReady) {
