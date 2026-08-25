@@ -18,6 +18,9 @@
 #include <FreematicsPlus.h>
 #include <httpd.h>
 #include "config.h"
+#ifndef PREFER_CELLULAR
+#define PREFER_CELLULAR 0
+#endif
 #include "telestore.h"
 #include "teleclient.h"
 #if BOARD_HAS_PSRAM
@@ -855,7 +858,9 @@ bool initCell(bool quick = false)
 void telemetry(void* inst)
 {
   uint32_t lastRssiTime = 0;
+  uint32_t lastCellRetryTime = 0;
   uint8_t connErrors = 0;
+  bool wifiFallback = false;
   CStorageRAM store;
   store.init(
 #if BOARD_HAS_PSRAM
@@ -885,7 +890,8 @@ void telemetry(void* inst)
       } while (state.check(STATE_STANDBY) && millis() - t < 1000L * PING_BACK_INTERVAL);
       if (state.check(STATE_STANDBY)) {
         // start ping
-#if ENABLE_WIFI
+#if ENABLE_WIFI && !PREFER_CELLULAR
+        bool pinged = false;
         if (wifiSSID[0]) { 
           Serial.print("[WIFI] Joining SSID:");
           Serial.println(wifiSSID);
@@ -893,16 +899,26 @@ void telemetry(void* inst)
         }
         if (teleClient.wifi.setup()) {
           Serial.println("[WIFI] Ping...");
-          teleClient.ping();
+          pinged = teleClient.ping();
         }
-        else
+#else
+        bool pinged = false;
 #endif
-        {
-          if (initCell()) {
-            Serial.println("[CELL] Ping...");
+        if (!pinged && initCell()) {
+          Serial.println("[CELL] Ping...");
+          pinged = teleClient.ping();
+        }
+#if ENABLE_WIFI && PREFER_CELLULAR
+        if (!pinged && wifiSSID[0]) {
+          Serial.print("[WIFI] Joining SSID:");
+          Serial.println(wifiSSID);
+          teleClient.wifi.begin(wifiSSID, wifiPassword);
+          if (teleClient.wifi.setup()) {
+            Serial.println("[WIFI] Ping...");
             teleClient.ping();
           }
         }
+#endif
         teleClient.shutdown();
         state.clear(STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       }
@@ -910,7 +926,7 @@ void telemetry(void* inst)
     }
 
 #if ENABLE_WIFI
-    if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
+    if (wifiSSID[0] && (!PREFER_CELLULAR || wifiFallback) && !state.check(STATE_WIFI_CONNECTED)) {
       Serial.print("[WIFI] Joining SSID:");
       Serial.println(wifiSSID);
       teleClient.wifi.begin(wifiSSID, wifiPassword);
@@ -920,7 +936,7 @@ void telemetry(void* inst)
 
     while (state.check(STATE_WORKING)) {
 #if ENABLE_WIFI
-      if (wifiSSID[0]) {
+      if (wifiSSID[0] && (!PREFER_CELLULAR || wifiFallback)) {
         if (!state.check(STATE_WIFI_CONNECTED) && teleClient.wifi.connected()) {
           ip = teleClient.wifi.getIP();
           if (ip.length()) {
@@ -931,31 +947,51 @@ void telemetry(void* inst)
           if (teleClient.connect()) {
             state.set(STATE_WIFI_CONNECTED | STATE_NET_READY);
             beep(50);
+#if !PREFER_CELLULAR
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
               teleClient.cell.end();
               state.clear(STATE_CELL_CONNECTED);
               Serial.println("[CELL] Deactivated");
             }
+#endif
           }
         } else if (state.check(STATE_WIFI_CONNECTED) && !teleClient.wifi.connected()) {
           Serial.println("[WIFI] Disconnected");
-          state.clear(STATE_WIFI_CONNECTED);
+          state.clear(STATE_NET_READY | STATE_WIFI_CONNECTED);
+          wifiFallback = false;
         }
       }
 #endif
       if (!state.check(STATE_WIFI_CONNECTED) && !state.check(STATE_CELL_CONNECTED)) {
         connErrors = 0;
+#if ENABLE_WIFI && PREFER_CELLULAR
+        if (wifiFallback) {
+          teleClient.wifi.end();
+          wifiFallback = false;
+        }
+#endif
         if (!initCell() || !teleClient.connect()) {
           teleClient.cell.end();
           state.clear(STATE_NET_READY | STATE_CELL_CONNECTED);
           Serial.println("[CELL] Deactivated");
+#if ENABLE_WIFI && PREFER_CELLULAR
+          if (wifiSSID[0]) {
+            wifiFallback = true;
+            lastCellRetryTime = millis();
+            Serial.println("[NET] Falling back to WiFi");
+            break;
+          }
+#endif
           // avoid turning on/off cellular module too frequently to avoid operator banning
           delay(60000 * 3);
           break;
         }
         Serial.println("[CELL] In service");
         state.set(STATE_NET_READY);
+#if ENABLE_WIFI && PREFER_CELLULAR
+        wifiFallback = false;
+#endif
         beep(50);
       }
 
@@ -978,7 +1014,15 @@ void telemetry(void* inst)
         lastRssiTime = millis();
 
 #if ENABLE_WIFI
-        if (wifiSSID[0] && !state.check(STATE_WIFI_CONNECTED)) {
+        if (PREFER_CELLULAR && wifiFallback && state.check(STATE_WIFI_CONNECTED) &&
+            millis() - lastCellRetryTime > 1000L * PING_BACK_INTERVAL) {
+          Serial.println("[NET] Retrying preferred cellular connection");
+          teleClient.shutdown();
+          state.clear(STATE_NET_READY | STATE_WIFI_CONNECTED);
+          wifiFallback = false;
+          break;
+        }
+        if (wifiSSID[0] && (!PREFER_CELLULAR || wifiFallback) && !state.check(STATE_WIFI_CONNECTED)) {
           teleClient.wifi.begin(wifiSSID, wifiPassword);
         }
 #endif
