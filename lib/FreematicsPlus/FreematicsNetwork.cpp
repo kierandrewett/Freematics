@@ -10,6 +10,57 @@ on
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
 
+// ISRG Root X1 is the trust anchor for the RSA Let's Encrypt chain used by the
+// production telemetry endpoint. Keep this as a root CA rather than pinning a
+// short-lived leaf certificate so normal certificate renewal keeps working.
+static const char TLS_ROOT_CA[] PROGMEM = R"CERT(-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)CERT";
+
+static bool systemTimeIsValid()
+{
+  time_t now;
+  time(&now);
+  if (now >= 1704067200) return true; // 2024-01-01
+
+  configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
+  uint32_t started = millis();
+  do {
+    delay(100);
+    time(&now);
+  } while (now < 1704067200 && millis() - started < 10000);
+  return now >= 1704067200;
+}
+
 String HTTPClient::genHeader(HTTP_METHOD method, const char* path, const char* payload, int payloadSize)
 {
   String header;
@@ -131,9 +182,12 @@ bool WifiHTTP::open(const char* host, uint16_t port)
   if (!host) return true;
   close();
   if (port == 443) {
-    // Match the SIMCOM HTTPS configuration, which currently uses authmode 0.
-    // Traffic is encrypted but the remote certificate is not verified.
-    secureClient.setInsecure();
+    if (!systemTimeIsValid()) {
+      Serial.println("[TLS] WiFi time unavailable");
+      m_state = HTTP_ERROR;
+      return false;
+    }
+    secureClient.setCACert(TLS_ROOT_CA);
     client = &secureClient;
   } else {
     client = &plainClient;
@@ -766,13 +820,62 @@ char* CellUDP::receive(int* pbytes, unsigned int timeout)
 
 void CellHTTP::init()
 {
+  m_tlsReady = false;
   if (m_type == CELL_SIM7670) {
-    sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
-    sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
-    sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r");
+    static const char certName[] = "isrg_root_x1.pem";
+
+    // Certificate expiry checks require a trustworthy modem clock. Prefer the
+    // mobile network's NITZ time and fall back to NTP over the active PDP link.
+    sendCommand("AT+CTZU=1\r");
+    bool validClock = false;
+    if (sendCommand("AT+CCLK?\r")) {
+      char* p = strstr(m_buffer, "+CCLK: \"");
+      validClock = p && atoi(p + 8) >= 24;
+    }
+    if (!validClock) {
+      sendCommand("AT+CNTP=\"pool.ntp.org\",0\r");
+      sendCommand("AT+CNTP\r", 15000, "+CNTP:");
+      if (sendCommand("AT+CCLK?\r")) {
+        char* p = strstr(m_buffer, "+CCLK: \"");
+        validClock = p && atoi(p + 8) >= 24;
+      }
+    }
+    if (!validClock) {
+      Serial.println("[TLS] Modem time unavailable");
+      return;
+    }
+
+    bool certReady = sendCommand("AT+CCERTLIST\r") && strstr(m_buffer, certName);
+    if (!certReady) {
+      snprintf(m_buffer, RECV_BUF_SIZE, "AT+CCERTDOWN=\"%s\",%u\r", certName,
+        (unsigned int)strlen(TLS_ROOT_CA));
+      if (sendCommand(m_buffer, 1000, ">")) {
+        m_device->xbWrite(TLS_ROOT_CA, strlen(TLS_ROOT_CA));
+        certReady = sendCommand(0, 5000);
+      }
+    }
+    if (!certReady) {
+      Serial.println("[TLS] CA provisioning failed");
+      return;
+    }
+
+    bool configured = sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r") &&
+      sendCommand("AT+CSSLCFG=\"authmode\",0,1\r") &&
+      sendCommand("AT+CSSLCFG=\"cacert\",0,\"isrg_root_x1.pem\"\r") &&
+      sendCommand("AT+CSSLCFG=\"ignorelocaltime\",0,0\r") &&
+      sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r");
+    if (!configured) {
+      Serial.println("[TLS] Strict modem TLS configuration failed");
+      return;
+    }
+    m_tlsReady = true;
+    Serial.println("[TLS] CA and time verification enabled");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
+    m_tlsReady = true;
+  } else {
+    m_tlsReady = true;
   }
 }
 
@@ -816,6 +919,10 @@ bool CellHTTP::open(const char* host, uint16_t port)
       }
     }
   } else if (m_type == CELL_SIM7670) {
+    if (port == 443 && !m_tlsReady) {
+      m_state = HTTP_ERROR;
+      return false;
+    }
     sendCommand("AT+HTTPINIT\r");
     sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r");
     return true;

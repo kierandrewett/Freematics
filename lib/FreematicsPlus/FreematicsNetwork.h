@@ -158,6 +158,8 @@ public:
     bool close();
     bool send(HTTP_METHOD method, const char* host, uint16_t port, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+private:
+    bool m_tlsReady = false;
 };
 
 #endif
