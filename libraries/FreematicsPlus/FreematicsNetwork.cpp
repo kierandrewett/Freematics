@@ -777,6 +777,10 @@ void CellHTTP::init()
 
 bool CellHTTP::open(const char* host, uint16_t port)
 {
+  if (!m_device || !m_buffer) {
+    m_state = HTTP_ERROR;
+    return false;
+  }
   if (m_type == CELL_SIM7070) {
     sendCommand("AT+CNACT=0,1\r");
     sendCommand("AT+CACID=0\r");
