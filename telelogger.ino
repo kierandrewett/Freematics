@@ -768,6 +768,9 @@ void process()
     int val = (rssiLast = rssi);
     buffer->add(PID_CSQ, ELEMENT_INT32, &val, sizeof(val));
   }
+  uint8_t networkTransport = state.check(STATE_CELL_CONNECTED) ? 2 :
+    (state.check(STATE_WIFI_CONNECTED) ? 1 : 0);
+  buffer->add(PID_NETWORK_TRANSPORT, ELEMENT_UINT8, &networkTransport, sizeof(networkTransport));
 #if ENABLE_OBD
   if (sys.devType > 12) {
     batteryVoltage = (float)(analogRead(A0) * 45) / 4095;
