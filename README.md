@@ -16,7 +16,7 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. When PSRAM is enabled, hours of data can be buffered in case of temporary network outage and transmitted when network connection resumes.
+Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. When PSRAM is enabled, hours of data can be buffered in case of temporary network outage and transmitted when network connection resumes. Samples are posted in five-second batches, with up to 16 complete samples per request while draining a backlog; a failed request retains the whole batch for ordered retry.
   
 Data Transmission
 -----------------
@@ -38,7 +38,7 @@ Local configuration
 
 Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint, internal SPIFFS storage, and Simbase's `simbase` APN.
 
-WiFi HTTPS selects TLS automatically on port 443. It currently follows the SIMCOM HTTPS behaviour and encrypts traffic without verifying the server certificate. Disable BLE when using HTTPS on Model B to leave enough internal ESP32 heap for the TLS handshake.
+HTTPS fails closed unless the per-device bearer token is present. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
 
 Data Storage
 ------------
@@ -48,7 +48,7 @@ Following types of data storage are supported.
 * MicroSD card storage
 * ESP32 built-in Flash memory storage (SPIFFS)
 
-SPIFFS does not require a microSD card. A card is only needed when `STORAGE_SD` is selected; the production configuration uses `STORAGE_SPIFFS`.
+SPIFFS does not require a microSD card. A card is only needed when `STORAGE_SD` is selected; the production configuration uses `STORAGE_SPIFFS`, rotates log chunks at 256 KB and purges the oldest chunks before internal flash fills.
 
 BLE & App
 ---------
@@ -58,13 +58,15 @@ A BLE SPP server is implemented in [FreematicsPlus](https://github.com/stanleyhu
 Build and flash
 ---------------
 
-Install PlatformIO, connect the ONE+ Model B over USB, then run:
+Install PlatformIO, create an ignored `local_config.h` from the example, connect the ONE+ Model B over USB, and provide the 64-character per-device token at build time:
 
 ```sh
-pio run -e esp32dev
-pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
+PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
+PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
+
+Production builds reject an absent or malformed token. Do not store the token in the repository or a shared shell script.
 
 Repository layout
 -----------------
@@ -72,6 +74,7 @@ Repository layout
 * Root: Model B TeleLogger firmware and PlatformIO configuration
 * `lib/`: only the FreematicsPlus, FreematicsOLED and embedded HTTP libraries required by the firmware
 * `collector/`: matching Freematics Hub-compatible ingestion server
+* `monitoring/`: generated history-first Grafana dashboard and its maintainable Python source
 
 Prerequisites
 -------------
