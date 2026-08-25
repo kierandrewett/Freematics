@@ -769,6 +769,7 @@ void CellHTTP::init()
   if (m_type == CELL_SIM7670) {
     sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r");
     sendCommand("AT+CSSLCFG=\"authmode\",0,0\r");
+    sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
@@ -878,17 +879,35 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
     }
   } else if (m_type == CELL_SIM7670) {
     sprintf(m_buffer, "AT+HTTPPARA=\"URL\",\"https://%s:%u%s\"\r", host, port, path);
-    if (sendCommand(m_buffer, 1000)) {
-      if (payload) {
-        sprintf(m_buffer, "AT+HTTPDATA=%u,1000\r", payloadSize);
-        sendCommand(m_buffer, 1000, "DOWNLOAD\r");
-        m_device->xbWrite(payload, payloadSize);
-        sendCommand("AT+HTTPACTION=1\r");
-      } else {
-        sendCommand("AT+HTTPACTION=0\r");
+    if (!sendCommand(m_buffer, 1000)) {
+      m_state = HTTP_ERROR;
+      return false;
+    }
+    if (payload) {
+      sprintf(m_buffer, "AT+HTTPDATA=%u,1000\r", payloadSize);
+      if (!sendCommand(m_buffer, 1000, "DOWNLOAD\r")) {
+        m_state = HTTP_ERROR;
+        return false;
+      }
+      m_device->xbWrite(payload, payloadSize);
+      if (!sendCommand(0, HTTP_CONN_TIMEOUT)) {
+        m_state = HTTP_ERROR;
+        return false;
       }
     }
-    return true;
+    const char* action = payload ? "AT+HTTPACTION=1\r" : "AT+HTTPACTION=0\r";
+    if (sendCommand(action, HTTP_CONN_TIMEOUT)) {
+      bool completed = strstr(m_buffer, "+HTTPACTION:") ||
+        sendCommand(0, HTTP_CONN_TIMEOUT, "+HTTPACTION:");
+      if (completed) {
+        char* p = strstr(m_buffer, "+HTTPACTION:");
+        if (p && (p = strchr(p, ','))) {
+          m_code = atoi(++p);
+        }
+        m_state = HTTP_SENT;
+        return true;
+      }
+    }
   } else {
     String header = genHeader(method, path, payload, payloadSize);
     int len = header.length();
