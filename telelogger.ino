@@ -102,6 +102,8 @@ int16_t rssi = 0;
 int16_t rssiLast = 0;
 char vin[18] = {0};
 float batteryVoltage = 0;
+float tripDistanceKm = 0;
+float lastOBDSpeed = 0;
 GPS_DATA* gd = 0;
 
 char devid[12] = {0};
@@ -110,6 +112,8 @@ char isoTime[32] = {0};
 // stats data
 uint32_t lastMotionTime = 0;
 uint32_t lastDTCScan = 0;
+uint32_t lastOBDDistanceTime = 0;
+uint32_t lastGPSDistanceTime = 0;
 uint32_t timeoutsOBD = 0;
 uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
@@ -282,6 +286,18 @@ void processDiagnostics(CBuffer* buffer)
   }
 }
 
+void updateOBDDistance(float speedKph)
+{
+  uint32_t now = millis();
+  if (lastOBDDistanceTime && now - lastOBDDistanceTime < 5000 &&
+      (!lastGPSDistanceTime || now - lastGPSDistanceTime > 5000)) {
+    tripDistanceKm += (lastOBDSpeed + speedKph) * 0.5f *
+      (now - lastOBDDistanceTime) / 3600000.0f;
+  }
+  lastOBDSpeed = speedKph;
+  lastOBDDistanceTime = now;
+}
+
 void processOBD(CBuffer* buffer)
 {
   static byte auxIndex = 0;
@@ -299,7 +315,10 @@ void processOBD(CBuffer* buffer)
     obdData[i].ts = millis();
     obdData[i].value = value;
     buffer->add((uint16_t)obdData[i].pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-    if (obdData[i].pid == PID_SPEED && value >= 2) lastMotionTime = millis();
+    if (obdData[i].pid == PID_SPEED) {
+      updateOBDDistance(value);
+      if (value >= 2) lastMotionTime = millis();
+    }
   }
 
   // Rotate through every other ECU-advertised PID without saturating the bus.
@@ -388,10 +407,19 @@ bool processGPS(CBuffer* buffer)
     lastGPSLng = 0;
     return false;
   }
-  lastGPSLat = gd->lat;
-  lastGPSLng = gd->lng;
 
   float kph = gd->speed * 1.852f;
+  if ((lastGPSLat || lastGPSLng) && kph >= 1) {
+    float latDelta = (gd->lat - lastGPSLat) * DEG_TO_RAD;
+    float lngDelta = (gd->lng - lastGPSLng) * DEG_TO_RAD;
+    float x = lngDelta * cosf((gd->lat + lastGPSLat) * 0.5f * DEG_TO_RAD);
+    float segmentKm = 6371.0f * sqrtf(x * x + latDelta * latDelta);
+    if (segmentKm < 1) tripDistanceKm += segmentKm;
+  }
+  lastGPSLat = gd->lat;
+  lastGPSLng = gd->lng;
+  lastGPSDistanceTime = millis();
+
   if (kph >= 2) lastMotionTime = millis();
 
   if (buffer) {
@@ -547,6 +575,11 @@ void initialize()
 {
   // dump buffer data
   bufman.purge();
+  tripDistanceKm = 0;
+  lastOBDSpeed = 0;
+  lastOBDDistanceTime = 0;
+  lastGPSDistanceTime = 0;
+  gd = 0;
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
@@ -765,6 +798,8 @@ void process()
     }
   }
 #endif
+
+  buffer->add(PID_TRIP_DISTANCE, ELEMENT_FLOAT_D2, &tripDistanceKm, sizeof(tripDistanceKm));
 
   if (!state.check(STATE_MEMS_READY)) {
     deviceTemp = readChipTemperature();
