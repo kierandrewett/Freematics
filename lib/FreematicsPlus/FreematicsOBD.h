@@ -42,6 +42,7 @@ public:
 	void leaveLowPowerMode();
 	// read diagnostic trouble codes (return number of DTCs read)
 	int readDTC(uint16_t codes[], byte maxCodes = 1);
+	int readDTC(byte mode, uint16_t codes[], byte maxCodes = 1);
 	// clear diagnostic trouble code
 	void clearDTC();
 	// get battery voltage (works without ECU)

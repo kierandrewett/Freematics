@@ -126,20 +126,31 @@ byte COBD::readPID(const byte pid[], byte count, int result[])
 
 int COBD::readDTC(uint16_t codes[], byte maxCodes)
 {
+	return readDTC(0x03, codes, maxCodes);
+}
+
+int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
+{
 	/*
 	Response example:
 	0: 43 04 01 08 01 09
 	1: 01 11 01 15 00 00 00
 	*/
 	int codesRead = 0;
-	if (!link) return 0;
+	if (!link || (mode != 0x03 && mode != 0x07 && mode != 0x0A)) return 0;
+	char expected[3];
+	sprintf(expected, "%02X", 0x40 + mode);
  	for (int n = 0; n < 6; n++) {
 		char buffer[128];
-		sprintf(buffer, n == 0 ? "03\r" : "03%02X\r", n);
+		if (n == 0) {
+			sprintf(buffer, "%02X\r", mode);
+		} else {
+			sprintf(buffer, "%02X%02X\r", mode, n);
+		}
 		link->send(buffer);
 		if (link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_LONG) > 0) {
 			if (!strstr(buffer, "NO DATA")) {
-				char *p = strstr(buffer, "43");
+				char *p = strstr(buffer, expected);
 				if (p) {
 					while (codesRead < maxCodes && *p) {
 						p += 6;
