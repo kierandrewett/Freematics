@@ -129,7 +129,16 @@ void WifiUDP::close()
 bool WifiHTTP::open(const char* host, uint16_t port)
 {
   if (!host) return true;
-  if (client.connect(host, port)) {
+  close();
+  if (port == 443) {
+    // Match the SIMCOM HTTPS configuration, which currently uses authmode 0.
+    // Traffic is encrypted but the remote certificate is not verified.
+    secureClient.setInsecure();
+    client = &secureClient;
+  } else {
+    client = &plainClient;
+  }
+  if (client->connect(host, port)) {
     m_state = HTTP_CONNECTED;
     m_host = host;
     return true;
@@ -141,7 +150,7 @@ bool WifiHTTP::open(const char* host, uint16_t port)
 
 void WifiHTTP::close()
 {
-  client.stop();
+  client->stop();
   m_state = HTTP_DISCONNECTED;
 }
 
@@ -149,12 +158,12 @@ bool WifiHTTP::send(HTTP_METHOD method, const char* path, const char* payload, i
 {
   String header = genHeader(method, path, payload, payloadSize);
   int len = header.length();
-  if (client.write(header.c_str(), len) != len) {
+  if (client->write(header.c_str(), len) != len) {
     m_state = HTTP_DISCONNECTED;
     return false;
   }
   if (payloadSize) {
-    if (client.write(payload, payloadSize) != payloadSize) {
+    if (client->write(payload, payloadSize) != payloadSize) {
       m_state = HTTP_ERROR;
       return false;
     }
@@ -172,11 +181,11 @@ char* WifiHTTP::receive(char* buffer, int bufsize, int* pbytes, unsigned int tim
   bool keepAlive = true;
 
   for (uint32_t t = millis(); millis() - t < timeout && bytes < bufsize; ) {
-    if (!client.available()) {
+    if (!client->available()) {
       delay(1);
       continue;
     }
-    buffer[bytes++] = client.read();
+    buffer[bytes++] = client->read();
     buffer[bytes] = 0;
     if (content) {
       if (++contentBytes == contentLen) break;

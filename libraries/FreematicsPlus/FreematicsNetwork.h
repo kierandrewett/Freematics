@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WiFiUdp.h>
 
 #include "esp_system.h"
@@ -95,7 +96,9 @@ public:
     bool send(HTTP_METHOD method, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(char* buffer, int bufsize, int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
 private:
-    WiFiClient client;
+    WiFiClient plainClient;
+    WiFiClientSecure secureClient;
+    WiFiClient* client = &plainClient;
 };
 
 typedef enum {
