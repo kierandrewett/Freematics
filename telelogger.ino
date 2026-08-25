@@ -399,6 +399,9 @@ void processOBD(CBuffer* buffer)
     if (obdData[i].pid == PID_SPEED) {
       updateOBDDistance(value);
       if (value >= 2) lastMotionTime = millis();
+    } else if (obdData[i].pid == PID_RPM && value >= 100) {
+      // Keep the trip active while the engine idles in stationary traffic.
+      lastMotionTime = millis();
     }
   }
 
