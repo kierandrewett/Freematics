@@ -538,7 +538,8 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
 #if ENABLE_WIFI
-  if ((wifi.connected() && wifi.state() != HTTP_CONNECTED) || cell.state() != HTTP_CONNECTED) {
+  bool disconnected = wifi.connected() ? wifi.state() != HTTP_CONNECTED : cell.state() != HTTP_CONNECTED;
+  if (disconnected) {
 #else
   if (cell.state() != HTTP_CONNECTED) {
 #endif
@@ -606,15 +607,17 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   Serial.print("[HTTP] ");
   Serial.println(content);
 #if ENABLE_WIFI
-  if ((wifi.connected() && wifi.code() == 200) || cell.code() == 200) {
+  bool accepted = wifi.connected() ? wifi.code() == 200 : cell.code() == 200;
+  if (accepted) {
 #else
-  if (cell.code() == 200) {
+  bool accepted = cell.code() == 200;
+  if (accepted) {
 #endif
     // successful
     lastSyncTime = millis();
     rxBytes += recvBytes;
   }
-  return true;
+  return accepted;
 }
 
 bool TeleClientHTTP::connect(bool quick)
@@ -664,6 +667,9 @@ bool TeleClientHTTP::connect(bool quick)
     if (notify(EVENT_LOGIN)) {
       lastSyncTime = millis();
       login = true;
+    } else {
+      Serial.println("[HTTP] Login rejected");
+      return false;
     }
   }
   return true;

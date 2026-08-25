@@ -66,12 +66,13 @@ typedef struct {
   uint16_t basePid;
   uint8_t count;
   uint16_t codes[DTC_CODE_SLOTS];
+  uint32_t lastScan;
 } DTC_POLLING_INFO;
 
 DTC_POLLING_INFO dtcData[] = {
-  {0x03, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, 0, {0}},
-  {0x07, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, 0, {0}},
-  {0x0A, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, 0, {0}},
+  {0x03, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, 0, {0}, 0},
+  {0x07, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, 0, {0}, 0},
+  {0x0A, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, 0, {0}, 0},
 };
 
 CBufferManager bufman;
@@ -111,7 +112,6 @@ char isoTime[32] = {0};
 
 // stats data
 uint32_t lastMotionTime = 0;
-uint32_t lastDTCScan = 0;
 uint32_t lastOBDDistanceTime = 0;
 uint32_t lastGPSDistanceTime = 0;
 uint32_t timeoutsOBD = 0;
@@ -254,25 +254,30 @@ int handlerLiveData(UrlHandlerParam* param)
 #if ENABLE_OBD
 void scanDiagnostics()
 {
-  for (byte i = 0; i < sizeof(dtcData) / sizeof(dtcData[0]); i++) {
-    DTC_POLLING_INFO& item = dtcData[i];
-    memset(item.codes, 0, sizeof(item.codes));
-    item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
-  }
-  lastDTCScan = millis();
-  dtcBatchPending = 1;
-  Serial.print("DTC stored:");
-  Serial.print(dtcData[0].count);
-  Serial.print(" pending:");
-  Serial.print(dtcData[1].count);
-  Serial.print(" permanent:");
-  Serial.println(dtcData[2].count);
+  static byte scanIndex = 0;
+  DTC_POLLING_INFO& item = dtcData[scanIndex];
+  memset(item.codes, 0, sizeof(item.codes));
+  item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
+  item.lastScan = millis();
+  dtcBatchPending = scanIndex + 1;
+  Serial.print("DTC mode ");
+  Serial.print(item.mode, HEX);
+  Serial.print(':');
+  Serial.println(item.count);
+  if (++scanIndex >= sizeof(dtcData) / sizeof(dtcData[0])) scanIndex = 0;
 }
 
 void processDiagnostics(CBuffer* buffer)
 {
-  if (!dtcBatchPending && millis() - lastDTCScan >= DTC_SCAN_INTERVAL) {
-    scanDiagnostics();
+  if (!dtcBatchPending) {
+    bool due = false;
+    for (byte i = 0; i < sizeof(dtcData) / sizeof(dtcData[0]); i++) {
+      if (!dtcData[i].lastScan || millis() - dtcData[i].lastScan >= DTC_SCAN_INTERVAL) {
+        due = true;
+        break;
+      }
+    }
+    if (due) scanDiagnostics();
   }
   if (!dtcBatchPending) return;
 
@@ -818,6 +823,13 @@ void process()
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
     buffer->serialize(logger);
+#if STORAGE == STORAGE_SPIFFS
+    if (logger.size() >= SPIFFS_MAX_FILE_BYTES) {
+      logger.end();
+      fileid = logger.begin();
+      lastSizeKB = 0;
+    }
+#endif
     uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
     if (sizeKB != lastSizeKB) {
       logger.flush();
@@ -882,7 +894,8 @@ bool initCell(bool quick = false)
   Serial.println(teleClient.cell.deviceName());
   if (!teleClient.cell.checkSIM(SIM_CARD_PIN)) {
     Serial.println("NO SIM CARD");
-    //return false;
+    teleClient.cell.end();
+    return false;
   }
   Serial.print("IMEI:");
   Serial.println(teleClient.cell.IMEI);
@@ -1112,7 +1125,7 @@ void telemetry(void* inst)
       }
 
       // get data from buffer
-      CBuffer* buffer = bufman.getNewest();
+      CBuffer* buffer = bufman.getOldest();
       if (!buffer) {
         delay(50);
         continue;
@@ -1122,7 +1135,6 @@ void telemetry(void* inst)
 #endif
       store.timestamp(buffer->timestamp);
       buffer->serialize(store);
-      bufman.free(buffer);
       store.tailer();
       Serial.print("[DAT] ");
       Serial.println(store.buffer());
@@ -1134,9 +1146,13 @@ void telemetry(void* inst)
 
       if (teleClient.transmit(store.buffer(), store.length())) {
         // successfully sent
+        bufman.free(buffer);
         connErrors = 0;
         showStats();
       } else {
+        // Retain the oldest unsent sample for an at-least-once retry after the
+        // connection recovers instead of silently dropping outage data.
+        buffer->state = BUFFER_STATE_FILLED;
         timeoutsNet++;
         connErrors++;
         printTimeoutStats();
