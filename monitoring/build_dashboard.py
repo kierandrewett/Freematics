@@ -262,7 +262,7 @@ def build_dashboard() -> dict:
                 "Trip start",
                 0,
                 3,
-                f"max(last_over_time(freematics_trip_start_time_seconds{selection}[$__range]))",
+                f"max(last_over_time(freematics_trip_start_time_seconds{selection}[$__range])) * 1000",
                 unit="dateTimeAsIso",
                 description="Collector login time for the selected trip. Choose a trip above the dashboard.",
                 no_value="Select trip",
@@ -394,7 +394,7 @@ def build_dashboard() -> dict:
 
     trip_table_targets = [
         target(
-            f"last_over_time(freematics_trip_start_time_seconds{selection}[$__range])",
+            f"last_over_time(freematics_trip_start_time_seconds{selection}[$__range]) * 1000",
             "A",
             "Start",
             instant=True,

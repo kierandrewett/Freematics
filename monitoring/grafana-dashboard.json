@@ -560,7 +560,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max(last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
+          "expr": "max(last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 1000",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1441,7 +1441,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 1000",
           "legendFormat": "Start",
           "range": false,
           "refId": "A",
