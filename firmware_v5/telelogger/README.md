@@ -22,11 +22,19 @@ Data transmission over UDP and HTTP(s) protocols are implemented for the followi
 * WiFi (ESP32 built-in)
 * 3G WCDMA (SIM5360)
 * 4G LTE CAT-4 (SIM7600)
+* 4G LTE CAT-1 (SIM7670)
 * 4G LTE CAT-M (SIM7070)
 
 UDP mode implements a telemetry client for [Freematics Hub](https://hub.freematics.com) and [Traccar](https://www.traccar.org). HTTP(s) mode implements [OsmAnd](https://www.traccar.org/osmand/) protocol with additional data sent as POST payload.
 
 Seamless WiFi and cellular network co-working is implemented. When defined WiFi hotspot is available, data is transmitted via WiFi and cellular module is switched off. When no WiFi hotspot can be reached, cellular module is switched on for data transmission until WiFi hotspot available again.
+
+Local configuration
+-------------------
+
+Copy `local_config.h.example` to `local_config.h` and put device-specific WiFi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint, internal SPIFFS storage, and the Simbase APN.
+
+WiFi HTTPS selects TLS automatically on port 443. It currently follows the SIMCOM HTTPS behaviour and encrypts traffic without verifying the server certificate. Disable BLE when using HTTPS on Model B to leave enough internal ESP32 heap for the TLS handshake.
 
 Data Storage
 ------------
@@ -35,6 +43,8 @@ Following types of data storage are supported.
 
 * MicroSD card storage
 * ESP32 built-in Flash memory storage (SPIFFS)
+
+SPIFFS does not require a microSD card. A card is only needed when `STORAGE_SD` is selected.
 
 BLE & App
 ---------
