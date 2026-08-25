@@ -32,6 +32,7 @@ public:
     {
         m_cacheSize = cacheSize;
         m_cache = cache;
+        purge();
     }
     void uninit()
     {
@@ -41,9 +42,19 @@ public:
             m_cacheSize = 0;
         }
     }
-    void purge() { m_cacheBytes = 0; m_samples = 0; }
+    void purge()
+    {
+        m_cacheBytes = 0;
+        m_samples = 0;
+        m_overflowed = false;
+        m_checkpointBytes = 0;
+        m_checkpointSamples = 0;
+    }
     unsigned int length() { return m_cacheBytes; }
     char* buffer() { return m_cache; }
+    bool overflowed() const { return m_overflowed; }
+    void checkpoint();
+    void rollback();
     void dispatch(const char* buf, byte len);
     void header(const char* devid);
     void tailer();
@@ -52,6 +63,9 @@ protected:
     unsigned int m_cacheSize = 0;
     unsigned int m_cacheBytes = 0;
     char* m_cache = 0;
+    unsigned int m_checkpointBytes = 0;
+    int m_checkpointSamples = 0;
+    bool m_overflowed = false;
 };
 
 class FileLogger : public CStorage {

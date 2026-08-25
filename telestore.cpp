@@ -87,10 +87,13 @@ byte CStorage::checksum(const char* data, int len)
 
 void CStorageRAM::dispatch(const char* buf, byte len)
 {
+    if (m_overflowed) return;
     // reserve some space for checksum
     int remain = m_cacheSize - m_cacheBytes - len - 3;
     if (remain < 0) {
-        // m_cache full
+        // Mark the transaction as failed so callers can roll back the whole
+        // sample instead of sending a silently truncated record.
+        m_overflowed = true;
         return;
     }
     // store data in m_cache
@@ -100,6 +103,20 @@ void CStorageRAM::dispatch(const char* buf, byte len)
     m_samples++;
 }
 
+void CStorageRAM::checkpoint()
+{
+    m_checkpointBytes = m_cacheBytes;
+    m_checkpointSamples = m_samples;
+    m_overflowed = false;
+}
+
+void CStorageRAM::rollback()
+{
+    m_cacheBytes = m_checkpointBytes;
+    m_samples = m_checkpointSamples;
+    m_overflowed = false;
+}
+
 void CStorageRAM::header(const char* devid)
 {
     m_cacheBytes = sprintf(m_cache, "%s#", devid);
@@ -107,6 +124,7 @@ void CStorageRAM::header(const char* devid)
 
 void CStorageRAM::tailer()
 {
+    if (m_overflowed || !m_cacheBytes) return;
     if (m_cache[m_cacheBytes - 1] == ',') m_cacheBytes--;
     m_cacheBytes += sprintf(m_cache + m_cacheBytes, "*%X", (unsigned int)checksum(m_cache, m_cacheBytes));
 }
