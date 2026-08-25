@@ -163,6 +163,8 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_sample_rate_per_minute gauge\n"
 		"# HELP freematics_device_rssi_dbm Cellular or Wi-Fi received signal strength.\n"
 		"# TYPE freematics_device_rssi_dbm gauge\n"
+		"# HELP freematics_network_transport Active uplink: 0 offline, 1 Wi-Fi, 2 cellular.\n"
+		"# TYPE freematics_network_transport gauge\n"
 		"# HELP freematics_obd_value Latest decoded value for an ECU-advertised Mode 01 PID.\n"
 		"# TYPE freematics_obd_value gauge\n"
 		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value.\n"
@@ -214,6 +216,7 @@ int uhMetrics(UrlHandlerParam* param)
 		}
 
 		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->tripid, pld->data + PID_DEVICE_TEMP, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_network_transport", pld->devid, pld->tripid, pld->data + PID_NETWORK_TRANSPORT, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LATITUDE, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LONGITUDE, 1);
