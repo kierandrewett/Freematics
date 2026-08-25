@@ -1,5 +1,6 @@
 #include <FreematicsPlus.h>
 #include "telestore.h"
+#include "config.h"
 
 void CStorage::log(uint16_t pid, uint8_t values[], uint8_t count)
 {
@@ -222,6 +223,9 @@ bool SPIFFSLogger::init()
 
 uint32_t SPIFFSLogger::begin()
 {
+    while (SPIFFS.totalBytes() - SPIFFS.usedBytes() < SPIFFS_RESERVE_BYTES) {
+        if (!purgeOldest()) break;
+    }
     File root = SPIFFS.open("/");
     m_id = getFileID(root);
     char path[24];
@@ -237,9 +241,10 @@ uint32_t SPIFFSLogger::begin()
     return m_id;
 }
 
-void SPIFFSLogger::purge()
+bool SPIFFSLogger::purgeOldest()
 {
-    // remove oldest file when unused space is insufficient
+    // Remove one oldest completed log chunk. The current file is always
+    // closed before begin() calls this method.
     File root = SPIFFS.open("/");
     File file;
     int idx = 0;
@@ -250,14 +255,13 @@ void SPIFFSLogger::purge()
         }
     }
     if (idx) {
-        m_file.close();
         char path[32];
         sprintf(path, "/DATA/%u.CSV", idx);
-        SPIFFS.remove(path);
-        Serial.print(path);
-        Serial.println(" removed");
-        sprintf(path, "/DATA/%u.CSV", m_id);
-        m_file = SPIFFS.open(path, FILE_APPEND);
-        if (!m_file) m_id = 0;
+        if (SPIFFS.remove(path)) {
+            Serial.print(path);
+            Serial.println(" removed");
+            return true;
+        }
     }
+    return false;
 }

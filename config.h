@@ -156,6 +156,11 @@
 #define STORAGE STORAGE_SD
 #endif
 
+// Keep internal flash logging bounded. A long trip is split into chunks and
+// the oldest chunks are deleted before SPIFFS can fill completely.
+#define SPIFFS_MAX_FILE_BYTES (256UL * 1024)
+#define SPIFFS_RESERVE_BYTES (SPIFFS_MAX_FILE_BYTES + 64UL * 1024)
+
 /**************************************
 * MEMS sensors
 **************************************/

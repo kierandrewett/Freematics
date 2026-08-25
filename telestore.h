@@ -90,5 +90,5 @@ public:
     bool init();
     uint32_t begin();
 private:
-    void purge();
+    bool purgeOldest();
 };
