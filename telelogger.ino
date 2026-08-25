@@ -77,6 +77,9 @@ DTC_POLLING_INFO dtcData[] = {
 
 CBufferManager bufman;
 Task subtask;
+#if ENABLE_NETWORK_STATUS_SIGNALS
+Task statusTask;
+#endif
 
 #if ENABLE_MEMS
 float accBias[3] = {0}; // calibrated reference accelerometer data
@@ -140,7 +143,7 @@ public:
   bool check(uint16_t flags) { return (m_state & flags) == flags; }
   void set(uint16_t flags) { m_state |= flags; }
   void clear(uint16_t flags) { m_state &= ~flags; }
-  uint16_t m_state = 0;
+  volatile uint16_t m_state = 0;
 };
 
 FreematicsESP32 sys;
@@ -188,14 +191,84 @@ void printTimeoutStats()
   Serial.println(timeoutsNet);
 }
 
-void beep(int duration)
+void beepTone(unsigned int frequency, int duration)
 {
-    // turn on buzzer at 2000Hz frequency 
-    sys.buzzer(2000);
+    sys.buzzer(frequency);
     delay(duration);
-    // turn off buzzer
     sys.buzzer(0);
 }
+
+#if ENABLE_NETWORK_STATUS_SIGNALS
+void statusSignals(void* inst)
+{
+  bool hadNetwork = false;
+  bool outageAnnounced = false;
+  bool restoreChirpPending = false;
+  uint32_t offlineSince = 0;
+
+  for (;;) {
+    const uint32_t now = millis();
+    const bool standbyMode = state.check(STATE_STANDBY);
+    const bool working = state.check(STATE_WORKING);
+    const bool cellOnline = state.check(STATE_NET_READY | STATE_CELL_CONNECTED);
+    const bool wifiOnline = state.check(STATE_NET_READY | STATE_WIFI_CONNECTED);
+    const bool networkOnline = cellOnline || wifiOnline;
+
+    if (networkOnline) {
+      if (!hadNetwork) {
+#if ENABLE_AUDIBLE_NETWORK_ALERTS
+        beepTone(2200, 60);
+#endif
+        Serial.println("[STATUS] Network online");
+      } else if (restoreChirpPending) {
+#if ENABLE_AUDIBLE_NETWORK_ALERTS
+        beepTone(2400, 80);
+#endif
+        Serial.println("[STATUS] Network restored");
+        restoreChirpPending = false;
+      }
+      hadNetwork = true;
+      offlineSince = 0;
+      outageAnnounced = false;
+    } else if (standbyMode || !working) {
+      // Intentional modem shutdown is not a network outage.
+      offlineSince = 0;
+      outageAnnounced = false;
+      restoreChirpPending = false;
+    } else if (hadNetwork) {
+      if (!offlineSince) offlineSince = now;
+      if (!outageAnnounced && now - offlineSince >= NETWORK_ALERT_GRACE_MS) {
+        Serial.println("[STATUS] Network offline for 15 seconds");
+#if ENABLE_AUDIBLE_NETWORK_ALERTS
+        beepTone(900, 140);
+        delay(120);
+        beepTone(900, 140);
+#endif
+        outageAnnounced = true;
+        restoreChirpPending = true;
+      }
+    }
+
+#ifdef PIN_LED
+    const uint32_t phase = now % (standbyMode ? 10000UL : 1000UL);
+    bool ledOn;
+    if (standbyMode) {
+      ledOn = phase < 60;
+    } else if (cellOnline) {
+      ledOn = phase < 90;
+    } else if (wifiOnline) {
+      ledOn = phase < 90 || (phase >= 180 && phase < 270);
+    } else if (hadNetwork) {
+      ledOn = phase % 250 < 100;
+    } else {
+      ledOn = phase < 400;
+    }
+    digitalWrite(PIN_LED, ledOn ? HIGH : LOW);
+#endif
+    delay(25);
+  }
+}
+#endif
 
 #if LOG_EXT_SENSORS
 void processExtInputs(CBuffer* buffer)
@@ -1045,7 +1118,6 @@ void telemetry(void* inst)
           connErrors = 0;
           if (teleClient.connect()) {
             state.set(STATE_WIFI_CONNECTED | STATE_NET_READY);
-            beep(50);
 #if !PREFER_CELLULAR
             // switch off cellular module when wifi connected
             if (state.check(STATE_CELL_CONNECTED)) {
@@ -1091,7 +1163,6 @@ void telemetry(void* inst)
 #if ENABLE_WIFI && PREFER_CELLULAR
         wifiFallback = false;
 #endif
-        beep(50);
       }
 
       if (millis() - lastRssiTime > SIGNAL_CHECK_INTERVAL * 1000) {
@@ -1142,11 +1213,6 @@ void telemetry(void* inst)
       Serial.print("[DAT] ");
       Serial.println(store.buffer());
 
-      // start transmission
-#ifdef PIN_LED
-      if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
-#endif
-
       if (teleClient.transmit(store.buffer(), store.length())) {
         // successfully sent
         bufman.free(buffer);
@@ -1164,9 +1230,6 @@ void telemetry(void* inst)
           teleClient.connect(true);
         }
       }
-#ifdef PIN_LED
-      if (ledMode == 0) digitalWrite(PIN_LED, LOW);
-#endif
       store.purge();
 
       teleClient.inbound();
@@ -1620,9 +1683,12 @@ if (!state.check(STATE_MEMS_READY)) do {
 
   // initialize network and maintain connection
   subtask.create(telemetry, "telemetry", 2, 8192);
-
+#if ENABLE_NETWORK_STATUS_SIGNALS
+  statusTask.create(statusSignals, "status", 1, 2048);
+#else
 #ifdef PIN_LED
   digitalWrite(PIN_LED, LOW);
+#endif
 #endif
 }
 
@@ -1631,11 +1697,11 @@ void loop()
   // error handling
   if (!state.check(STATE_WORKING)) {
     standby();
-#ifdef PIN_LED
+#if !ENABLE_NETWORK_STATUS_SIGNALS && defined(PIN_LED)
     if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
 #endif
     initialize();
-#ifdef PIN_LED
+#if !ENABLE_NETWORK_STATUS_SIGNALS && defined(PIN_LED)
     digitalWrite(PIN_LED, LOW);
 #endif
     return;

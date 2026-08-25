@@ -195,6 +195,16 @@
 #define RESET_AFTER_WAKEUP 1
 
 /**************************************
+* Network status signals
+**************************************/
+// The onboard LED is single-colour. Distinct cadences communicate transport
+// and power state without requiring a display.
+#define ENABLE_NETWORK_STATUS_SIGNALS 1
+#define ENABLE_AUDIBLE_NETWORK_ALERTS 1
+// Ignore short cellular handovers before announcing a genuine outage.
+#define NETWORK_ALERT_GRACE_MS 15000UL
+
+/**************************************
 * Additional features
 **************************************/
 #define PIN_SENSOR1 34
