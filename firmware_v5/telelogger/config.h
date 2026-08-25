@@ -37,19 +37,6 @@
 #endif
 
 /**************************************
-* Circular Buffer Configuration
-**************************************/
-#if BOARD_HAS_PSRAM
-#define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 384 /* bytes per slot */
-#define SERIALIZE_BUFFER_SIZE 4096 /* bytes */
-#else
-#define BUFFER_SLOTS 32 /* max number of buffer slots */
-#define BUFFER_LENGTH 256 /* bytes per slot */
-#define SERIALIZE_BUFFER_SIZE 1024 /* bytes */
-#endif
-
-/**************************************
 * Configuration Definitions
 **************************************/
 #define STORAGE_NONE 0
@@ -63,6 +50,25 @@
 #define PROTOCOL_UDP 1
 #define PROTOCOL_HTTPS_GET 2
 #define PROTOCOL_HTTPS_POST 3
+
+#if defined(__has_include)
+#if __has_include("local_config.h")
+#include "local_config.h"
+#endif
+#endif
+
+/**************************************
+* Circular Buffer Configuration
+**************************************/
+#if BOARD_HAS_PSRAM
+#define BUFFER_SLOTS 1024 /* max number of buffer slots */
+#define BUFFER_LENGTH 384 /* bytes per slot */
+#define SERIALIZE_BUFFER_SIZE 4096 /* bytes */
+#else
+#define BUFFER_SLOTS 32 /* max number of buffer slots */
+#define BUFFER_LENGTH 256 /* bytes per slot */
+#define SERIALIZE_BUFFER_SIZE 1024 /* bytes */
+#endif
 
 /**************************************
 * OBD-II configurations
@@ -84,21 +90,32 @@
 #define WIFI_PASSWORD ""
 #endif 
 
-#ifndef SERVER_HOST
+#ifndef CELL_APN
 // cellular network settings
 #define CELL_APN ""
+#endif
+
+#ifndef SERVER_HOST
 // Freematics Hub server settings
 #define SERVER_HOST "hub.freematics.com"
 #define SERVER_PROTOCOL PROTOCOL_UDP
 #endif
 
 // SIM card setting
+#ifndef SIM_CARD_PIN
 #define SIM_CARD_PIN ""
+#endif
+#ifndef APN_USERNAME
 #define APN_USERNAME NULL
+#endif
+#ifndef APN_PASSWORD
 #define APN_PASSWORD NULL
+#endif
 
 // HTTPS settings
+#ifndef SERVER_PATH
 #define SERVER_PATH "/hub/api"
+#endif
 
 #if !SERVER_PORT
 #undef SERVER_PORT

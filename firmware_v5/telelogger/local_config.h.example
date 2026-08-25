@@ -1,0 +1,24 @@
+#ifndef LOCAL_CONFIG_H_INCLUDED
+#define LOCAL_CONFIG_H_INCLUDED
+
+#define ENABLE_OBD 1
+#define ENABLE_MEMS 1
+#define GNSS GNSS_STANDALONE
+#define STORAGE STORAGE_SPIFFS
+
+#define ENABLE_WIFI 1
+#define WIFI_SSID "your-wifi-ssid"
+#define WIFI_PASSWORD "your-wifi-password"
+
+#define SERVER_HOST "192.0.2.1"
+#define SERVER_PORT 8081
+#define SERVER_PROTOCOL PROTOCOL_UDP
+
+#define CELL_APN "simbase"
+#define APN_USERNAME NULL
+#define APN_PASSWORD NULL
+
+#define ENABLE_BLE 1
+#define ENABLE_HTTPD 0
+
+#endif

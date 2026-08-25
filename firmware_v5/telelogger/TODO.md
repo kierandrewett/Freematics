@@ -4,7 +4,7 @@
 - [x] Capture the current firmware serial output.
 - [x] Build the unmodified upstream TeleLogger firmware.
 - [ ] Save a verified recovery backup from the connected device.
-- [ ] Add an ignored local configuration for Wi-Fi, the server, SPIFFS, and Simbase.
+- [x] Add an ignored local configuration for Wi-Fi, the server, SPIFFS, and Simbase.
 - [ ] Build and flash the Wi-Fi-first firmware.
 - [ ] Verify Wi-Fi association and end-to-end telemetry reception.
 - [ ] Verify SIM detection, LTE registration, and telemetry reception through Simbase.
