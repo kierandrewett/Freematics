@@ -131,6 +131,9 @@ uint16_t lastSizeKB = 0;
 #endif
 
 byte ledMode = 0;
+#if ENABLE_NETWORK_STATUS_SIGNALS
+volatile bool telemetryTransmitActive = false;
+#endif
 
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
@@ -254,10 +257,10 @@ void statusSignals(void* inst)
     bool ledOn;
     if (standbyMode) {
       ledOn = phase < 60;
-    } else if (cellOnline) {
-      ledOn = phase < 90;
-    } else if (wifiOnline) {
-      ledOn = phase < 90 || (phase >= 180 && phase < 270);
+    } else if (networkOnline) {
+      // Preserve the useful original behaviour: online flashes correspond to
+      // a real HTTP request rather than an arbitrary heartbeat.
+      ledOn = telemetryTransmitActive;
     } else if (hadNetwork) {
       ledOn = phase % 250 < 100;
     } else {
@@ -1213,7 +1216,14 @@ void telemetry(void* inst)
       Serial.print("[DAT] ");
       Serial.println(store.buffer());
 
-      if (teleClient.transmit(store.buffer(), store.length())) {
+#if ENABLE_NETWORK_STATUS_SIGNALS
+      telemetryTransmitActive = true;
+#endif
+      const bool sent = teleClient.transmit(store.buffer(), store.length());
+#if ENABLE_NETWORK_STATUS_SIGNALS
+      telemetryTransmitActive = false;
+#endif
+      if (sent) {
         // successfully sent
         bufman.free(buffer);
         connErrors = 0;
