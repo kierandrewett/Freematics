@@ -56,6 +56,7 @@ def stat(
     decimals: int | None = None,
     no_value: str = "No data",
     text_mode: str = "auto",
+    width: int = 4,
 ) -> dict:
     defaults: dict = {
         "color": {"mode": "thresholds"},
@@ -70,7 +71,7 @@ def stat(
         "datasource": DS,
         "description": description,
         "fieldConfig": {"defaults": defaults, "overrides": []},
-        "gridPos": {"h": 3, "w": 4, "x": x, "y": y},
+        "gridPos": {"h": 3, "w": width, "x": x, "y": y},
         "id": panel_id,
         "options": {
             "colorMode": "value",
@@ -726,6 +727,56 @@ def build_dashboard() -> dict:
         )
     )
 
+    payload_bytes = f"sum(increase(freematics_device_data_received_bytes_total{{{DEVICE}}}[$__range]))"
+    panels.extend(
+        [
+            stat(
+                32,
+                "Telemetry payload in range",
+                0,
+                44,
+                payload_bytes,
+                unit="decbytes",
+                description="Application payload accepted by the collector during the selected dashboard range.",
+                decimals=2,
+                width=6,
+            ),
+            stat(
+                33,
+                "Estimated SIM payload cost",
+                6,
+                44,
+                f"({payload_bytes}) / 1000000 * 0.005",
+                unit="currencyGBP",
+                description="Payload estimate at £0.005 per decimal MB. It assumes all collector payload used cellular and excludes TCP, TLS and mobile-network overhead.",
+                decimals=4,
+                width=6,
+            ),
+            stat(
+                34,
+                "Average payload rate",
+                12,
+                44,
+                f"({payload_bytes}) / 1000 / $__range_s * 3600",
+                unit="suffix: KB/hour",
+                description="Average accepted payload rate across the selected dashboard range, including parked time.",
+                decimals=1,
+                width=6,
+            ),
+            stat(
+                35,
+                "30-day payload estimate",
+                18,
+                44,
+                f"avg_over_time(rate(freematics_device_data_received_bytes_total{{{DEVICE}}}[5m])[$__range:30s]) * 2592000 / 1000000 * 0.005",
+                unit="currencyGBP",
+                description="Thirty-day projection from the average payload rate in the selected range. Actual Simbase billing includes network overhead and excludes Wi-Fi traffic.",
+                decimals=2,
+                width=6,
+            ),
+        ]
+    )
+
     raw_targets = [
         target(f"last_over_time(freematics_obd_value{selection}[$__range])", "A", "Latest", instant=True, table=True),
         target(f"min_over_time(freematics_obd_value{selection}[$__range])", "B", "Minimum", instant=True, table=True),
@@ -741,7 +792,7 @@ def build_dashboard() -> dict:
                 "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}, "decimals": 2},
                 "overrides": [by_name("Age", ("unit", "s"), ("decimals", 1))],
             },
-            "gridPos": {"h": 10, "w": 24, "x": 0, "y": 44},
+            "gridPos": {"h": 10, "w": 24, "x": 0, "y": 47},
             "id": 31,
             "options": {
                 "cellHeight": "sm",
