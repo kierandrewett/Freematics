@@ -201,14 +201,15 @@ void CBufferManager::printStats()
     count++;
   }
   if (slots) {
-    Serial.print("[BUF] ");
-    Serial.print(samples);
-    Serial.print(" samples | ");
-    Serial.print(bytes);
-    Serial.print(" bytes | ");
+    Serial.print("[QUEUE] Waiting readings: ");
     Serial.print(count);
-    Serial.print('/');
-    Serial.println(total);
+    Serial.print(" | values: ");
+    Serial.print(samples);
+    Serial.print(" | memory: ");
+    Serial.print(bytes);
+    Serial.print(" bytes | capacity: ");
+    Serial.print(total);
+    Serial.println(" readings");
   }
 }
 
@@ -565,14 +566,14 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
 #if ENABLE_WIFI
   if (wifi.connected()) {
-    Serial.print("[WIFI] ");
+    Serial.print("[HTTP] POST via Wi-Fi: ");
     Serial.println(path);
     success = wifi.send(METHOD_POST, path, packetBuffer, packetSize);
   }
   else
 #endif
   {
-    Serial.print("[CELL] ");
+    Serial.print("[HTTP] POST via cellular: ");
     Serial.println(path);
     success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, packetBuffer, packetSize);
   }
@@ -604,18 +605,29 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     Serial.println("[HTTP] No response");
     return false;
   }
-  Serial.print("[HTTP] ");
-  Serial.println(content);
 #if ENABLE_WIFI
-  bool accepted = wifi.connected() ? wifi.code() == 200 : cell.code() == 200;
-  if (accepted) {
+  int responseCode = wifi.connected() ? wifi.code() : cell.code();
 #else
-  bool accepted = cell.code() == 200;
-  if (accepted) {
+  int responseCode = cell.code();
 #endif
+  bool accepted = responseCode == 200;
+  if (accepted) {
+    if (!strncmp(content, "OK ", 3)) {
+      Serial.print("[HTTP] Server accepted ");
+      Serial.print(content + 3);
+      Serial.println(" values");
+    } else {
+      Serial.print("[HTTP] Server accepted request: ");
+      Serial.println(content);
+    }
     // successful
     lastSyncTime = millis();
     rxBytes += recvBytes;
+  } else {
+    Serial.print("[HTTP] Server rejected request (status ");
+    Serial.print(responseCode);
+    Serial.print("): ");
+    Serial.println(content);
   }
   return accepted;
 }

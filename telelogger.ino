@@ -188,9 +188,9 @@ State state;
 
 void printTimeoutStats()
 {
-  Serial.print("Timeouts: OBD:");
+  Serial.print("[ERRORS] OBD timeouts: ");
   Serial.print(timeoutsOBD);
-  Serial.print(" Network:");
+  Serial.print(" | network timeouts: ");
   Serial.println(timeoutsNet);
 }
 
@@ -624,7 +624,7 @@ void calibrateMEMS()
     accBias[0] /= n;
     accBias[1] /= n;
     accBias[2] /= n;
-    Serial.print("ACC BIAS:");
+    Serial.print("[MEMS] Calibration bias (x/y/z): ");
     Serial.print(accBias[0]);
     Serial.print('/');
     Serial.print(accBias[1]);
@@ -681,13 +681,13 @@ void initialize()
   if (!state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
     if (obd.init()) {
-      Serial.println("OBD:OK");
+      Serial.println("[OBD] ECU connected");
       state.set(STATE_OBD_READY);
 #if ENABLE_OLED
       oled.println("OBD OK");
 #endif
     } else {
-      Serial.println("OBD:NO");
+      Serial.println("[OBD] ECU not available; check the ignition and OBD connection");
       //state.clear(STATE_WORKING);
       //return;
     }
@@ -747,17 +747,17 @@ void showStats()
   uint32_t t = millis() - teleClient.startTime;
   char buf[32];
   sprintf(buf, "%02u:%02u.%c ", t / 60000, (t % 60000) / 1000, (t % 1000) / 100 + '0');
-  Serial.print("[NET] ");
+  Serial.print("[UPLOAD] Session: ");
   Serial.print(buf);
-  Serial.print("| Packet #");
+  Serial.print("| requests: ");
   Serial.print(teleClient.txCount);
-  Serial.print(" | Out: ");
+  Serial.print(" | sent: ");
   Serial.print(teleClient.txBytes >> 10);
-  Serial.print(" KB | In: ");
+  Serial.print(" KB | received: ");
   Serial.print(teleClient.rxBytes);
-  Serial.print(" bytes | ");
+  Serial.print(" bytes | average: ");
   Serial.print((unsigned int)((uint64_t)(teleClient.txBytes + teleClient.rxBytes) * 3600 / (millis() - teleClient.startTime)));
-  Serial.print(" KB/h");
+  Serial.print(" KB/hour");
 
   Serial.println();
 #if ENABLE_OLED
@@ -801,6 +801,7 @@ bool waitMotion(long timeout)
       // check movement
       if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
         //lastMotionTime = millis();
+        Serial.print("[POWER] Motion detected; wake score: ");
         Serial.println(motion);
         return true;
       }
@@ -1244,10 +1245,14 @@ void telemetry(void* inst)
         delay(50);
         continue;
       }
-      Serial.print("[DAT x");
+      Serial.print("[UPLOAD] Sending ");
       Serial.print(batchCount);
-      Serial.print("] ");
-      Serial.println(store.buffer());
+      Serial.print(" readings | payload: ");
+      Serial.print(store.length());
+      Serial.print(" bytes | oldest reading: ");
+      Serial.print(millis() - batch[0]->timestamp);
+      Serial.print(" ms | transport: ");
+      Serial.println(state.check(STATE_CELL_CONNECTED) ? "cellular" : "Wi-Fi");
 
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = true;
@@ -1333,7 +1338,7 @@ void standby()
 
 #if !GNSS_ALWAYS_ON && GNSS == GNSS_STANDALONE
   if (state.check(STATE_GPS_READY)) {
-    Serial.println("[GNSS] OFF");
+    Serial.println("[GNSS] Receiver off for standby");
     sys.gpsEnd(true);
     state.clear(STATE_GPS_READY | STATE_GPS_ONLINE);
     gd = 0;
@@ -1347,7 +1352,9 @@ void standby()
   delay(1000);
   oled.clear();
 #endif
-  Serial.println("STANDBY");
+  Serial.print("[POWER] Standby: radios off; wake on motion; server check every ");
+  Serial.print(PING_BACK_INTERVAL / 60);
+  Serial.println(" minutes");
   obd.enterLowPowerMode();
 #if ENABLE_MEMS
   calibrateMEMS();
@@ -1359,7 +1366,7 @@ void standby()
 #else
   delay(5000);
 #endif
-  Serial.println("WAKEUP");
+  Serial.println("[POWER] Restarting active mode");
   sys.resetLink();
 #if RESET_AFTER_WAKEUP
 #if ENABLE_MEMS
@@ -1396,26 +1403,28 @@ void genDeviceID(char* buf)
 
 void showSysInfo()
 {
-  Serial.print("CPU:");
+  Serial.println();
+  Serial.println("[BOOT] Freematics TeleLogger starting");
+  Serial.print("[BOOT] CPU: ");
   Serial.print(ESP.getCpuFreqMHz());
-  Serial.print("MHz FLASH:");
+  Serial.print(" MHz | flash: ");
   Serial.print(ESP.getFlashChipSize() >> 20);
-  Serial.println("MB");
-  Serial.print("IRAM:");
+  Serial.println(" MB");
+  Serial.print("[BOOT] RAM: ");
   Serial.print(ESP.getHeapSize() >> 10);
-  Serial.print("KB");
+  Serial.print(" KB");
 #if BOARD_HAS_PSRAM
   if (psramInit()) {
-    Serial.print(" PSRAM:");
+    Serial.print(" | PSRAM: ");
     Serial.print(esp_spiram_get_size() >> 20);
-    Serial.print("MB");
+    Serial.print(" MB");
   }
 #endif
   Serial.println();
 
   int rtc = rtc_clk_slow_freq_get();
   if (rtc) {
-    Serial.print("RTC:");
+    Serial.print("[BOOT] RTC source: ");
     Serial.println(rtc);
   }
 
@@ -1428,7 +1437,7 @@ void showSysInfo()
   oled.println("MB Flash");
 #endif
 
-  Serial.print("DEVICE ID:");
+  Serial.print("[BOOT] Device ID: ");
   Serial.println(devid);
 #if ENABLE_OLED
   oled.print("DEVICE ID:");
@@ -1662,7 +1671,7 @@ void setup()
 
 #if ENABLE_OBD
   if (sys.begin()) {
-    Serial.print("TYPE:");
+    Serial.print("[BOOT] Hardware type: ");
     Serial.println(sys.devType);
     obd.begin(sys.link);
   }
@@ -1672,7 +1681,7 @@ void setup()
 
 #if ENABLE_MEMS
 if (!state.check(STATE_MEMS_READY)) do {
-  Serial.print("MEMS:");
+  Serial.print("[MEMS] Motion sensor: ");
   mems = new ICM_42627;
   byte ret = mems->begin();
   if (ret) {

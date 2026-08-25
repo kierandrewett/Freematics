@@ -228,13 +228,13 @@ bool SPIFFSLogger::init()
         mounted = SPIFFS.begin(true);
     }
     if (mounted) {
-        Serial.print("SPIFFS:");
+        Serial.print("[STORAGE] Internal flash: ");
         Serial.print(SPIFFS.totalBytes());
-        Serial.print(" bytes total, ");
+        Serial.print(" bytes total | used: ");
         Serial.print(SPIFFS.usedBytes());
-        Serial.println(" bytes used");
+        Serial.println(" bytes");
     } else {
-        Serial.println("No SPIFFS");
+        Serial.println("[STORAGE] Internal flash is not available");
     }
     return mounted;
 }
@@ -248,7 +248,7 @@ uint32_t SPIFFSLogger::begin()
     m_id = getFileID(root);
     char path[24];
     sprintf(path, "/DATA/%u.CSV", m_id);
-    Serial.print("File: ");
+    Serial.print("[STORAGE] Local trip log: ");
     Serial.println(path);
     m_file = SPIFFS.open(path, FILE_WRITE);
     if (!m_file) {
