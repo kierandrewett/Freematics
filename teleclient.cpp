@@ -622,6 +622,15 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 
 bool TeleClientHTTP::connect(bool quick)
 {
+  if (!SERVER_TOKEN[0]) {
+    Serial.println("[AUTH] Telemetry token missing");
+    return false;
+  }
+#if ENABLE_WIFI
+  wifi.setBearerToken(SERVER_TOKEN);
+#endif
+  cell.setBearerToken(SERVER_TOKEN);
+
   if (!quick) {
 #if ENABLE_WIFI
     if (!wifi.connected()) cell.init();

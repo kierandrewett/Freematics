@@ -117,6 +117,10 @@
 #define SERVER_PATH "/hub/api"
 #endif
 
+#ifndef SERVER_TOKEN
+#define SERVER_TOKEN ""
+#endif
+
 #if !SERVER_PORT
 #undef SERVER_PORT
 #if SERVER_PROTOCOL == PROTOCOL_UDP
