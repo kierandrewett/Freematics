@@ -58,6 +58,21 @@ PID_POLLING_INFO obdData[]= {
 };
 
 #define OBD_AUX_PIDS_PER_CYCLE 8
+#define DTC_SCAN_INTERVAL 300000UL
+
+typedef struct {
+  byte mode;
+  uint16_t countPid;
+  uint16_t basePid;
+  uint8_t count;
+  uint16_t codes[DTC_CODE_SLOTS];
+} DTC_POLLING_INFO;
+
+DTC_POLLING_INFO dtcData[] = {
+  {0x03, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, 0, {0}},
+  {0x07, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, 0, {0}},
+  {0x0A, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, 0, {0}},
+};
 
 CBufferManager bufman;
 Task subtask;
@@ -86,7 +101,6 @@ String ip;
 int16_t rssi = 0;
 int16_t rssiLast = 0;
 char vin[18] = {0};
-uint16_t dtc[6] = {0};
 float batteryVoltage = 0;
 GPS_DATA* gd = 0;
 
@@ -95,9 +109,11 @@ char isoTime[32] = {0};
 
 // stats data
 uint32_t lastMotionTime = 0;
+uint32_t lastDTCScan = 0;
 uint32_t timeoutsOBD = 0;
 uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
+byte dtcBatchPending = 0;
 
 int32_t syncInterval = SERVER_SYNC_INTERVAL * 1000;
 int32_t dataInterval = 1000;
@@ -232,6 +248,40 @@ int handlerLiveData(UrlHandlerParam* param)
   Reading and processing OBD data
 *******************************************************************************/
 #if ENABLE_OBD
+void scanDiagnostics()
+{
+  for (byte i = 0; i < sizeof(dtcData) / sizeof(dtcData[0]); i++) {
+    DTC_POLLING_INFO& item = dtcData[i];
+    memset(item.codes, 0, sizeof(item.codes));
+    item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
+  }
+  lastDTCScan = millis();
+  dtcBatchPending = 1;
+  Serial.print("DTC stored:");
+  Serial.print(dtcData[0].count);
+  Serial.print(" pending:");
+  Serial.print(dtcData[1].count);
+  Serial.print(" permanent:");
+  Serial.println(dtcData[2].count);
+}
+
+void processDiagnostics(CBuffer* buffer)
+{
+  if (!dtcBatchPending && millis() - lastDTCScan >= DTC_SCAN_INTERVAL) {
+    scanDiagnostics();
+  }
+  if (!dtcBatchPending) return;
+
+  DTC_POLLING_INFO& item = dtcData[dtcBatchPending - 1];
+  buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
+  for (byte i = 0; i < DTC_CODE_SLOTS; i++) {
+    buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
+  }
+  if (++dtcBatchPending > sizeof(dtcData) / sizeof(dtcData[0])) {
+    dtcBatchPending = 0;
+  }
+}
+
 void processOBD(CBuffer* buffer)
 {
   static byte auxIndex = 0;
@@ -271,6 +321,8 @@ void processOBD(CBuffer* buffer)
     buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
     sampled++;
   }
+
+  processDiagnostics(buffer);
 }
 #endif
 
@@ -549,11 +601,7 @@ void initialize()
       Serial.print("VIN:");
       Serial.println(vin);
     }
-    int dtcCount = obd.readDTC(dtc, sizeof(dtc) / sizeof(dtc[0]));
-    if (dtcCount > 0) {
-      Serial.print("DTC:");
-      Serial.println(dtcCount);
-    }
+    scanDiagnostics();
 #if ENABLE_OLED
     oled.print("VIN:");
     oled.println(vin);
