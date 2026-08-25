@@ -151,9 +151,10 @@
 #define DATA_INTERVAL_TABLE {1000, 2000, 5000} /* ms */
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */
-// Maximum samples coalesced into one HTTPS POST while draining a backlog.
-// Live samples are still sent immediately when no backlog exists.
+// Maximum samples coalesced into one HTTPS POST.
 #define HTTP_BATCH_MAX_SAMPLES 16
+// Bound live latency while allowing normal samples to share a request.
+#define HTTP_BATCH_MAX_WAIT_MS 5000UL
 
 /**************************************
 * Data storage configurations

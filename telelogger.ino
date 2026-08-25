@@ -1211,7 +1211,15 @@ void telemetry(void* inst)
 #endif
       while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
         CBuffer* buffer = bufman.getOldest();
-        if (!buffer) break;
+        if (!buffer) {
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+          if (batchCount && millis() - batch[0]->timestamp < HTTP_BATCH_MAX_WAIT_MS) {
+            delay(25);
+            continue;
+          }
+#endif
+          break;
+        }
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
         if (batchCount) store.untailer();
 #endif
