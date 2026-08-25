@@ -1,2 +1,4 @@
-**/.pio/
-firmware_v5/telelogger/local_config.h
+.pio/
+local_config.h
+collector/**/*.o
+collector/teleserver
