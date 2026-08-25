@@ -27,7 +27,7 @@
 #define SESSION_GAP (15 * 60 * 1000)
 #define MIN_DEVID_LEN 6
 #define MAX_DEVID_LEN 64
-#define PID_MODES 2
+#define PID_MODES 4
 
 #define FLAG_RUNNING 0x1
 #define FLAG_SLEEPING 0x2
@@ -108,6 +108,8 @@ typedef struct {
 	uint8_t unused;
 	uint8_t deviceTemp;
 	float sampleRate;
+	uint64_t sessionStartTime;
+	char tripid[16];
 	char vin[20];
 	char devid[32];
 	IPADDR ip;

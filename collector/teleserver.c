@@ -103,14 +103,46 @@ static const OBD_PID_META* findOBDPIDMeta(uint16_t pid)
 }
 
 static int appendScalarMetric(char* buf, int bs, int l, const char* metric,
-	const char* devid, const PID_DATA* data, double scale)
+	const char* devid, const char* tripid, const PID_DATA* data, double scale)
 {
 	if (!data->ts || l >= bs - 1) return l;
 	char* end = NULL;
 	double value = strtod(data->value, &end);
 	if (end == data->value) return l;
-	return l + snprintf(buf + l, bs - l, "%s{device_id=\"%s\"} %.10g\n",
-		metric, devid, value * scale);
+	return l + snprintf(buf + l, bs - l, "%s{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
+		metric, devid, tripid, value * scale);
+}
+
+static void formatDTC(uint16_t raw, char code[6], const char** system)
+{
+	static const char prefixes[] = "PCBU";
+	static const char* systems[] = {"powertrain", "chassis", "body", "network"};
+	unsigned int family = raw >> 14;
+	snprintf(code, 6, "%c%X%03X", prefixes[family], (raw >> 12) & 0x3, raw & 0xFFF);
+	*system = systems[family];
+}
+
+static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
+	uint16_t countPid, uint16_t basePid, const char* status)
+{
+	const PID_DATA* countData = pld->data + countPid;
+	if (!countData->ts || l >= bs - 1) return l;
+	unsigned int count = (unsigned int)atoi(countData->value);
+	if (count > DTC_CODE_SLOTS) count = DTC_CODE_SLOTS;
+	l += snprintf(buf + l, bs - l,
+		"freematics_diagnostic_trouble_codes{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %u\n",
+		pld->devid, pld->tripid, status, count);
+	for (unsigned int i = 0; i < count && l < bs - 1; i++) {
+		uint16_t raw = (uint16_t)atoi(pld->data[basePid + i].value);
+		if (!raw) continue;
+		char code[6];
+		const char* system;
+		formatDTC(raw, code, &system);
+		l += snprintf(buf + l, bs - l,
+			"freematics_diagnostic_trouble_code_info{device_id=\"%s\",trip_id=\"%s\",status=\"%s\",code=\"%s\",system=\"%s\"} 1\n",
+			pld->devid, pld->tripid, status, code, system);
+	}
+	return l;
 }
 
 int uhMetrics(UrlHandlerParam* param)
@@ -136,7 +168,19 @@ int uhMetrics(UrlHandlerParam* param)
 		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value.\n"
 		"# TYPE freematics_obd_value_age_seconds gauge\n"
 		"# HELP freematics_acceleration_g Vehicle acceleration by device axis.\n"
-		"# TYPE freematics_acceleration_g gauge\n");
+		"# TYPE freematics_acceleration_g gauge\n"
+		"# HELP freematics_vehicle_info Vehicle identity reported by the ECU.\n"
+		"# TYPE freematics_vehicle_info gauge\n"
+		"# HELP freematics_trip_active Whether this device trip is currently receiving telemetry.\n"
+		"# TYPE freematics_trip_active gauge\n"
+		"# HELP freematics_trip_start_time_seconds Unix timestamp at collector login.\n"
+		"# TYPE freematics_trip_start_time_seconds gauge\n"
+		"# HELP freematics_trip_elapsed_seconds Collector-observed trip duration.\n"
+		"# TYPE freematics_trip_elapsed_seconds gauge\n"
+		"# HELP freematics_diagnostic_trouble_codes Diagnostic trouble-code count by OBD status.\n"
+		"# TYPE freematics_diagnostic_trouble_codes gauge\n"
+		"# HELP freematics_diagnostic_trouble_code_info Diagnostic trouble codes reported by the ECU.\n"
+		"# TYPE freematics_diagnostic_trouble_code_info gauge\n");
 
 	for (int n = 0; n < MAX_CHANNELS && l < bs - 1; n++) {
 		CHANNEL_DATA* pld = ld + n;
@@ -154,35 +198,50 @@ int uhMetrics(UrlHandlerParam* param)
 			pld->devid, pld->sampleRate,
 			pld->devid, (int)pld->rssi);
 
-		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->data + PID_DEVICE_TEMP, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->data + PID_GPS_LATITUDE, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->data + PID_GPS_LONGITUDE, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_altitude_metres", pld->devid, pld->data + PID_GPS_ALTITUDE, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_speed_kilometres_per_hour", pld->devid, pld->data + PID_GPS_SPEED, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_heading_degrees", pld->devid, pld->data + PID_GPS_HEADING, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_satellites", pld->devid, pld->data + PID_GPS_SAT_COUNT, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_gps_hdop", pld->devid, pld->data + PID_GPS_HDOP, 0.1);
-		l = appendScalarMetric(buf, bs, l, "freematics_trip_distance_kilometres", pld->devid, pld->data + PID_TRIP_DISTANCE, 1);
+		if (pld->vin[0]) {
+			l += snprintf(buf + l, bs - l,
+				"freematics_vehicle_info{device_id=\"%s\",vin=\"%s\"} 1\n",
+				pld->devid, pld->vin);
+		}
+		if (pld->tripid[0]) {
+			l += snprintf(buf + l, bs - l,
+				"freematics_trip_active{device_id=\"%s\",trip_id=\"%s\"} %u\n"
+				"freematics_trip_start_time_seconds{device_id=\"%s\",trip_id=\"%s\"} %llu\n"
+				"freematics_trip_elapsed_seconds{device_id=\"%s\",trip_id=\"%s\"} %u\n",
+				pld->devid, pld->tripid, (pld->flags & FLAG_RUNNING) ? 1 : 0,
+				pld->devid, pld->tripid, (unsigned long long)pld->sessionStartTime,
+				pld->devid, pld->tripid, pld->elapsedTime);
+		}
+
+		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->tripid, pld->data + PID_DEVICE_TEMP, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LATITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LONGITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_altitude_metres", pld->devid, pld->tripid, pld->data + PID_GPS_ALTITUDE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_speed_kilometres_per_hour", pld->devid, pld->tripid, pld->data + PID_GPS_SPEED, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_heading_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_HEADING, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_satellites", pld->devid, pld->tripid, pld->data + PID_GPS_SAT_COUNT, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_gps_hdop", pld->devid, pld->tripid, pld->data + PID_GPS_HDOP, 0.1);
+		l = appendScalarMetric(buf, bs, l, "freematics_trip_distance_kilometres", pld->devid, pld->tripid, pld->data + PID_TRIP_DISTANCE, 1);
 
 		if (pld->data[PID_ACC].ts) {
 			double x, y, z;
 			if (sscanf(pld->data[PID_ACC].value, "%lf;%lf;%lf", &x, &y, &z) == 3) {
 				l += snprintf(buf + l, bs - l,
-					"freematics_acceleration_g{device_id=\"%s\",axis=\"x\"} %.10g\n"
-					"freematics_acceleration_g{device_id=\"%s\",axis=\"y\"} %.10g\n"
-					"freematics_acceleration_g{device_id=\"%s\",axis=\"z\"} %.10g\n",
-					pld->devid, x, pld->devid, y, pld->devid, z);
+					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"x\"} %.10g\n"
+					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"y\"} %.10g\n"
+					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"z\"} %.10g\n",
+					pld->devid, pld->tripid, x, pld->devid, pld->tripid, y, pld->devid, pld->tripid, z);
 			}
 		}
 		if (pld->data[0x25].ts) {
 			double yaw, pitch, roll;
 			if (sscanf(pld->data[0x25].value, "%lf;%lf;%lf", &yaw, &pitch, &roll) == 3) {
 				l += snprintf(buf + l, bs - l,
-					"freematics_orientation_degrees{device_id=\"%s\",axis=\"yaw\"} %.10g\n"
-					"freematics_orientation_degrees{device_id=\"%s\",axis=\"pitch\"} %.10g\n"
-					"freematics_orientation_degrees{device_id=\"%s\",axis=\"roll\"} %.10g\n",
-					pld->devid, yaw, pld->devid, pitch, pld->devid, roll);
+					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"yaw\"} %.10g\n"
+					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"pitch\"} %.10g\n"
+					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"roll\"} %.10g\n",
+					pld->devid, pld->tripid, yaw, pld->devid, pld->tripid, pitch, pld->devid, pld->tripid, roll);
 			}
 		}
 
@@ -197,11 +256,15 @@ int uhMetrics(UrlHandlerParam* param)
 			unsigned int valueAge = age;
 			if (pld->deviceTick >= value->ts) valueAge += pld->deviceTick - value->ts;
 			l += snprintf(buf + l, bs - l,
-				"freematics_obd_value{device_id=\"%s\",pid=\"0x%03X\",name=\"%s\",description=\"%s\",unit=\"%s\"} %.10g\n"
-				"freematics_obd_value_age_seconds{device_id=\"%s\",pid=\"0x%03X\",name=\"%s\"} %.3f\n",
-				pld->devid, pid, meta->name, meta->description, meta->unit, number,
-				pld->devid, pid, meta->name, valueAge / 1000.0);
+				"freematics_obd_value{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\",description=\"%s\",unit=\"%s\"} %.10g\n"
+				"freematics_obd_value_age_seconds{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\"} %.3f\n",
+				pld->devid, pld->tripid, pid, meta->name, meta->description, meta->unit, number,
+				pld->devid, pld->tripid, pid, meta->name, valueAge / 1000.0);
 		}
+
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored");
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending");
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, "permanent");
 	}
 
 	param->contentLength = l;
@@ -415,6 +478,10 @@ FILE* createDataFile(CHANNEL_DATA* pld)
 		btm->tm_hour,
 		btm->tm_min,
 		btm->tm_sec);
+	snprintf(pld->tripid, sizeof(pld->tripid), "%04u%02u%02u-%02u%02u%02u",
+		btm->tm_year + 1900, btm->tm_mon + 1, btm->tm_mday,
+		btm->tm_hour, btm->tm_min, btm->tm_sec);
+	pld->sessionStartTime = (uint64_t)t;
 	pld->fp = fopen(filename, "a+");
 	if (!pld->fp) return 0;
 	if (ftell(pld->fp) == 0) {
@@ -439,8 +506,8 @@ void deviceLogin(CHANNEL_DATA* pld)
 	pld->recvCount = 0;
 	pld->txCount = 0;
 	pld->elapsedTime = 0;
-	SaveChannels();
 	createDataFile(pld);
+	SaveChannels();
 	fprintf(getLogFile(), " LOGIN:%s\n", pld->devid);
 }
 
