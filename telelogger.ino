@@ -1201,19 +1201,44 @@ void telemetry(void* inst)
 #endif
       }
 
-      // get data from buffer
-      CBuffer* buffer = bufman.getOldest();
-      if (!buffer) {
-        delay(50);
-        continue;
-      }
+      // Coalesce queued samples into one POST. This keeps live latency low when
+      // only one sample is waiting but avoids a request storm after an outage.
+      CBuffer* batch[HTTP_BATCH_MAX_SAMPLES];
+      uint8_t batchCount = 0;
+      store.purge();
 #if SERVER_PROTOCOL == PROTOCOL_UDP
       store.header(devid);
 #endif
-      store.timestamp(buffer->timestamp);
-      buffer->serialize(store);
-      store.tailer();
-      Serial.print("[DAT] ");
+      while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
+        CBuffer* buffer = bufman.getOldest();
+        if (!buffer) break;
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+        if (batchCount) store.untailer();
+#endif
+        store.checkpoint();
+        store.timestamp(buffer->timestamp);
+        buffer->serialize(store);
+        store.tailer();
+        if (store.overflowed()) {
+          // Keep this complete sample queued and restore the last valid packet.
+          store.rollback();
+          buffer->state = BUFFER_STATE_FILLED;
+          if (batchCount) store.tailer();
+          break;
+        }
+        batch[batchCount++] = buffer;
+#if SERVER_PROTOCOL != PROTOCOL_HTTPS_POST
+        break;
+#endif
+      }
+      if (!batchCount) {
+        store.purge();
+        delay(50);
+        continue;
+      }
+      Serial.print("[DAT x");
+      Serial.print(batchCount);
+      Serial.print("] ");
       Serial.println(store.buffer());
 
 #if ENABLE_NETWORK_STATUS_SIGNALS
@@ -1224,14 +1249,16 @@ void telemetry(void* inst)
       telemetryTransmitActive = false;
 #endif
       if (sent) {
-        // successfully sent
-        bufman.free(buffer);
+        // Free the entire batch only after the server accepts it.
+        for (uint8_t i = 0; i < batchCount; i++) bufman.free(batch[i]);
         connErrors = 0;
         showStats();
       } else {
-        // Retain the oldest unsent sample for an at-least-once retry after the
+        // Retain the whole batch for an at-least-once ordered retry after the
         // connection recovers instead of silently dropping outage data.
-        buffer->state = BUFFER_STATE_FILLED;
+        for (uint8_t i = 0; i < batchCount; i++) {
+          batch[i]->state = BUFFER_STATE_FILLED;
+        }
         timeoutsNet++;
         connErrors++;
         printTimeoutStats();
