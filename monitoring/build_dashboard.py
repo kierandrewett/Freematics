@@ -19,6 +19,10 @@ KPH_TO_UK_MPG_PER_LPH = KM_TO_MI * IMPERIAL_GALLON_LITRES
 # are assumptions, not vehicle-specific facts.
 PETROL_STOICH_AFR = 14.7
 PETROL_DENSITY_G_PER_LITRE = 745.0
+# The collector publishes each PID's age from its own device timestamp.  Keep
+# an old ECU reading out of live summaries and charts instead of making a
+# stopped engine look as though it is still running.
+OBD_FRESH_MAX_AGE_SECONDS = 15
 
 
 def target(
@@ -173,14 +177,26 @@ def build_dashboard() -> dict:
     panels: list[dict] = []
 
     selection = f"{{{DEVICE},{TRIP}}}"
-    speed_kph = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10D"}}'
+    obd_age = f"freematics_obd_value_age_seconds{selection}"
+
+    def fresh_obd(value_expression: str) -> str:
+        return (
+            f"({value_expression} unless on(device_id,trip_id,pid) "
+            f"({obd_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+        )
+
+    speed_kph = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10D"}}')
     speed_mph = f"({speed_kph} * {KM_TO_MI})"
     gps_speed_kph = f"freematics_gps_speed_kilometres_per_hour{selection}"
     gps_speed_mph = f"({gps_speed_kph} * {KM_TO_MI})"
-    rpm = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10C"}}'
-    fuel_level = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x12F"}}'
-    fuel_rate = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x15E"}}'
-    maf = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x110"}}'
+    rpm = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10C"}}')
+    fuel_level = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x12F"}}')
+    coolant = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x105"}}')
+    fuel_rate = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x15E"}}')
+    maf = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x110"}}')
+    service_counters = fresh_obd(
+        f'freematics_obd_value{{{DEVICE},{TRIP},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}'
+    )
     estimated_fuel_rate = (
         f"({maf} * 3600 / ({PETROL_STOICH_AFR} * {PETROL_DENSITY_G_PER_LITRE}))"
     )
@@ -267,11 +283,11 @@ def build_dashboard() -> dict:
                 "Fuel level",
                 12,
                 0,
-                'last_over_time(freematics_obd_value{device_id="$device",pid="0x12F"}[5m])',
+                f"last_over_time({fuel_level}[5m:])",
                 unit="percent",
                 decimals=1,
-                description="Live ECU fuel-tank percentage. This is a gauge percentage, not litres; red means at or below 15%.",
-                no_value="Not reported",
+                description=f"Live ECU fuel-tank percentage, only while its reported age is at most {OBD_FRESH_MAX_AGE_SECONDS} seconds. This is a gauge percentage, not litres; red means at or below 15%.",
+                no_value="Not reported or stale",
                 threshold_steps=((None, "red"), (15, "red"), (25, "orange"), (100, "green")),
                 width=3,
             ),
@@ -303,15 +319,15 @@ def build_dashboard() -> dict:
             ),
             stat(
                 37,
-                "ECU metrics",
+                "ECU data age",
                 21,
                 0,
-                'count(count by (pid) (freematics_obd_value{device_id="$device"}))',
-                unit="short",
-                decimals=0,
-                description="Distinct numeric Mode 01 PIDs currently reported by the vehicle ECU. The raw table below keeps the complete inventory visible.",
+                f"max({obd_age})",
+                unit="s",
+                decimals=1,
+                description=f"Oldest currently cached ECU PID value. Values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are hidden from live charts and summaries. The raw inventory still reports their age.",
                 no_value="No ECU data",
-                threshold_steps=((None, "red"), (1, "green")),
+                threshold_steps=((None, "green"), (10, "orange"), (OBD_FRESH_MAX_AGE_SECONDS, "red")),
                 width=3,
             ),
         ]
@@ -356,10 +372,10 @@ def build_dashboard() -> dict:
                 "Average speed",
                 12,
                 3,
-                f"(avg(avg_over_time({speed_kph}[$__range])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                f"(avg(avg_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
-                description="Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback.",
+                description=f"Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
                 no_value="No speed",
             ),
             stat(
@@ -367,10 +383,10 @@ def build_dashboard() -> dict:
                 "Maximum speed",
                 16,
                 3,
-                f"(max(max_over_time({speed_kph}[$__range])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                f"(max(max_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
-                description="Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable.",
+                description=f"Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
                 no_value="No speed",
             ),
             stat(
@@ -378,44 +394,44 @@ def build_dashboard() -> dict:
                 "Peak engine speed",
                 20,
                 3,
-                f"max(max_over_time({rpm}[$__range]))",
+                f"max(max_over_time({rpm}[$__range:]))",
                 unit="rpm",
                 decimals=0,
                 description="Highest engine RPM in the selected trip and time range.",
-                no_value="No ECU data",
+                no_value="No fresh ECU data",
             ),
             stat(
                 13,
                 "Fuel at start",
                 0,
                 6,
-                f"max(last_over_time({fuel_level}[$__range]) - delta({fuel_level}[$__range]))",
+                f"max(last_over_time({fuel_level}[$__range:]) - delta({fuel_level}[$__range:]))",
                 unit="percent",
                 decimals=1,
                 description="Estimated first fuel-level value from the final sample and gauge delta over the selected range.",
-                no_value="Unsupported",
+                no_value="Not reported or stale",
             ),
             stat(
                 14,
                 "Fuel at end",
                 4,
                 6,
-                f"max(last_over_time({fuel_level}[$__range]))",
+                f"max(last_over_time({fuel_level}[$__range:]))",
                 unit="percent",
                 decimals=1,
                 description="Latest fuel-level sample in the selected time range.",
-                no_value="Unsupported",
+                no_value="Not reported or stale",
             ),
             stat(
                 15,
                 "Fuel level change",
                 8,
                 6,
-                f"max(-delta({fuel_level}[$__range]))",
+                f"max(-delta({fuel_level}[$__range:]))",
                 unit="percent",
                 decimals=1,
                 description="Start minus end fuel-tank percentage. Sensor quantisation means short trips may show zero or noise.",
-                no_value="Unsupported",
+                no_value="Not reported or stale",
             ),
             stat(
                 16,
@@ -444,11 +460,11 @@ def build_dashboard() -> dict:
                 "Maximum coolant",
                 20,
                 6,
-                f'max(max_over_time(freematics_obd_value{{{DEVICE},{TRIP},pid="0x105"}}[$__range]))',
+                f"max(max_over_time({coolant}[$__range:]))",
                 unit="celsius",
                 decimals=1,
-                description="Maximum engine coolant temperature exposed by the ECU.",
-                no_value="Unsupported",
+                description=f"Maximum fresh engine coolant temperature exposed by the ECU. Values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
+                no_value="Unsupported or stale",
                 threshold_steps=((None, "blue"), (75, "green"), (105, "orange"), (115, "red")),
             ),
         ]
@@ -477,14 +493,14 @@ def build_dashboard() -> dict:
             table=True,
         ),
         target(
-            f"avg_over_time({speed_kph}[$__range]) * {KM_TO_MI}",
+            f"avg_over_time({speed_kph}[$__range:]) * {KM_TO_MI}",
             "D",
             "Average speed",
             instant=True,
             table=True,
         ),
         target(
-            f"max_over_time({speed_kph}[$__range]) * {KM_TO_MI}",
+            f"max_over_time({speed_kph}[$__range:]) * {KM_TO_MI}",
             "E",
             "Maximum speed",
             instant=True,
@@ -621,10 +637,10 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x104"}}', "A", "Engine load"),
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x111"}}', "B", "Throttle"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x104"}}'), "A", "Engine load"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x111"}}'), "B", "Throttle"),
                     target(
-                        f'freematics_obd_value{{{DEVICE},{TRIP},name=~"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque"}}',
+                        fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque"}}'),
                         "C",
                         "{{description}}",
                     ),
@@ -640,7 +656,7 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*temperature.*"}}', "A", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*temperature.*"}}'), "A", "{{description}}"),
                     target(f"freematics_device_temperature_celsius{selection}", "B", "TeleLogger enclosure"),
                 ],
                 unit="celsius",
@@ -654,8 +670,8 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"fuel_level|.*fuel_trim.*"}}', "A", "{{description}}"),
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},name="commanded_equivalence_ratio"}}', "B", "Equivalence ratio"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"fuel_level|.*fuel_trim.*"}}'), "A", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name="commanded_equivalence_ratio"}}'), "B", "Equivalence ratio"),
                 ],
                 unit="percent",
                 description="Fuel gauge percentage and closed-loop trims stay on the primary axis. Equivalence ratio uses the right axis; fuel percentage is not a volume measurement.",
@@ -670,7 +686,7 @@ def build_dashboard() -> dict:
                 7,
                 [
                     target(maf, "A", "Mass airflow"),
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*pressure.*"}}', "B", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*pressure.*"}}'), "B", "{{description}}"),
                 ],
                 unit="kpascal",
                 description="Intake, fuel-rail, barometric and evaporative pressures with mass airflow on its own axis.",
@@ -899,19 +915,34 @@ def build_dashboard() -> dict:
     )
 
     raw_targets = [
-        target(f"last_over_time(freematics_obd_value{selection}[$__range])", "A", "Latest", instant=True, table=True),
+        target(f"last_over_time({fresh_obd(f'freematics_obd_value{selection}')}[$__range:])", "A", "Latest fresh", instant=True, table=True),
         target(f"min_over_time(freematics_obd_value{selection}[$__range])", "B", "Minimum", instant=True, table=True),
         target(f"avg_over_time(freematics_obd_value{selection}[$__range])", "C", "Average", instant=True, table=True),
         target(f"max_over_time(freematics_obd_value{selection}[$__range])", "D", "Maximum", instant=True, table=True),
         target(f"last_over_time(freematics_obd_value_age_seconds{selection}[$__range])", "E", "Age", instant=True, table=True),
+        target(f"max_over_time((freematics_obd_value_age_seconds{selection} > bool {OBD_FRESH_MAX_AGE_SECONDS})[$__range:])", "F", "Stale", instant=True, table=True),
     ]
     panels.append(
         {
             "datasource": DS,
-            "description": "Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. This table is deliberately exhaustive and sortable.",
+            "description": f"Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. 'Latest fresh' is blank when an ECU value is older than {OBD_FRESH_MAX_AGE_SECONDS} seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
             "fieldConfig": {
                 "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}, "decimals": 2},
-                "overrides": [by_name("Age", ("unit", "s"), ("decimals", 1))],
+                "overrides": [
+                    by_name("Age", ("unit", "s"), ("decimals", 1)),
+                    by_name(
+                        "Stale",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "0": {"color": "green", "index": 0, "text": "Fresh"},
+                                    "1": {"color": "red", "index": 1, "text": "Stale"},
+                                }
+                            ),
+                        ),
+                    ),
+                ],
             },
             "gridPos": {"h": 10, "w": 24, "x": 0, "y": 47},
             "id": 31,
@@ -938,17 +969,17 @@ def build_dashboard() -> dict:
             7,
             [
                 target(
-                    f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10E"}}',
+                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10E"}}'),
                     "A",
                     "Timing advance",
                 ),
                 target(
-                    f'freematics_obd_value{{{DEVICE},{TRIP},name=~"oxygen_sensor_.*_voltage"}}',
+                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"oxygen_sensor_.*_voltage"}}'),
                     "B",
                     "{{description}}",
                 ),
                 target(
-                    f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x144"}}',
+                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x144"}}'),
                     "C",
                     "Equivalence ratio",
                 ),
@@ -989,7 +1020,7 @@ def build_dashboard() -> dict:
             },
             "targets": [
                 target(
-                    f'last_over_time(freematics_obd_value{{{DEVICE},{TRIP},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}[$__range])',
+                    f"last_over_time({service_counters}[$__range:])",
                     "A",
                     "Latest",
                     instant=True,
