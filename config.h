@@ -207,6 +207,9 @@
 #define JUMPSTART_VOLTAGE 14 /* V */
 // reset device after waking up
 #define RESET_AFTER_WAKEUP 1
+// Standby only samples the motion sensor at this interval. The ESP32 enters
+// light sleep between samples so the LED and CPU are not running continuously.
+#define STANDBY_POLL_INTERVAL_MS 250UL
 
 /**************************************
 * Network status signals

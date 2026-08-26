@@ -25,6 +25,7 @@
 
 //CONFIG0_REG
 #define ACCEL_ODR_1KHZ					6<<0
+#define ACCEL_ODR_50HZ                    10<<0
 #define ACCEL_FS_SEL_2G					3<<5
 
 //INT_STATUS

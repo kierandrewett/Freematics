@@ -743,6 +743,26 @@ void ICM_42627::init()
   delay(100);
 }
 
+void ICM_42627::setLowPower(bool enabled)
+{
+  // Keep only the accelerometer in the vendor's low-power mode while parked;
+  // the gyro and temperature channel are not needed for wake detection.
+  if (enabled) {
+    // 50 Hz is sufficient for a 250 ms host-side motion check and avoids
+    // running the sensor's normal 1 kHz output data rate while parked.
+    writeByte(ACCEL_CONFIG0_REG, ACCEL_ODR_50HZ | ACCEL_FS_SEL_2G);
+    delay(1);
+  }
+  const uint8_t mode = enabled
+    ? (TEMP_DIS_OFF | IDLE_ON | ACCEL_MODE_LP | GYRO_MODE_OFF)
+    : (TEMP_DIS_ON | IDLE_ON | ACCEL_MODE_LN | GYRO_MODE_LN);
+  writeByte(PWR_MGMT0_REG, mode);
+  if (!enabled) {
+    writeByte(ACCEL_CONFIG0_REG, ACCEL_ODR_1KHZ | ACCEL_FS_SEL_2G);
+  }
+  delay(20);
+}
+
 void ICM_42627::writeByte(uint8_t subAddress, uint8_t data)
 {
   i2c_cmd_handle_t cmd = i2c_cmd_link_create();

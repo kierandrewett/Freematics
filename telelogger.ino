@@ -17,6 +17,7 @@
 
 #include <FreematicsPlus.h>
 #include <httpd.h>
+#include <esp_sleep.h>
 #include "config.h"
 #ifndef PREFER_CELLULAR
 #define PREFER_CELLULAR 0
@@ -368,22 +369,28 @@ void statusSignals(void* inst)
     }
 
 #ifdef PIN_LED
-    const uint32_t phase = now % (standbyMode ? 10000UL : 1000UL);
     bool ledOn;
     if (standbyMode) {
-      ledOn = phase < 60;
+      // A parked device must be visually and electrically quiet. Motion
+      // wakes the loop; the normal online/upload indication resumes after
+      // the active-mode restart.
+      ledOn = false;
     } else if (networkOnline) {
       // Preserve the useful original behaviour: online flashes correspond to
       // a real HTTP request rather than an arbitrary heartbeat.
       ledOn = telemetryTransmitActive;
     } else if (hadNetwork) {
+      const uint32_t phase = now % 1000UL;
       ledOn = phase % 250 < 100;
     } else {
+      const uint32_t phase = now % 1000UL;
       ledOn = phase < 400;
     }
     digitalWrite(PIN_LED, ledOn ? HIGH : LOW);
 #endif
-    delay(25);
+    // There is no reason to service the status task at display cadence while
+    // the device is parked and the LED is forced off.
+    delay(standbyMode ? 1000 : 25);
   }
 }
 #endif
@@ -826,6 +833,7 @@ void initialize()
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
+    mems->setLowPower(false);
     calibrateMEMS();
   }
 #endif
@@ -961,7 +969,8 @@ bool waitMotion(long timeout)
 #if ENABLE_HTTPD
       serverProcess(100);
 #endif
-      processBLE(100);
+      // Do not add an avoidable delay when BLE is disabled in production.
+      processBLE(0);
       // check movement
       if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
         //lastMotionTime = millis();
@@ -969,6 +978,12 @@ bool waitMotion(long timeout)
         Serial.println(motion);
         return true;
       }
+
+      // Keep the MEMS polling wake-up responsive without leaving the ESP32
+      // CPU spinning for the entire parked interval. The timer wake-up is
+      // deliberately short so real vehicle movement is acted on promptly.
+      esp_sleep_enable_timer_wakeup((uint64_t)STANDBY_POLL_INTERVAL_MS * 1000ULL);
+      esp_light_sleep_start();
     } while (state.check(STATE_STANDBY) && ((long)(millis() - t) < timeout || timeout == -1));
     return false;
   }
@@ -1529,6 +1544,7 @@ void standby()
   obd.enterLowPowerMode();
 #if ENABLE_MEMS
   calibrateMEMS();
+  mems->setLowPower(true);
   waitMotion(-1);
 #elif ENABLE_OBD
   do {

@@ -21,9 +21,9 @@ The final USB test registered on operator `23415`, received a cellular IP, enabl
 - Online: the LED is on only while a real HTTPS telemetry request is in flight. One flash represents one request, which may contain several samples.
 - Initial network search: slow repeating flash.
 - Reconnecting after a previously healthy link: rapid flash.
-- Parked standby: one very brief flash every 10 seconds; this is intentional modem sleep, not an outage.
-- Network offline for 15 seconds while working: the serial log records the outage, but the production buzzer remains silent. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
-- Network restored after an announced outage: the serial log records recovery and the host-side notifier sends a recovery event. The production buzzer remains silent.
+- Parked standby: LED fully off; radios are shut down, the accelerometer is in low-power mode, and the ESP32 sleeps between motion checks. This is intentional standby, not an outage.
+- Network offline for 15 seconds while working: the current flashed image records the outage and may emit its older audible alert. The newer fork image disables routine buzzer alerts and must be flashed before relying on silent operation. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
+- Network restored after an announced outage: the current flashed image may emit its older restore tone; the newer fork image records recovery silently and leaves notification to the host-side notifier.
 
 On the bench, the unit enters standby after approximately 180 seconds without motion. It wakes immediately above the configured `0.4 g` motion threshold and otherwise performs a cellular ping-back every 15 minutes.
 

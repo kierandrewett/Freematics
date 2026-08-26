@@ -248,6 +248,9 @@ public:
   virtual byte begin(bool fusion = false) = 0;
   virtual void end() { uninitI2C(); }
   virtual bool read(float* acc, float* gyr = 0, float* mag = 0, float* temp = 0, ORIENTATION* ori = 0) = 0;
+  // Reduce sensor power while the host waits for vehicle motion. Implementers
+  // may leave this as a no-op when their sensor has no compatible mode.
+  virtual void setLowPower(bool enabled) { (void)enabled; }
 protected:
   bool initI2C(unsigned long clock);
   void uninitI2C();
@@ -290,6 +293,7 @@ class ICM_42627 : public MEMS_I2C
 public:
   byte begin(bool fusion = false);
   bool read(float* acc, float* gyr = 0, float* mag = 0, float* temp = 0, ORIENTATION* ori = 0);
+  void setLowPower(bool enabled);
 private:
   void writeByte(uint8_t, uint8_t);
   uint8_t readByte(uint8_t);
@@ -413,6 +417,7 @@ public:
 
     byte begin(bool fusion = false);
     bool read(float* acc, float* gyr = 0, float* mag = 0, float* tmp = 0, ORIENTATION* ori = 0);
+    void setLowPower(bool enabled) override { lowPower(enabled); }
 
     ICM_20948_Status_e  startupMagnetometer( void );
     ICM_20948_Status_e  magWhoIAm( void );
