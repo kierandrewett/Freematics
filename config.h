@@ -214,7 +214,10 @@
 // The onboard LED is single-colour. Distinct cadences communicate transport
 // and power state without requiring a display.
 #define ENABLE_NETWORK_STATUS_SIGNALS 1
-#define ENABLE_AUDIBLE_NETWORK_ALERTS 1
+// Keep the buzzer silent in normal production operation. The host-side
+// notifier reports state changes; a local sound is reserved for an explicit
+// future critical-alarm policy rather than routine coverage changes.
+#define ENABLE_AUDIBLE_NETWORK_ALERTS 0
 // Ignore short cellular handovers before announcing a genuine outage.
 #define NETWORK_ALERT_GRACE_MS 15000UL
 // Do not turn a flapping modem into a repeating audible alarm.

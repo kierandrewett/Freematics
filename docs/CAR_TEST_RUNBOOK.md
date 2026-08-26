@@ -22,8 +22,8 @@ The final USB test registered on operator `23415`, received a cellular IP, enabl
 - Initial network search: slow repeating flash.
 - Reconnecting after a previously healthy link: rapid flash.
 - Parked standby: one very brief flash every 10 seconds; this is intentional modem sleep, not an outage.
-- Network offline for 15 seconds while working: two low beeps once. Brief LTE handovers do not chirp repeatedly.
-- Network restored after an announced outage: one short high confirmation chirp.
+- Network offline for 15 seconds while working: the serial log records the outage, but the production buzzer remains silent. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
+- Network restored after an announced outage: the serial log records recovery and the host-side notifier sends a recovery event. The production buzzer remains silent.
 
 On the bench, the unit enters standby after approximately 180 seconds without motion. It wakes immediately above the configured `0.4 g` motion threshold and otherwise performs a cellular ping-back every 15 minutes.
 

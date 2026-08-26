@@ -38,7 +38,12 @@ Local configuration
 
 Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint, internal SPIFFS storage, and Simbase's `simbase` APN.
 
-HTTPS uses the configured bearer token when one is supplied. This deployment intentionally leaves it empty because the endpoint is gated by Caddy's private network; the firmware logs that choice and still validates TLS. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
+HTTPS requires the configured bearer token for the Caddy-protected collector. The token is injected at build time and is never stored in the repository. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
+
+The onboard LED shows network state and pulses only during an active telemetry
+upload when the network is online. The production profile keeps the buzzer
+disabled for routine network changes; the optional host-side notifier can send
+state changes to the separate `freematics-device` topic on `ntfy.drewett.dev`.
 
 Data Storage
 ------------

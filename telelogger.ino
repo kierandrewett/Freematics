@@ -319,8 +319,10 @@ void statusSignals(void* inst)
       if (restoreChirpPending) {
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
         beepTone(2400, 80);
+        Serial.println("[STATUS] Network restored (audible alert)");
+#else
+        Serial.println("[STATUS] Network restored");
 #endif
-        Serial.println("[STATUS] Network restored (alert)");
         restoreChirpPending = false;
       }
       hadNetwork = true;
@@ -342,16 +344,26 @@ void statusSignals(void* inst)
           beepTone(900, 140);
           delay(120);
           beepTone(900, 140);
+          Serial.println("[STATUS] Audible outage alert");
+#else
+          Serial.println("[STATUS] Network outage recorded (buzzer disabled)");
 #endif
           lastAlertAt = now;
-          Serial.println("[STATUS] Audible outage alert");
         } else {
+#if ENABLE_AUDIBLE_NETWORK_ALERTS
           Serial.println("[STATUS] Audible outage alert suppressed (rate limit)");
+#else
+          Serial.println("[STATUS] Network outage remains (buzzer disabled)");
+#endif
         }
         outageAnnounced = true;
         // Only emit a matching restore chirp when the outage alert itself was
         // audible; rate-limited flaps stay silent in both directions.
+#if ENABLE_AUDIBLE_NETWORK_ALERTS
         restoreChirpPending = !rateLimited;
+#else
+        restoreChirpPending = false;
+#endif
       }
     }
 
