@@ -25,7 +25,8 @@
 
 //CONFIG0_REG
 #define ACCEL_ODR_1KHZ					6<<0
-#define ACCEL_ODR_50HZ                    10<<0
+// ICM-42627 ACCEL_CONFIG0 ODR: 0x09 = 50 Hz, 0x0A = 25 Hz.
+#define ACCEL_ODR_50HZ                    9<<0
 #define ACCEL_FS_SEL_2G					3<<5
 
 //INT_STATUS

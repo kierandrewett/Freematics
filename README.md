@@ -44,10 +44,12 @@ The onboard LED shows network state and pulses only during an active telemetry
 upload when the network is online. The production profile keeps the buzzer
 disabled for routine network changes; the optional host-side notifier can send
 state changes to the separate `freematics-device` topic on `ntfy.drewett.dev`.
-After approximately three minutes without motion, the firmware shuts down the
-radios and OBD link, puts the Model B's ICM-42627 accelerometer into 50 Hz
-low-power mode, turns the LED off, and light-sleeps between 250 ms motion checks.
-Motion returns the unit to the active collection path automatically.
+After approximately three minutes without motion, the new fork firmware shuts
+down the radios and OBD link, puts the Model B's ICM-42627 accelerometer into
+50 Hz low-power mode, turns the LED off, and light-sleeps between 250 ms motion
+checks. Motion returns the unit to the active collection path automatically.
+This behaviour is source-only until that image has been flashed and confirmed
+over serial; the installed device may still be running the prior image.
 
 Data Storage
 ------------
