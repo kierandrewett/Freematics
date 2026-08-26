@@ -25,6 +25,8 @@
 #define SYNC_INTERVAL 30 /* seconds*/
 #define CHANNEL_TIMEOUT 180 /* seconds */
 #define SESSION_GAP (15 * 60 * 1000)
+/* Parked firmware checks in every SESSION_GAP; tolerate one missed check. */
+#define PARKED_PING_TIMEOUT (2 * SESSION_GAP)
 #define MIN_DEVID_LEN 6
 #define MAX_DEVID_LEN 64
 #define PID_MODES 4
