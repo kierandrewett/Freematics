@@ -41,6 +41,8 @@ This firmware is not certified for six months connected directly to a vehicle ba
 6. Check the device at [Freematics Admin](https://freematics-admin.drewett.dev/) or open the [Grafana vehicle dashboard](https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0).
 7. Once ECU data is visible, start the engine and leave it idling for two minutes. This adds live RPM, load, temperatures, fuel/air readings, voltage, and other ECU-advertised values to the inventory.
 
+After a reflash, capture the first serial boot lines, including `[BOOT] Build:`. A clean build prints the short Git revision; a build made with uncommitted changes is suffixed with `-dirty`. Record that value alongside the flash date so the installed image can be distinguished from later source commits.
+
 The unit sends data autonomously over the SIM. A laptop is only needed if live serial logs are required for diagnosis.
 
 ## What is collected
