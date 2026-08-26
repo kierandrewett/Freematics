@@ -24,7 +24,9 @@ OBD_PID(0x0C, engine_rpm, "Engine speed", "rpm", 1)
 OBD_PID(0x0D, vehicle_speed, "Vehicle speed", "kilometres_per_hour", 1)
 OBD_PID(0x0E, timing_advance, "Timing advance", "degree", 2)
 OBD_PID(0x0F, intake_air_temperature, "Intake air temperature", "celsius", 2)
-OBD_PID(0x10, mass_air_flow, "Mass air flow rate", "grams_per_second", 2)
+// MAF feeds the fuel-rate fallback. Keep it aligned with RPM and road speed
+// so an economy estimate describes the current driving state, not a prior one.
+OBD_PID(0x10, mass_air_flow, "Mass air flow rate", "grams_per_second", 1)
 OBD_PID(0x11, throttle_position, "Throttle position", "percent", 1)
 OBD_PID(0x12, secondary_air_status, "Commanded secondary air status", "code", 3)
 OBD_PID(0x14, oxygen_sensor_b1s1_voltage, "Oxygen sensor bank 1 sensor 1 voltage", "volt", 2)
@@ -76,7 +78,9 @@ OBD_PID(0x45, relative_throttle_position, "Relative throttle position", "percent
 OBD_PID(0x46, ambient_air_temperature, "Ambient air temperature", "celsius", 2)
 OBD_PID(0x47, absolute_throttle_position_b, "Absolute throttle position B", "percent", 2)
 OBD_PID(0x48, absolute_throttle_position_c, "Absolute throttle position C", "percent", 2)
-OBD_PID(0x49, accelerator_pedal_position_d, "Accelerator pedal position D", "percent", 2)
+// Pedal D is a high-value driver-input signal. The other pedal channels
+// remain auxiliary because they are commonly redundant ECU channels.
+OBD_PID(0x49, accelerator_pedal_position_d, "Accelerator pedal position D", "percent", 1)
 OBD_PID(0x4A, accelerator_pedal_position_e, "Accelerator pedal position E", "percent", 2)
 OBD_PID(0x4B, accelerator_pedal_position_f, "Accelerator pedal position F", "percent", 2)
 OBD_PID(0x4C, commanded_throttle_actuator, "Commanded throttle actuator", "percent", 2)

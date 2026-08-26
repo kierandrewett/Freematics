@@ -57,8 +57,6 @@ PID_POLLING_INFO obdData[]= {
 #include "obd_pids.h"
 };
 
-#define DTC_SCAN_INTERVAL 300000UL
-
 typedef struct {
   byte mode;
   uint16_t countPid;
@@ -120,6 +118,9 @@ uint32_t timeoutsOBD = 0;
 uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
 byte dtcBatchPending = 0;
+#if ENABLE_OBD
+byte fastOBDFailureCycles = 0;
+#endif
 
 int32_t syncInterval = SERVER_SYNC_INTERVAL * 1000;
 int32_t dataInterval = 1000;
@@ -192,6 +193,91 @@ void printTimeoutStats()
   Serial.print(" | network timeouts: ");
   Serial.println(timeoutsNet);
 }
+
+#if ENABLE_OBD
+void reportOBDReadFailure(byte pid, const char* tier)
+{
+  // A failing ECU can produce several failures in one polling cycle. One
+  // rate-limited record gives the operator the cause without hiding useful
+  // cellular, GNSS or power messages in repeated counter lines.
+  static uint32_t lastReportTime = 0;
+  const uint32_t now = millis();
+  if (lastReportTime && now - lastReportTime < 10000UL) return;
+  lastReportTime = now;
+  Serial.print("[OBD] ");
+  Serial.print(tier);
+  Serial.print(" PID 0x");
+  if (pid < 0x10) Serial.print('0');
+  Serial.print(pid, HEX);
+  Serial.print(" did not respond; total timeouts: ");
+  Serial.println(timeoutsOBD);
+}
+
+void reportOBDCapabilities()
+{
+  byte supported = 0;
+  byte fast = 0;
+  byte auxiliary = 0;
+  byte inventory = 0;
+  const byte count = sizeof(obdData) / sizeof(obdData[0]);
+  for (byte i = 0; i < count; i++) {
+    if (!obd.isValidPID(obdData[i].pid)) continue;
+    supported++;
+    if (obdData[i].priority == 1) fast++;
+    else if (obdData[i].priority == 2) auxiliary++;
+    else inventory++;
+  }
+  Serial.print("[OBD] ECU supports ");
+  Serial.print(supported);
+  Serial.print(" tracked PIDs: ");
+  Serial.print(fast);
+  Serial.print(" fast, ");
+  Serial.print(auxiliary);
+  Serial.print(" auxiliary, ");
+  Serial.print(inventory);
+  Serial.println(" inventory");
+}
+
+void reportSlowOBDRead(byte pid, const char* tier, uint32_t elapsed)
+{
+  static uint32_t lastReportTime = 0;
+  const uint32_t now = millis();
+  if (lastReportTime && now - lastReportTime < 10000UL) return;
+  lastReportTime = now;
+  Serial.print("[OBD] ");
+  Serial.print(tier);
+  Serial.print(" PID 0x");
+  if (pid < 0x10) Serial.print('0');
+  Serial.print(pid, HEX);
+  Serial.print(" response took ");
+  Serial.print(elapsed);
+  Serial.println(" ms");
+}
+
+void clearOBDReadings()
+{
+  // A new ECU session must not carry an old vehicle's values into the next
+  // trip. Buffers already queued retain their original capture timestamp.
+  for (byte i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
+    obdData[i].value = 0;
+    obdData[i].ts = 0;
+  }
+  memset(dtcData, 0, sizeof(dtcData));
+  dtcData[0].mode = 0x03;
+  dtcData[0].countPid = PID_DTC_STORED_COUNT;
+  dtcData[0].basePid = PID_DTC_STORED_BASE;
+  dtcData[1].mode = 0x07;
+  dtcData[1].countPid = PID_DTC_PENDING_COUNT;
+  dtcData[1].basePid = PID_DTC_PENDING_BASE;
+  dtcData[2].mode = 0x0A;
+  dtcData[2].countPid = PID_DTC_PERMANENT_COUNT;
+  dtcData[2].basePid = PID_DTC_PERMANENT_BASE;
+  dtcBatchPending = 0;
+  fastOBDFailureCycles = 0;
+  lastOBDSpeed = 0;
+  lastOBDDistanceTime = 0;
+}
+#endif
 
 void beepTone(unsigned int frequency, int duration)
 {
@@ -365,7 +451,7 @@ void processDiagnostics(CBuffer* buffer)
   if (!dtcBatchPending) {
     bool due = false;
     for (byte i = 0; i < sizeof(dtcData) / sizeof(dtcData[0]); i++) {
-      if (!dtcData[i].lastScan || millis() - dtcData[i].lastScan >= DTC_SCAN_INTERVAL) {
+      if (!dtcData[i].lastScan || millis() - dtcData[i].lastScan >= DTC_SCAN_INTERVAL_MS) {
         due = true;
         break;
       }
@@ -413,13 +499,22 @@ void processOBD(CBuffer* buffer)
   }
 
   // Core driving metrics are sampled every cycle for near-real-time panels.
+  // Try every core PID even if one request fails. A single PID fault must not
+  // suppress RPM, speed or other independent readings in the same sample.
+  bool fastReadFailed = false;
   for (byte i = 0; i < count; i++) {
     if (obdData[i].priority != 1 || !obd.isValidPID(obdData[i].pid)) continue;
     float value;
+    const uint32_t readStarted = millis();
     if (!obd.readPID(obdData[i].pid, value)) {
       timeoutsOBD++;
-      printTimeoutStats();
-      return;
+      reportOBDReadFailure(obdData[i].pid, "Fast");
+      fastReadFailed = true;
+      continue;
+    }
+    const uint32_t elapsed = millis() - readStarted;
+    if (elapsed >= OBD_PID_READ_WARN_MS) {
+      reportSlowOBDRead(obdData[i].pid, "Fast", elapsed);
     }
     obdData[i].ts = millis();
     obdData[i].value = value;
@@ -432,6 +527,17 @@ void processOBD(CBuffer* buffer)
       lastMotionTime = millis();
     }
   }
+
+  if (fastReadFailed) {
+    if (++fastOBDFailureCycles >= MAX_OBD_ERRORS) {
+      Serial.println("[OBD] Fast PID failures persisted; clearing ECU session");
+      clearOBDReadings();
+      state.clear(STATE_OBD_READY);
+    }
+    // Do not add lower-priority traffic while the fast probe is unstable.
+    return;
+  }
+  fastOBDFailureCycles = 0;
 
   // Rotate through every other ECU-advertised PID, but only once per five
   // seconds. This keeps the CAN/ELM bridge responsive while still discovering
@@ -449,10 +555,15 @@ void processOBD(CBuffer* buffer)
       visited++;
       if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
       float value;
+      const uint32_t readStarted = millis();
       if (!obd.readPID(item.pid, value)) {
         timeoutsOBD++;
-        printTimeoutStats();
+        reportOBDReadFailure(item.pid, "Auxiliary");
         continue;
+      }
+      const uint32_t elapsed = millis() - readStarted;
+      if (elapsed >= OBD_PID_READ_WARN_MS) {
+        reportSlowOBDRead(item.pid, "Auxiliary", elapsed);
       }
       item.ts = millis();
       item.value = value;
@@ -719,9 +830,11 @@ void initialize()
   // initialize OBD communication
   if (!state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
+    clearOBDReadings();
     if (obd.init()) {
       Serial.println("[OBD] ECU connected");
       state.set(STATE_OBD_READY);
+      reportOBDCapabilities();
 #if ENABLE_OLED
       oled.println("OBD OK");
 #endif
@@ -867,16 +980,23 @@ void process()
   // process OBD data if connected
   if (state.check(STATE_OBD_READY)) {
     processOBD(buffer);
-    if (obd.errors >= MAX_OBD_ERRORS) {
+    if (state.check(STATE_OBD_READY) && obd.errors >= MAX_OBD_ERRORS) {
+      clearOBDReadings();
       if (!obd.init()) {
         Serial.println("[OBD] ECU OFF");
         state.clear(STATE_OBD_READY | STATE_WORKING);
         return;
       }
+      Serial.println("[OBD] ECU reconnected");
+      reportOBDCapabilities();
     }
-  } else if (obd.init(PROTO_AUTO, true)) {
-    state.set(STATE_OBD_READY);
-    Serial.println("[OBD] ECU ON");
+  } else {
+    clearOBDReadings();
+    if (obd.init(PROTO_AUTO, true)) {
+      state.set(STATE_OBD_READY);
+      Serial.println("[OBD] ECU ON");
+      reportOBDCapabilities();
+    }
   }
 #endif
 

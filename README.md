@@ -38,7 +38,7 @@ Local configuration
 
 Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint, internal SPIFFS storage, and Simbase's `simbase` APN.
 
-HTTPS fails closed unless the per-device bearer token is present. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
+HTTPS uses the configured bearer token when one is supplied. This deployment intentionally leaves it empty because the endpoint is gated by Caddy's private network; the firmware logs that choice and still validates TLS. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
 
 Data Storage
 ------------
@@ -58,15 +58,14 @@ A BLE SPP server is implemented in [FreematicsPlus](https://github.com/stanleyhu
 Build and flash
 ---------------
 
-Install PlatformIO, create an ignored `local_config.h` from the example, connect the ONE+ Model B over USB, and provide the 64-character per-device token at build time:
+Install PlatformIO, create an ignored `local_config.h` from the example, and connect the ONE+ Model B over USB. Production builds require the 64-character bearer token used by the Caddy-protected collector:
 
 ```sh
-PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-Production builds reject an absent or malformed token. Do not store the token in the repository or a shared shell script.
+`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. Do not store it in the repository or a shared shell script.
 
 Repository layout
 -----------------

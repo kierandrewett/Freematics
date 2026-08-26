@@ -154,6 +154,8 @@
 #define OBD_FAST_INTERVAL_MS 500UL /* speed/RPM/load/throttle sample cadence */
 #define OBD_AUX_INTERVAL_MS 5000UL /* rotating non-critical PID cadence */
 #define OBD_AUX_PIDS_PER_CYCLE 8 /* bounded auxiliary reads per rotation */
+#define DTC_SCAN_INTERVAL_MS 120000UL /* stored, pending and permanent code scan */
+#define OBD_PID_READ_WARN_MS 200UL /* log a slow Mode 01 response at most once per 10 s */
 #define DATA_INTERVAL_TABLE {OBD_FAST_INTERVAL_MS, 2000, 5000} /* ms */
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */

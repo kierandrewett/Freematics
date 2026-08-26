@@ -84,13 +84,12 @@ The batch count varies. `[DAT x1]` is normal when only one sample is ready; `[DA
 
 ## Rebuilding or reflashing
 
-The committed `local_config.h.example` documents configuration, but Wi-Fi and telemetry credentials are intentionally not committed. The already-flashed unit contains the working configuration. To reproduce it on another unit, create an ignored `local_config.h`, obtain the device's 64-character token through the authorised server-secret process, then run:
+The committed `local_config.h.example` documents configuration, but Wi-Fi and telemetry credentials are intentionally not committed. The collector is gated by Caddy on both public and private ingress, so production firmware must be built with the device's 64-character bearer token obtained through the authorised server-secret process. To reproduce it on another unit, create an ignored `local_config.h`, then run:
 
 ```bash
-PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 ```
 
-The production build fails closed when `FREEMATICS_TOKEN` is absent or is not exactly 64 hexadecimal characters. Never paste the token into Git, shell history, screenshots or support logs.
+`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. Never paste the token into Git, shell history, screenshots or support logs.
 
 Do not clear diagnostic codes from the firmware or dashboard during initial testing. Reading codes is non-destructive; clearing them can erase useful freeze-frame evidence and readiness state.

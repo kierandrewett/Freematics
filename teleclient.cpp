@@ -635,6 +635,8 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 bool TeleClientHTTP::connect(bool quick)
 {
   if (!SERVER_TOKEN[0]) {
+    // The collector is deliberately protected at both Caddy boundaries.
+    // Refuse to cycle the modem when this production credential is absent.
     Serial.println("[AUTH] Telemetry token missing");
     return false;
   }
@@ -642,6 +644,7 @@ bool TeleClientHTTP::connect(bool quick)
   wifi.setBearerToken(SERVER_TOKEN);
 #endif
   cell.setBearerToken(SERVER_TOKEN);
+  Serial.println("[AUTH] Bearer token enabled");
 
   if (!quick) {
 #if ENABLE_WIFI
