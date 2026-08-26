@@ -207,6 +207,11 @@
 **************************************/
 // motion threshold for waking up
 #define MOTION_THRESHOLD 0.4f /* vehicle motion threshold in G */
+// Parked wake requires stronger movement and three consecutive samples. This
+// avoids waking the radios for a single bump or vibration while still catching
+// a meaningful vehicle movement.
+#define STANDBY_MOTION_THRESHOLD 0.5f /* parked wake threshold in G */
+#define STANDBY_MOTION_CONFIRM_SAMPLES 3
 // engine jumpstart voltage for waking up (when MEMS unavailable) 
 #define JUMPSTART_VOLTAGE 14 /* V */
 // reset device after waking up

@@ -294,7 +294,7 @@ int uhMetrics(UrlHandlerParam* param)
 		if (!pld->id) continue;
 		unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
 		unsigned int pingAge = pld->serverPingTick ? (unsigned int)(tick - pld->serverPingTick) : UINT_MAX;
-		int parked = (pld->flags & FLAG_SLEEPING) && pingAge <= PARKED_PING_TIMEOUT;
+		int parked = (pld->flags & FLAG_SLEEPING) != 0;
 		int connected = (pld->flags & FLAG_RUNNING) || parked;
 		l += snprintf(buf + l, bs - l,
 			"freematics_device_connected{device_id=\"%s\"} %u\n"

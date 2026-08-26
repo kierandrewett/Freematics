@@ -942,11 +942,12 @@ void showStats()
 #endif
 }
 
-bool waitMotion(long timeout)
+bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confirmationSamples = 1)
 {
 #if ENABLE_MEMS
   unsigned long t = millis();
   if (state.check(STATE_MEMS_READY)) {
+    uint8_t motionHits = 0;
     do {
       // calculate relative movement
       float motion = 0;
@@ -972,11 +973,16 @@ bool waitMotion(long timeout)
       // Do not add an avoidable delay when BLE is disabled in production.
       processBLE(0);
       // check movement
-      if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
-        //lastMotionTime = millis();
-        Serial.print("[POWER] Motion detected; wake score: ");
-        Serial.println(motion);
-        return true;
+      if (motion >= threshold * threshold) {
+        if (motionHits < confirmationSamples) motionHits++;
+        if (motionHits >= confirmationSamples) {
+          //lastMotionTime = millis();
+          Serial.print("[POWER] Motion confirmed; wake score: ");
+          Serial.println(motion);
+          return true;
+        }
+      } else {
+        motionHits = 0;
       }
 
       // Keep the MEMS polling wake-up responsive without leaving the ESP32
@@ -1237,6 +1243,11 @@ void telemetry(void* inst)
   for (;;) {
     if (state.check(STATE_STANDBY)) {
       if (state.check(STATE_CELL_CONNECTED) || state.check(STATE_WIFI_CONNECTED)) {
+        // Announce parked state once, then shut the radios down. There is no
+        // periodic tracking traffic while the vehicle is stationary.
+        if (teleClient.notify(EVENT_PING)) {
+          Serial.println("[POWER] Parked state sent; tracking paused");
+        }
         teleClient.shutdown();
         netop = "";
         ip = "";
@@ -1245,45 +1256,9 @@ void telemetry(void* inst)
       state.clear(STATE_NET_READY | STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       teleClient.reset();
       bufman.purge();
-
-      uint32_t t = millis();
-      do {
-        delay(1000);
-      } while (state.check(STATE_STANDBY) && millis() - t < 1000L * PING_BACK_INTERVAL);
-      if (state.check(STATE_STANDBY)) {
-        // start ping
-#if ENABLE_WIFI && !PREFER_CELLULAR
-        bool pinged = false;
-        if (wifiSSID[0]) { 
-          Serial.print("[WIFI] Joining SSID:");
-          Serial.println(wifiSSID);
-          teleClient.wifi.begin(wifiSSID, wifiPassword);
-        }
-        if (teleClient.wifi.setup()) {
-          Serial.println("[WIFI] Ping...");
-          pinged = teleClient.ping();
-        }
-#else
-        bool pinged = false;
-#endif
-        if (!pinged && initCell()) {
-          Serial.println("[CELL] Ping...");
-          pinged = teleClient.ping();
-        }
-#if ENABLE_WIFI && PREFER_CELLULAR
-        if (!pinged && wifiSSID[0]) {
-          Serial.print("[WIFI] Joining SSID:");
-          Serial.println(wifiSSID);
-          teleClient.wifi.begin(wifiSSID, wifiPassword);
-          if (teleClient.wifi.setup()) {
-            Serial.println("[WIFI] Ping...");
-            teleClient.ping();
-          }
-        }
-#endif
-        teleClient.shutdown();
-        state.clear(STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
-      }
+      // Stay entirely off-network until the MEMS wake path clears standby.
+      // This avoids recurring SIM traffic and makes parked power draw stable.
+      while (state.check(STATE_STANDBY)) delay(1000);
       continue;
     }
 
@@ -1538,14 +1513,12 @@ void standby()
   delay(1000);
   oled.clear();
 #endif
-  Serial.print("[POWER] Standby: radios off; wake on motion; server check every ");
-  Serial.print(PING_BACK_INTERVAL / 60);
-  Serial.println(" minutes");
+  Serial.println("[POWER] Standby: radios off; tracking paused until serious motion");
   obd.enterLowPowerMode();
 #if ENABLE_MEMS
   calibrateMEMS();
   mems->setLowPower(true);
-  waitMotion(-1);
+  waitMotion(-1, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES);
 #elif ENABLE_OBD
   do {
     delay(5000);
