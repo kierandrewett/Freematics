@@ -1,6 +1,6 @@
 # Freematics Model B car test runbook
 
-This is the portable hand-off for the Freematics ONE+ Model B installed as device `ZKUCALJ0`. The device is already flashed with the production firmware from source commit `b39c9f76074a09f14f2118ff4f739ceea197d7ca` and does not need a laptop to send telemetry.
+This is the portable hand-off for the Freematics ONE+ Model B installed as device `ZKUCALJ0`. The device is currently running the previously validated, token-bearing production image from source commit `b39c9f76074a09f14f2118ff4f739ceea197d7ca` and does not need a laptop to send telemetry. The focused fork now contains later OBD-freshness and silent-buzzer changes; those changes have been compiled and pushed but were not flashed during this readiness check.
 
 ## Known-good configuration
 
@@ -14,7 +14,7 @@ This is the portable hand-off for the Freematics ONE+ Model B installed as devic
 - Storage: internal SPIFFS; no SD card is required
 - SIM orientation: insert it as shown in the Freematics Model B product image, with the electrical contacts facing up
 
-The final USB test registered on operator `23415`, received a cellular IP, enabled strict TLS verification, authenticated, and received repeated `HTTP 200` responses from the collector. Live samples are grouped for up to five seconds and outage backlogs drain in complete, ordered batches of up to 16 samples per request.
+The final USB test registered on operator `23415`, received a cellular IP, enabled strict TLS verification, authenticated, and received repeated `HTTP 200` responses from the collector. Live samples are grouped for up to five seconds and outage backlogs drain in complete, ordered batches of up to 24 samples per request.
 
 ## Light, buzzer and standby behaviour
 
@@ -26,6 +26,10 @@ The final USB test registered on operator `23415`, received a cellular IP, enabl
 - Network restored after an announced outage: the serial log records recovery and the host-side notifier sends a recovery event. The production buzzer remains silent.
 
 On the bench, the unit enters standby after approximately 180 seconds without motion. It wakes immediately above the configured `0.4 g` motion threshold and otherwise performs a cellular ping-back every 15 minutes.
+
+## Six-month unattended-use boundary
+
+This firmware is not certified for six months connected directly to a vehicle battery. The published Model B low-power floor is approximately 10 mA with radios and GPS off; that is about 44 Ah over six months before the vehicle's own parasitic load, and the standby motion-monitoring loop may draw more. Use a measured current budget plus a switched or low-voltage-cutoff OBD supply before leaving it installed for months. A microSD card is optional for normal connected operation but required if a long network outage must be retained locally: the in-memory queue holds only 1,024 readings (about 8.5 minutes at the 500 ms moving cadence), while internal SPIFFS is a bounded rotating log rather than a six-month archive.
 
 ## Move the unit to the car
 

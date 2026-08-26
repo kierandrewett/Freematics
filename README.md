@@ -16,7 +16,7 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. When PSRAM is enabled, hours of data can be buffered in case of temporary network outage and transmitted when network connection resumes. Moving vehicles sample speed, RPM, load and throttle at 500 ms; slower PIDs are rotated every five seconds so the OBD bridge stays responsive. Samples are posted in five-second batches, with up to 24 complete samples per request while draining a backlog; a failed request retains the whole batch for ordered retry. The wire format remains the existing compact PID:value frame with one checksum per batch, avoiding JSON and repeated HTTPS headers.
+Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. The production Model B build has 1,024 queue slots: this is intentionally finite outage insurance (about 8.5 minutes at the 500 ms moving cadence), not a long-term archive. Internal SPIFFS keeps bounded rotating log chunks, and a microSD card is recommended when an outage may last longer than the in-memory queue or when local retention matters. Moving vehicles sample speed, RPM, load and throttle at 500 ms; slower PIDs are rotated every five seconds so the OBD bridge stays responsive. Samples are posted in five-second batches, with up to 24 complete samples per request while draining a backlog; a failed request retains the whole batch for ordered retry. The wire format remains the existing compact PID:value frame with one checksum per batch, avoiding JSON and repeated HTTPS headers.
   
 Data Transmission
 -----------------
@@ -53,7 +53,19 @@ Following types of data storage are supported.
 * MicroSD card storage
 * ESP32 built-in Flash memory storage (SPIFFS)
 
-SPIFFS does not require a microSD card. A card is only needed when `STORAGE_SD` is selected; the production configuration uses `STORAGE_SPIFFS`, rotates log chunks at 256 KB and purges the oldest chunks before internal flash fills.
+SPIFFS does not require a microSD card for normal connected operation. A card is only needed when `STORAGE_SD` is selected; the production configuration uses `STORAGE_SPIFFS`, rotates log chunks at 256 KB and purges the oldest chunks before internal flash fills. Neither SPIFFS nor the RAM queue is a six-month offline archive; use a high-endurance microSD card for that requirement.
+
+Unattended vehicle power
+------------------------
+
+The OBD socket is normally connected to the vehicle battery. Freematics publishes
+approximately 10 mA as the Model B low-power floor with the radios and GPS off;
+the actual installed current must be measured because the firmware still monitors
+the motion sensor while parked. That floor alone is about 44 Ah over six months,
+before the car's own parasitic load. Do not leave the unit connected for months
+without a measured current budget, a switched/low-voltage-cutoff OBD supply, or a
+vehicle-specific battery plan. This repository does not claim six-month battery
+operation without that hardware validation.
 
 BLE & App
 ---------
