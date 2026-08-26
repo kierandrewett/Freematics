@@ -36,6 +36,10 @@
 #define CELL_APN CONFIG_CELL_APN
 #endif
 
+#ifndef FREEMATICS_BUILD_ID
+#define FREEMATICS_BUILD_ID "unknown"
+#endif
+
 /**************************************
 * Configuration Definitions
 **************************************/
