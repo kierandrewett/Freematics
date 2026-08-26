@@ -701,21 +701,53 @@ def build_dashboard() -> dict:
     panels.append(
         {
             "datasource": DS,
-            "description": "Transport transitions over the selected range. Parked standby is intentionally offline.",
+            "description": "Connection, active trip and transport transitions over the selected range. Parked standby deliberately creates an offline interval.",
             "fieldConfig": {
                 "defaults": {
                     "color": {"mode": "thresholds"},
                     "custom": {"fillOpacity": 90, "lineWidth": 0, "spanNulls": False},
-                    "mappings": value_mapping(
-                        {
-                            "0": {"color": "red", "index": 2, "text": "Offline"},
-                            "1": {"color": "blue", "index": 1, "text": "Wi-Fi"},
-                            "2": {"color": "green", "index": 0, "text": "Cellular"},
-                        }
-                    ),
+                    "mappings": [],
                     "thresholds": thresholds((None, "red"), (1, "blue"), (2, "green")),
                 },
-                "overrides": [],
+                "overrides": [
+                    by_name(
+                        "Collector link",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "0": {"color": "red", "index": 1, "text": "Offline"},
+                                    "1": {"color": "green", "index": 0, "text": "Online"},
+                                }
+                            ),
+                        ),
+                    ),
+                    by_name(
+                        "Trip active",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "0": {"color": "dark-red", "index": 1, "text": "Parked"},
+                                    "1": {"color": "green", "index": 0, "text": "Driving"},
+                                }
+                            ),
+                        ),
+                    ),
+                    by_name(
+                        "Uplink",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "0": {"color": "red", "index": 2, "text": "Offline"},
+                                    "1": {"color": "blue", "index": 1, "text": "Wi-Fi"},
+                                    "2": {"color": "green", "index": 0, "text": "Cellular"},
+                                }
+                            ),
+                        ),
+                    ),
+                ],
             },
             "gridPos": {"h": 5, "w": 6, "x": 0, "y": 39},
             "id": 28,
@@ -727,8 +759,12 @@ def build_dashboard() -> dict:
                 "showValue": "always",
                 "tooltip": {"mode": "single", "sort": "none"},
             },
-            "targets": [target(f"freematics_network_transport{selection}", "A", "Uplink")],
-            "title": "Network path",
+            "targets": [
+                target(f"freematics_device_connected{{{DEVICE}}}", "A", "Collector link"),
+                target(f"freematics_trip_active{{{DEVICE}}}", "B", "Trip active"),
+                target(f"freematics_network_transport{{{DEVICE}}}", "C", "Uplink"),
+            ],
+            "title": "Operating state",
             "type": "state-timeline",
         }
     )
@@ -888,6 +924,89 @@ def build_dashboard() -> dict:
             "targets": raw_targets,
             "title": "Every ECU metric exposed by this vehicle",
             "transformations": [{"id": "joinByField", "options": {"byField": "pid", "mode": "outer"}}],
+            "type": "table",
+        }
+    )
+
+    panels.append(
+        timeseries(
+            39,
+            "Combustion and exhaust",
+            0,
+            57,
+            12,
+            7,
+            [
+                target(
+                    f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10E"}}',
+                    "A",
+                    "Timing advance",
+                ),
+                target(
+                    f'freematics_obd_value{{{DEVICE},{TRIP},name=~"oxygen_sensor_.*_voltage"}}',
+                    "B",
+                    "{{description}}",
+                ),
+                target(
+                    f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x144"}}',
+                    "C",
+                    "Equivalence ratio",
+                ),
+            ],
+            unit="degree",
+            description="Ignition timing, oxygen-sensor voltage and commanded air-fuel equivalence. These values help to investigate combustion behaviour; they are not a direct emissions test.",
+            overrides=[
+                by_name("Oxygen sensor bank 1 sensor 1 voltage", ("unit", "volt"), ("custom.axisPlacement", "right")),
+                by_name("Oxygen sensor bank 1 sensor 2 voltage", ("unit", "volt"), ("custom.axisPlacement", "right")),
+                by_name("Equivalence ratio", ("unit", "none"), ("custom.axisPlacement", "right"), ("custom.lineStyle", {"dash": [6, 5], "fill": "dash"})),
+            ],
+            legend_calcs=["lastNotNull", "min", "max"],
+        )
+    )
+
+    panels.append(
+        {
+            "datasource": DS,
+            "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {"align": "auto", "cellOptions": {"type": "auto"}},
+                    "decimals": 0,
+                },
+                "overrides": [
+                    by_name("Engine run time", ("unit", "s")),
+                    by_name("Distance with MIL", ("unit", "lengthkm")),
+                    by_name("Distance since DTCs cleared", ("unit", "lengthkm")),
+                ],
+            },
+            "gridPos": {"h": 7, "w": 12, "x": 12, "y": 57},
+            "id": 40,
+            "options": {
+                "cellHeight": "sm",
+                "footer": {"countRows": False, "fields": "", "reducer": ["sum"], "show": False},
+                "showHeader": True,
+                "sortBy": [{"displayName": "Metric", "desc": False}],
+            },
+            "targets": [
+                target(
+                    f'last_over_time(freematics_obd_value{{{DEVICE},{TRIP},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}[$__range])',
+                    "A",
+                    "Latest",
+                    instant=True,
+                    table=True,
+                )
+            ],
+            "title": "ECU service and emissions counters",
+            "transformations": [
+                {
+                    "id": "organize",
+                    "options": {
+                        "excludeByName": {"Time": True, "__name__": True, "device_id": True, "instance": True, "job": True, "trip_id": True, "Value": True},
+                        "indexByName": {"description": 0, "pid": 1, "unit": 2, "Latest": 3},
+                        "renameByName": {"description": "Metric", "pid": "PID", "unit": "Unit"},
+                    },
+                }
+            ],
             "type": "table",
         }
     )

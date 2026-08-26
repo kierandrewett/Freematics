@@ -2702,7 +2702,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Transport transitions over the selected range. Parked standby is intentionally offline.",
+      "description": "Connection, active trip and transport transitions over the selected range. Parked standby deliberately creates an offline interval.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2713,28 +2713,7 @@
             "lineWidth": 0,
             "spanNulls": false
           },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 2,
-                  "text": "Offline"
-                },
-                "1": {
-                  "color": "blue",
-                  "index": 1,
-                  "text": "Wi-Fi"
-                },
-                "2": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "Cellular"
-                }
-              }
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -2753,7 +2732,97 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Collector link"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "Offline"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Online"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trip active"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "dark-red",
+                        "index": 1,
+                        "text": "Parked"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Driving"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Uplink"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 2,
+                        "text": "Offline"
+                      },
+                      "1": {
+                        "color": "blue",
+                        "index": 1,
+                        "text": "Wi-Fi"
+                      },
+                      "2": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Cellular"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 5,
@@ -2784,13 +2853,35 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_network_transport{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Uplink",
+          "expr": "freematics_device_connected{device_id=\"$device\"}",
+          "legendFormat": "Collector link",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_trip_active{device_id=\"$device\"}",
+          "legendFormat": "Trip active",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_network_transport{device_id=\"$device\"}",
+          "legendFormat": "Uplink",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "Network path",
+      "title": "Operating state",
       "type": "state-timeline"
     },
     {
@@ -3595,6 +3686,308 @@
           "options": {
             "byField": "pid",
             "mode": "outer"
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Ignition timing, oxygen-sensor voltage and commanded air-fuel equivalence. These values help to investigate combustion behaviour; they are not a direct emissions test.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "degree"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Oxygen sensor bank 1 sensor 1 voltage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Oxygen sensor bank 1 sensor 2 voltage"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Equivalence ratio"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    6,
+                    5
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "id": 39,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10E\"}",
+          "legendFormat": "Timing advance",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"oxygen_sensor_.*_voltage\"}",
+          "legendFormat": "{{description}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x144\"}",
+          "legendFormat": "Equivalence ratio",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Combustion and exhaust",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Engine run time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Distance with MIL"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "lengthkm"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Distance since DTCs cleared"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "lengthkm"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "id": 40,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Metric",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "last_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"}[$__range])",
+          "legendFormat": "Latest",
+          "range": false,
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "title": "ECU service and emissions counters",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "device_id": true,
+              "instance": true,
+              "job": true,
+              "trip_id": true,
+              "Value": true
+            },
+            "indexByName": {
+              "description": 0,
+              "pid": 1,
+              "unit": 2,
+              "Latest": 3
+            },
+            "renameByName": {
+              "description": "Metric",
+              "pid": "PID",
+              "unit": "Unit"
+            }
           }
         }
       ],
