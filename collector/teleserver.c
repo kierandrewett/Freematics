@@ -630,6 +630,13 @@ void deviceLogout(CHANNEL_DATA* pld)
 	fprintf(getLogFile(), " LOGOUT:%s\n", pld->devid);
 }
 
+static void clearLiveData(CHANNEL_DATA* pld)
+{
+	/* Keep the archive cache. Only the current-value snapshot belongs to a session. */
+	memset(pld->data, 0, sizeof(pld->data));
+	pld->deviceTick = 0;
+}
+
 int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 {
 	uint64_t tick = GetTickCount64();
@@ -666,6 +673,10 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		if (pid == 0) {
 			// special PID 0 for timestamp
 			ts = atol(value);
+			if (pld->deviceTick && ts + PROXY_MAX_TIME_BEHIND < pld->deviceTick) {
+				/* A device clock reset starts a new live snapshot even if LOGIN was lost. */
+				clearLiveData(pld);
+			}
 			continue;
 		}
 		if (ts == 0) {
@@ -710,7 +721,7 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 	} while (p && *p);
 	if (ts == 0) ts = pld->deviceTick;
 	int interval = ts - pld->deviceTick;
-	pld->deviceTick = ts;
+	if (ts) pld->deviceTick = ts;
 
 	if (pld->flags & FLAG_RUNNING) {
 		// normal
@@ -1070,7 +1081,11 @@ int uhPost(UrlHandlerParam* param)
 	const char* alt = mwGetVarValue(param->pxVars, "altitude", 0);
 	const char* speed = mwGetVarValue(param->pxVars, "speed", 0);
 	const char* heading = mwGetVarValue(param->pxVars, "heading", 0);
-	pld->deviceTick = ts;
+	if (!(pld->flags & FLAG_RUNNING)) {
+		/* A post after logout or timeout is a new session when LOGIN was not received. */
+		clearLiveData(pld);
+	}
+	if (ts) pld->deviceTick = ts;
 	if (lat) setPIDData(pld, PID_GPS_LATITUDE, ts, lat);
 	if (lon) setPIDData(pld, PID_GPS_LONGITUDE, ts, lon);
 	if (speed) setPIDData(pld, PID_GPS_SPEED, ts, speed);
@@ -1327,6 +1342,7 @@ int uhNotify(UrlHandlerParam* param)
 		pld->proxyTick = 0;
 		pld->serverDataTick = tick;
 		pld->ip = param->hs->ipAddr;
+		clearLiveData(pld);
 		deviceLogin(pld);
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"id\":%u,\"result\":\"done\"}", pld->id);
 		return FLAG_DATA_RAW;
