@@ -57,7 +57,6 @@ PID_POLLING_INFO obdData[]= {
 #include "obd_pids.h"
 };
 
-#define OBD_AUX_PIDS_PER_CYCLE 8
 #define DTC_SCAN_INTERVAL 300000UL
 
 typedef struct {
@@ -205,9 +204,11 @@ void beepTone(unsigned int frequency, int duration)
 void statusSignals(void* inst)
 {
   bool hadNetwork = false;
+  bool everOnline = false;
   bool outageAnnounced = false;
   bool restoreChirpPending = false;
   uint32_t offlineSince = 0;
+  uint32_t lastAlertAt = 0;
 
   for (;;) {
     const uint32_t now = millis();
@@ -219,15 +220,21 @@ void statusSignals(void* inst)
 
     if (networkOnline) {
       if (!hadNetwork) {
-#if ENABLE_AUDIBLE_NETWORK_ALERTS
-        beepTone(2200, 60);
-#endif
-        Serial.println("[STATUS] Network online");
-      } else if (restoreChirpPending) {
+        // A reboot or a deliberate standby wake is not an outage.
+        if (!everOnline) {
+          Serial.println("[STATUS] Network online (initial)");
+        } else {
+          Serial.println("[STATUS] Network online");
+        }
+        everOnline = true;
+      }
+      // Pair one short restore chirp with the outage alert, without delaying
+      // it behind the rate limit used for repeated outage alerts.
+      if (restoreChirpPending) {
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
         beepTone(2400, 80);
 #endif
-        Serial.println("[STATUS] Network restored");
+        Serial.println("[STATUS] Network restored (alert)");
         restoreChirpPending = false;
       }
       hadNetwork = true;
@@ -242,13 +249,23 @@ void statusSignals(void* inst)
       if (!offlineSince) offlineSince = now;
       if (!outageAnnounced && now - offlineSince >= NETWORK_ALERT_GRACE_MS) {
         Serial.println("[STATUS] Network offline for 15 seconds");
+        const bool rateLimited = lastAlertAt &&
+          now - lastAlertAt < NETWORK_ALERT_MIN_INTERVAL_MS;
+        if (!rateLimited) {
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
-        beepTone(900, 140);
-        delay(120);
-        beepTone(900, 140);
+          beepTone(900, 140);
+          delay(120);
+          beepTone(900, 140);
 #endif
+          lastAlertAt = now;
+          Serial.println("[STATUS] Audible outage alert");
+        } else {
+          Serial.println("[STATUS] Audible outage alert suppressed (rate limit)");
+        }
         outageAnnounced = true;
-        restoreChirpPending = true;
+        // Only emit a matching restore chirp when the outage alert itself was
+        // audible; rate-limited flaps stay silent in both directions.
+        restoreChirpPending = !rateLimited;
       }
     }
 
@@ -382,7 +399,18 @@ void updateOBDDistance(float speedKph)
 void processOBD(CBuffer* buffer)
 {
   static byte auxIndex = 0;
+  static uint32_t lastAuxPoll = 0;
+  static bool cadenceReported = false;
   const byte count = sizeof(obdData) / sizeof(obdData[0]);
+
+  if (!cadenceReported) {
+    Serial.print("[OBD] Polling fast PIDs every ");
+    Serial.print(OBD_FAST_INTERVAL_MS);
+    Serial.print(" ms; rotating auxiliary PIDs every ");
+    Serial.print(OBD_AUX_INTERVAL_MS);
+    Serial.println(" ms");
+    cadenceReported = true;
+  }
 
   // Core driving metrics are sampled every cycle for near-real-time panels.
   for (byte i = 0; i < count; i++) {
@@ -405,24 +433,32 @@ void processOBD(CBuffer* buffer)
     }
   }
 
-  // Rotate through every other ECU-advertised PID without saturating the bus.
-  byte sampled = 0;
-  byte visited = 0;
-  while (sampled < OBD_AUX_PIDS_PER_CYCLE && visited < count) {
-    if (auxIndex >= count) auxIndex = 0;
-    PID_POLLING_INFO& item = obdData[auxIndex++];
-    visited++;
-    if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
-    float value;
-    if (!obd.readPID(item.pid, value)) {
-      timeoutsOBD++;
-      printTimeoutStats();
-      return;
+  // Rotate through every other ECU-advertised PID, but only once per five
+  // seconds. This keeps the CAN/ELM bridge responsive while still discovering
+  // the full catalogue over time. Fast telemetry frames keep carrying the
+  // core values; auxiliary values are emitted when their rotation slot is
+  // sampled and remain available in the server history between polls.
+  const uint32_t now = millis();
+  if (!lastAuxPoll || now - lastAuxPoll >= OBD_AUX_INTERVAL_MS) {
+    lastAuxPoll = now;
+    byte sampled = 0;
+    byte visited = 0;
+    while (sampled < OBD_AUX_PIDS_PER_CYCLE && visited < count) {
+      if (auxIndex >= count) auxIndex = 0;
+      PID_POLLING_INFO& item = obdData[auxIndex++];
+      visited++;
+      if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
+      float value;
+      if (!obd.readPID(item.pid, value)) {
+        timeoutsOBD++;
+        printTimeoutStats();
+        continue;
+      }
+      item.ts = millis();
+      item.value = value;
+      buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+      sampled++;
     }
-    item.ts = millis();
-    item.value = value;
-    buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-    sampled++;
   }
 
   processDiagnostics(buffer);

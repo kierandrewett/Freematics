@@ -16,7 +16,7 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. When PSRAM is enabled, hours of data can be buffered in case of temporary network outage and transmitted when network connection resumes. Samples are posted in five-second batches, with up to 16 complete samples per request while draining a backlog; a failed request retains the whole batch for ordered retry.
+Collected data are stored in a circular buffer in ESP32's IRAM or PSRAM. When PSRAM is enabled, hours of data can be buffered in case of temporary network outage and transmitted when network connection resumes. Moving vehicles sample speed, RPM, load and throttle at 500 ms; slower PIDs are rotated every five seconds so the OBD bridge stays responsive. Samples are posted in five-second batches, with up to 24 complete samples per request while draining a backlog; a failed request retains the whole batch for ordered retry. The wire format remains the existing compact PID:value frame with one checksum per batch, avoiding JSON and repeated HTTPS headers.
   
 Data Transmission
 -----------------

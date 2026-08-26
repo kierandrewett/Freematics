@@ -71,7 +71,7 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 0
       },
@@ -166,8 +166,8 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 0
       },
       "id": 2,
@@ -241,8 +241,8 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 6,
         "y": 0
       },
       "id": 3,
@@ -320,8 +320,8 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 9,
         "y": 0
       },
       "id": 4,
@@ -363,6 +363,85 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
+      "description": "Live ECU fuel-tank percentage. This is a gauge percentage, not litres; red means at or below 15%.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "Not reported",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 15,
+                "color": "red"
+              },
+              {
+                "value": 25,
+                "color": "orange"
+              },
+              {
+                "value": 100,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 12,
+        "y": 0
+      },
+      "id": 36,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "last_over_time(freematics_obd_value{device_id=\"$device\",pid=\"0x12F\"}[5m])",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "Fuel level",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
       "description": "Satellites used by the current fix. No value indoors is expected, not fabricated as zero.",
       "fieldConfig": {
         "defaults": {
@@ -395,8 +474,8 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 16,
+        "w": 3,
+        "x": 15,
         "y": 0
       },
       "id": 5,
@@ -466,8 +545,8 @@
       },
       "gridPos": {
         "h": 3,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 18,
         "y": 0
       },
       "id": 6,
@@ -502,6 +581,77 @@
         }
       ],
       "title": "Diagnostic faults",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Distinct numeric Mode 01 PIDs currently reported by the vehicle ECU. The raw table below keeps the complete inventory visible.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "No ECU data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 3,
+        "x": 21,
+        "y": 0
+      },
+      "id": 37,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "count(count by (pid) (freematics_obd_value{device_id=\"$device\"}))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "ECU metrics",
       "type": "stat"
     },
     {
@@ -642,7 +792,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Distance integrated by the device from OBD speed, with GPS fallback.",
+      "description": "Distance integrated by the device from OBD speed, with GPS fallback, displayed in statute miles for UK driving.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -659,7 +809,7 @@
               }
             ]
           },
-          "unit": "km",
+          "unit": "suffix: mi",
           "decimals": 2
         },
         "overrides": []
@@ -694,7 +844,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max(max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
+          "expr": "max(max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -709,7 +859,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Time-average OBD speed for the selection, falling back to GPS when OBD speed is unavailable.",
+      "description": "Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -726,7 +876,7 @@
               }
             ]
           },
-          "unit": "kmh",
+          "unit": "suffix: mph",
           "decimals": 1
         },
         "overrides": []
@@ -761,7 +911,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "avg(avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])) or avg(avg_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
+          "expr": "(avg(avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])) * 0.621371) or (avg(avg_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -776,7 +926,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Highest observed OBD speed, falling back to GPS.",
+      "description": "Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -793,7 +943,7 @@
               }
             ]
           },
-          "unit": "kmh",
+          "unit": "suffix: mph",
           "decimals": 1
         },
         "overrides": []
@@ -828,7 +978,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max(max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])) or max(max_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
+          "expr": "(max(max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])) * 0.621371) or (max(max_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1367,7 +1517,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "km"
+                "value": "suffix: mi"
               },
               {
                 "id": "decimals",
@@ -1383,7 +1533,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "kmh"
+                "value": "suffix: mph"
               },
               {
                 "id": "decimals",
@@ -1399,7 +1549,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "kmh"
+                "value": "suffix: mph"
               },
               {
                 "id": "decimals",
@@ -1467,7 +1617,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 0.621371",
           "legendFormat": "Distance",
           "range": false,
           "refId": "C",
@@ -1480,7 +1630,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])",
+          "expr": "avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range]) * 0.621371",
           "legendFormat": "Average speed",
           "range": false,
           "refId": "D",
@@ -1493,7 +1643,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range])",
+          "expr": "max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}[$__range]) * 0.621371",
           "legendFormat": "Maximum speed",
           "range": false,
           "refId": "E",
@@ -1654,7 +1804,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "OBD and GPS speed share the left axis; RPM uses the right axis. Gaps remain visible instead of being invented.",
+      "description": "UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1701,7 +1851,7 @@
               }
             ]
           },
-          "unit": "kmh"
+          "unit": "suffix: mph"
         },
         "overrides": [
           {
@@ -1730,7 +1880,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "OBD speed"
+              "options": "OBD speed (mph)"
             },
             "properties": [
               {
@@ -1745,7 +1895,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "GPS speed"
+              "options": "GPS speed (mph)"
             },
             "properties": [
               {
@@ -1800,8 +1950,8 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"}",
-          "legendFormat": "OBD speed",
+          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} * 0.621371)",
+          "legendFormat": "OBD speed (mph)",
           "range": true,
           "refId": "A"
         },
@@ -1811,8 +1961,8 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "GPS speed",
+          "expr": "(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371)",
+          "legendFormat": "GPS speed (mph)",
           "range": true,
           "refId": "B"
         },
@@ -2157,7 +2307,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Fuel level and closed-loop trims use percent. Equivalence ratio is placed on the right axis.",
+      "description": "Fuel gauge percentage and closed-loop trims stay on the primary axis. Equivalence ratio uses the right axis; fuel percentage is not a volume measurement.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2380,7 +2530,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=\"mass_air_flow\"}",
+          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"}",
           "legendFormat": "Mass airflow",
           "range": true,
           "refId": "A"
@@ -2607,7 +2757,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
+        "w": 6,
         "x": 0,
         "y": 39
       },
@@ -2662,8 +2812,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 6,
         "y": 39
       },
       "id": 29,
@@ -2813,8 +2963,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 12,
         "y": 39
       },
       "id": 30,
@@ -2869,6 +3019,178 @@
         }
       ],
       "title": "Radio and telemetry health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Fuel rate is shown directly when standard PID 0x5E is reported. The MAF estimate is a transparent petrol-only fallback (14.7:1 AFR, 745 g/L) and is not calibrated consumption; fuel percentage alone cannot produce efficiency.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "suffix: L/h"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ECU economy (UK mpg)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: mpg UK"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAF economy estimate (UK mpg)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: mpg UK"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    6,
+                    5
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 39
+      },
+      "id": 38,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"}",
+          "legendFormat": "ECU fuel rate (L/h)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} * 3600 / (14.7 * 745.0))",
+          "legendFormat": "MAF fuel rate estimate (L/h)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} * 2.82480848939) / on(device_id,trip_id) clamp_min(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"}, 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"}, 0.01))",
+          "legendFormat": "ECU economy (UK mpg)",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} * 3600 / (14.7 * 745.0)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} * 3600 / (14.7 * 745.0)), 0.01))",
+          "legendFormat": "MAF economy estimate (UK mpg)",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Fuel rate and economy",
       "type": "timeseries"
     },
     {
@@ -3349,7 +3671,7 @@
     ]
   },
   "time": {
-    "from": "now-24h",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {
@@ -3362,6 +3684,7 @@
       "5m"
     ],
     "time_options": [
+      "5m",
       "15m",
       "1h",
       "6h",

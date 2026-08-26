@@ -146,13 +146,21 @@
 #define DATA_RECEIVING_TIMEOUT 5000 /* ms */
 // expected maximum server sync signal interval
 #define SERVER_SYNC_INTERVAL 120 /* seconds, 0 to disable */
-// data interval settings
+// Data interval settings. Moving samples are deliberately faster than the
+// original one-second cadence so RPM/speed transitions are visible. The
+// slower tiers are still used while idling/parked to limit flash and radio
+// traffic.
 #define STATIONARY_TIME_TABLE {10, 60, 180} /* seconds */
-#define DATA_INTERVAL_TABLE {1000, 2000, 5000} /* ms */
+#define OBD_FAST_INTERVAL_MS 500UL /* speed/RPM/load/throttle sample cadence */
+#define OBD_AUX_INTERVAL_MS 5000UL /* rotating non-critical PID cadence */
+#define OBD_AUX_PIDS_PER_CYCLE 8 /* bounded auxiliary reads per rotation */
+#define DATA_INTERVAL_TABLE {OBD_FAST_INTERVAL_MS, 2000, 5000} /* ms */
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */
-// Maximum samples coalesced into one HTTPS POST.
-#define HTTP_BATCH_MAX_SAMPLES 16
+// Maximum samples coalesced into one HTTPS POST. The payload itself remains
+// the existing compact PID:value format; batching amortises HTTPS/TLS headers
+// and lets queued readings drain efficiently after a coverage gap.
+#define HTTP_BATCH_MAX_SAMPLES 24
 // Bound live latency while allowing normal samples to share a request.
 #define HTTP_BATCH_MAX_WAIT_MS 5000UL
 
@@ -207,6 +215,8 @@
 #define ENABLE_AUDIBLE_NETWORK_ALERTS 1
 // Ignore short cellular handovers before announcing a genuine outage.
 #define NETWORK_ALERT_GRACE_MS 15000UL
+// Do not turn a flapping modem into a repeating audible alarm.
+#define NETWORK_ALERT_MIN_INTERVAL_MS 120000UL
 
 /**************************************
 * Additional features

@@ -10,6 +10,15 @@ from pathlib import Path
 DS = {"type": "prometheus", "uid": "freematics-prometheus"}
 DEVICE = 'device_id="$device"'
 TRIP = 'trip_id=~"$trip"'
+KM_TO_MI = 0.621371
+IMPERIAL_GALLON_LITRES = 4.54609
+# kph * this constant / litres-per-hour = UK (imperial) mpg.
+KPH_TO_UK_MPG_PER_LPH = KM_TO_MI * IMPERIAL_GALLON_LITRES
+# Fallback fuel-flow estimate when the ECU omits optional PID 0x5E. It is
+# deliberately labelled as an estimate: petrol stoichiometric AFR and density
+# are assumptions, not vehicle-specific facts.
+PETROL_STOICH_AFR = 14.7
+PETROL_DENSITY_G_PER_LITRE = 745.0
 
 
 def target(
@@ -163,6 +172,33 @@ def build_dashboard() -> dict:
     value_mapping = lambda options: [{"type": "value", "options": options}]
     panels: list[dict] = []
 
+    selection = f"{{{DEVICE},{TRIP}}}"
+    speed_kph = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10D"}}'
+    speed_mph = f"({speed_kph} * {KM_TO_MI})"
+    gps_speed_kph = f"freematics_gps_speed_kilometres_per_hour{selection}"
+    gps_speed_mph = f"({gps_speed_kph} * {KM_TO_MI})"
+    rpm = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10C"}}'
+    fuel_level = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x12F"}}'
+    fuel_rate = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x15E"}}'
+    maf = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x110"}}'
+    estimated_fuel_rate = (
+        f"({maf} * 3600 / ({PETROL_STOICH_AFR} * {PETROL_DENSITY_G_PER_LITRE}))"
+    )
+    # Only returns a value when the ECU reports PID 0x5E (engine fuel rate).
+    instant_uk_mpg = (
+        f"(({speed_kph} * {KPH_TO_UK_MPG_PER_LPH}) "
+        f"/ on(device_id,trip_id) clamp_min({fuel_rate}, 0.01))"
+        f" or (({gps_speed_mph} * {IMPERIAL_GALLON_LITRES}) "
+        f"/ on(device_id,trip_id) clamp_min({fuel_rate}, 0.01))"
+    )
+    estimated_uk_mpg = (
+        f"(({speed_kph} * {KPH_TO_UK_MPG_PER_LPH}) "
+        f"/ on(device_id,trip_id) clamp_min({estimated_fuel_rate}, 0.01))"
+        f" or (({gps_speed_mph} * {IMPERIAL_GALLON_LITRES}) "
+        f"/ on(device_id,trip_id) clamp_min({estimated_fuel_rate}, 0.01))"
+    )
+    accel_x = f'freematics_acceleration_g{{{DEVICE},{TRIP},axis="x"}}'
+
     panels.extend(
         [
             stat(
@@ -171,6 +207,7 @@ def build_dashboard() -> dict:
                 0,
                 0,
                 f"max(freematics_device_connected{{{DEVICE}}})",
+                width=3,
                 description="Online means the collector has received telemetry within its channel timeout.",
                 mappings=value_mapping(
                     {
@@ -184,9 +221,10 @@ def build_dashboard() -> dict:
             stat(
                 2,
                 "Active uplink",
-                4,
+                3,
                 0,
                 f"max(freematics_network_transport{{{DEVICE}}})",
+                width=3,
                 description="Transport reported by the firmware: cellular is preferred; Wi-Fi is fallback.",
                 mappings=value_mapping(
                     {
@@ -201,9 +239,10 @@ def build_dashboard() -> dict:
             stat(
                 3,
                 "Telemetry age",
-                8,
+                6,
                 0,
                 f"max(freematics_device_data_age_seconds{{{DEVICE}}})",
+                width=3,
                 unit="s",
                 description="Age of the newest packet at the collector. Parked standby deliberately creates long gaps.",
                 decimals=1,
@@ -213,9 +252,10 @@ def build_dashboard() -> dict:
             stat(
                 4,
                 "Vehicle voltage",
-                12,
+                9,
                 0,
                 f"max(freematics_device_battery_voltage_volts{{{DEVICE}}})",
+                width=3,
                 unit="volt",
                 decimals=2,
                 description="Voltage reported by the Freematics power input. Bench USB voltage is not a vehicle-battery reading.",
@@ -223,11 +263,25 @@ def build_dashboard() -> dict:
                 threshold_steps=((None, "red"), (11.8, "orange"), (12.2, "green"), (15.0, "red")),
             ),
             stat(
+                36,
+                "Fuel level",
+                12,
+                0,
+                'last_over_time(freematics_obd_value{device_id="$device",pid="0x12F"}[5m])',
+                unit="percent",
+                decimals=1,
+                description="Live ECU fuel-tank percentage. This is a gauge percentage, not litres; red means at or below 15%.",
+                no_value="Not reported",
+                threshold_steps=((None, "red"), (15, "red"), (25, "orange"), (100, "green")),
+                width=3,
+            ),
+            stat(
                 5,
                 "GPS satellites",
-                16,
+                15,
                 0,
                 f"max(freematics_gps_satellites{{{DEVICE}}})",
+                width=3,
                 unit="short",
                 decimals=0,
                 description="Satellites used by the current fix. No value indoors is expected, not fabricated as zero.",
@@ -237,24 +291,31 @@ def build_dashboard() -> dict:
             stat(
                 6,
                 "Diagnostic faults",
-                20,
+                18,
                 0,
                 f"sum(freematics_diagnostic_trouble_codes{{{DEVICE}}})",
+                width=3,
                 unit="short",
                 decimals=0,
                 description="Total stored, pending and permanent DTCs from the latest completed scan.",
                 no_value="Not scanned",
                 threshold_steps=((None, "green"), (1, "red")),
             ),
+            stat(
+                37,
+                "ECU metrics",
+                21,
+                0,
+                'count(count by (pid) (freematics_obd_value{device_id="$device"}))',
+                unit="short",
+                decimals=0,
+                description="Distinct numeric Mode 01 PIDs currently reported by the vehicle ECU. The raw table below keeps the complete inventory visible.",
+                no_value="No ECU data",
+                threshold_steps=((None, "red"), (1, "green")),
+                width=3,
+            ),
         ]
     )
-
-    selection = f"{{{DEVICE},{TRIP}}}"
-    speed = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10D"}}'
-    gps_speed = f"freematics_gps_speed_kilometres_per_hour{selection}"
-    rpm = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10C"}}'
-    fuel = f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x12F"}}'
-    accel_x = f'freematics_acceleration_g{{{DEVICE},{TRIP},axis="x"}}'
 
     panels.extend(
         [
@@ -284,10 +345,10 @@ def build_dashboard() -> dict:
                 "Distance",
                 8,
                 3,
-                f"max(max_over_time(freematics_trip_distance_kilometres{selection}[$__range]))",
-                unit="km",
+                f"max(max_over_time(freematics_trip_distance_kilometres{selection}[$__range])) * {KM_TO_MI}",
+                unit="suffix: mi",
                 decimals=2,
-                description="Distance integrated by the device from OBD speed, with GPS fallback.",
+                description="Distance integrated by the device from OBD speed, with GPS fallback, displayed in statute miles for UK driving.",
                 no_value="No distance",
             ),
             stat(
@@ -295,10 +356,10 @@ def build_dashboard() -> dict:
                 "Average speed",
                 12,
                 3,
-                f"avg(avg_over_time({speed}[$__range])) or avg(avg_over_time({gps_speed}[$__range]))",
-                unit="kmh",
+                f"(avg(avg_over_time({speed_kph}[$__range])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                unit="suffix: mph",
                 decimals=1,
-                description="Time-average OBD speed for the selection, falling back to GPS when OBD speed is unavailable.",
+                description="Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback.",
                 no_value="No speed",
             ),
             stat(
@@ -306,10 +367,10 @@ def build_dashboard() -> dict:
                 "Maximum speed",
                 16,
                 3,
-                f"max(max_over_time({speed}[$__range])) or max(max_over_time({gps_speed}[$__range]))",
-                unit="kmh",
+                f"(max(max_over_time({speed_kph}[$__range])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                unit="suffix: mph",
                 decimals=1,
-                description="Highest observed OBD speed, falling back to GPS.",
+                description="Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable.",
                 no_value="No speed",
             ),
             stat(
@@ -328,7 +389,7 @@ def build_dashboard() -> dict:
                 "Fuel at start",
                 0,
                 6,
-                f"max(last_over_time({fuel}[$__range]) - delta({fuel}[$__range]))",
+                f"max(last_over_time({fuel_level}[$__range]) - delta({fuel_level}[$__range]))",
                 unit="percent",
                 decimals=1,
                 description="Estimated first fuel-level value from the final sample and gauge delta over the selected range.",
@@ -339,7 +400,7 @@ def build_dashboard() -> dict:
                 "Fuel at end",
                 4,
                 6,
-                f"max(last_over_time({fuel}[$__range]))",
+                f"max(last_over_time({fuel_level}[$__range]))",
                 unit="percent",
                 decimals=1,
                 description="Latest fuel-level sample in the selected time range.",
@@ -350,7 +411,7 @@ def build_dashboard() -> dict:
                 "Fuel level change",
                 8,
                 6,
-                f"max(-delta({fuel}[$__range]))",
+                f"max(-delta({fuel_level}[$__range]))",
                 unit="percent",
                 decimals=1,
                 description="Start minus end fuel-tank percentage. Sensor quantisation means short trips may show zero or noise.",
@@ -409,21 +470,21 @@ def build_dashboard() -> dict:
             table=True,
         ),
         target(
-            f"max_over_time(freematics_trip_distance_kilometres{selection}[$__range])",
+            f"max_over_time(freematics_trip_distance_kilometres{selection}[$__range]) * {KM_TO_MI}",
             "C",
             "Distance",
             instant=True,
             table=True,
         ),
         target(
-            f"avg_over_time({speed}[$__range])",
+            f"avg_over_time({speed_kph}[$__range]) * {KM_TO_MI}",
             "D",
             "Average speed",
             instant=True,
             table=True,
         ),
         target(
-            f"max_over_time({speed}[$__range])",
+            f"max_over_time({speed_kph}[$__range]) * {KM_TO_MI}",
             "E",
             "Maximum speed",
             instant=True,
@@ -439,9 +500,9 @@ def build_dashboard() -> dict:
                 "overrides": [
                     by_name("Start", ("unit", "dateTimeAsIso")),
                     by_name("Duration", ("unit", "s")),
-                    by_name("Distance", ("unit", "km"), ("decimals", 2)),
-                    by_name("Average speed", ("unit", "kmh"), ("decimals", 1)),
-                    by_name("Maximum speed", ("unit", "kmh"), ("decimals", 1)),
+                    by_name("Distance", ("unit", "suffix: mi"), ("decimals", 2)),
+                    by_name("Average speed", ("unit", "suffix: mph"), ("decimals", 1)),
+                    by_name("Maximum speed", ("unit", "suffix: mph"), ("decimals", 1)),
                 ],
             },
             "gridPos": {"h": 6, "w": 24, "x": 0, "y": 9},
@@ -525,16 +586,16 @@ def build_dashboard() -> dict:
             14,
             10,
             [
-                target(speed, "A", "OBD speed"),
-                target(gps_speed, "B", "GPS speed"),
+                target(speed_mph, "A", "OBD speed (mph)"),
+                target(gps_speed_mph, "B", "GPS speed (mph)"),
                 target(rpm, "C", "Engine RPM"),
             ],
-            unit="kmh",
-            description="OBD and GPS speed share the left axis; RPM uses the right axis. Gaps remain visible instead of being invented.",
+            unit="suffix: mph",
+            description="UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
             overrides=[
                 by_name("Engine RPM", ("unit", "rpm"), ("custom.axisPlacement", "right"), ("color", {"fixedColor": "orange", "mode": "fixed"})),
-                by_name("OBD speed", ("color", {"fixedColor": "blue", "mode": "fixed"})),
-                by_name("GPS speed", ("color", {"fixedColor": "light-blue", "mode": "fixed"}), ("custom.lineStyle", {"dash": [8, 6], "fill": "dash"})),
+                by_name("OBD speed (mph)", ("color", {"fixedColor": "blue", "mode": "fixed"})),
+                by_name("GPS speed (mph)", ("color", {"fixedColor": "light-blue", "mode": "fixed"}), ("custom.lineStyle", {"dash": [8, 6], "fill": "dash"})),
             ],
         )
     )
@@ -597,7 +658,7 @@ def build_dashboard() -> dict:
                     target(f'freematics_obd_value{{{DEVICE},{TRIP},name="commanded_equivalence_ratio"}}', "B", "Equivalence ratio"),
                 ],
                 unit="percent",
-                description="Fuel level and closed-loop trims use percent. Equivalence ratio is placed on the right axis.",
+                description="Fuel gauge percentage and closed-loop trims stay on the primary axis. Equivalence ratio uses the right axis; fuel percentage is not a volume measurement.",
                 overrides=[by_name("Equivalence ratio", ("unit", "none"), ("custom.axisPlacement", "right"))],
             ),
             timeseries(
@@ -608,7 +669,7 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(f'freematics_obd_value{{{DEVICE},{TRIP},name="mass_air_flow"}}', "A", "Mass airflow"),
+                    target(maf, "A", "Mass airflow"),
                     target(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*pressure.*"}}', "B", "{{description}}"),
                 ],
                 unit="kpascal",
@@ -656,7 +717,7 @@ def build_dashboard() -> dict:
                 },
                 "overrides": [],
             },
-            "gridPos": {"h": 5, "w": 8, "x": 0, "y": 39},
+            "gridPos": {"h": 5, "w": 6, "x": 0, "y": 39},
             "id": 28,
             "options": {
                 "alignValue": "left",
@@ -677,7 +738,7 @@ def build_dashboard() -> dict:
             "datasource": DS,
             "description": "Read-only stored, pending and permanent diagnostic trouble codes. The firmware never clears codes.",
             "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
-            "gridPos": {"h": 5, "w": 8, "x": 8, "y": 39},
+            "gridPos": {"h": 5, "w": 6, "x": 6, "y": 39},
             "id": 29,
             "options": {"cellHeight": "sm", "showHeader": True, "sortBy": [{"displayName": "status", "desc": False}]},
             "targets": [
@@ -708,9 +769,9 @@ def build_dashboard() -> dict:
         timeseries(
             30,
             "Radio and telemetry health",
-            16,
+            12,
             39,
-            8,
+            6,
             5,
             [
                 target(f"freematics_device_rssi_dbm{{{DEVICE}}}", "A", "Signal"),
@@ -724,6 +785,30 @@ def build_dashboard() -> dict:
                 by_name("Age", ("unit", "s"), ("custom.axisPlacement", "right")),
             ],
             legend_calcs=["lastNotNull"],
+        )
+    )
+
+    panels.append(
+        timeseries(
+            38,
+            "Fuel rate and economy",
+            18,
+            39,
+            6,
+            5,
+            [
+                target(fuel_rate, "A", "ECU fuel rate (L/h)"),
+                target(estimated_fuel_rate, "B", "MAF fuel rate estimate (L/h)"),
+                target(instant_uk_mpg, "C", "ECU economy (UK mpg)"),
+                target(estimated_uk_mpg, "D", "MAF economy estimate (UK mpg)"),
+            ],
+            unit="suffix: L/h",
+            description="Fuel rate is shown directly when standard PID 0x5E is reported. The MAF estimate is a transparent petrol-only fallback (14.7:1 AFR, 745 g/L) and is not calibrated consumption; fuel percentage alone cannot produce efficiency.",
+            overrides=[
+                by_name("ECU economy (UK mpg)", ("unit", "suffix: mpg UK"), ("custom.axisPlacement", "right")),
+                by_name("MAF economy estimate (UK mpg)", ("unit", "suffix: mpg UK"), ("custom.axisPlacement", "right"), ("custom.lineStyle", {"dash": [6, 5], "fill": "dash"})),
+            ],
+            legend_calcs=["lastNotNull", "min", "max"],
         )
     )
 
@@ -875,10 +960,10 @@ def build_dashboard() -> dict:
                 },
             ]
         },
-        "time": {"from": "now-24h", "to": "now"},
+        "time": {"from": "now-5m", "to": "now"},
         "timepicker": {
             "refresh_intervals": ["2s", "5s", "10s", "30s", "1m", "5m"],
-            "time_options": ["15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d", "90d", "1y"],
+            "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d", "90d", "1y"],
         },
         "timezone": "browser",
         "title": "Vehicle · Freematics",
