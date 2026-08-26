@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include "data2kml.h"
@@ -113,6 +114,91 @@ static int appendScalarMetric(char* buf, int bs, int l, const char* metric,
 		metric, devid, tripid, value * scale);
 }
 
+static int getNumericPID(const CHANNEL_DATA* pld, uint16_t pid, double* value)
+{
+	const PID_DATA* data = pld->data + pid;
+	if (!data->ts) return 0;
+	char* end = NULL;
+	double parsed = strtod(data->value, &end);
+	if (end == data->value || !isfinite(parsed)) return 0;
+	while (isspace((unsigned char)*end)) end++;
+	if (*end) return 0;
+	*value = parsed;
+	return 1;
+}
+
+static int appendDerivedVehicleMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld)
+{
+	/* These calculations only emit when all required source values are present. */
+	double rpm;
+	int engineRunning = getNumericPID(pld, PID_RPM, &rpm) && rpm >= 400.0;
+	if (getNumericPID(pld, PID_RPM, &rpm)) {
+		l += snprintf(buf + l, bs - l,
+			"freematics_vehicle_engine_running{device_id=\"%s\",trip_id=\"%s\"} %d\n",
+			pld->devid, pld->tripid, engineRunning);
+	}
+
+	double speed;
+	const char* speedSource = NULL;
+	if (getNumericPID(pld, PID_SPEED, &speed)) {
+		speedSource = "obd";
+	} else if (getNumericPID(pld, PID_GPS_SPEED, &speed)) {
+		speedSource = "gps";
+	}
+	if (speedSource) {
+		int moving = speed >= 1.0;
+		l += snprintf(buf + l, bs - l,
+			"freematics_vehicle_speed_kilometres_per_hour{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %.10g\n"
+			"freematics_vehicle_moving{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %d\n",
+			pld->devid, pld->tripid, speedSource, speed,
+			pld->devid, pld->tripid, speedSource, moving);
+		if (getNumericPID(pld, PID_RPM, &rpm)) {
+			l += snprintf(buf + l, bs - l,
+				"freematics_vehicle_idling{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %d\n",
+				pld->devid, pld->tripid, speedSource, engineRunning && !moving);
+		}
+	}
+
+	/* PID 0x5E is the ECU fuel rate. The MAF fallback assumes petrol at 14.7:1 and 745 g/L. */
+	double fuelRate;
+	const char* fuelSource = NULL;
+	if (getNumericPID(pld, 0x15E, &fuelRate)) {
+		fuelSource = "obd_engine_fuel_rate";
+	} else {
+		double maf;
+		if (getNumericPID(pld, PID_MAF_FLOW, &maf) && maf >= 0.0) {
+			fuelRate = maf * 3600.0 / (14.7 * 745.0);
+			fuelSource = "maf_petrol_estimate";
+		}
+	}
+	if (fuelSource) {
+		l += snprintf(buf + l, bs - l,
+			"freematics_vehicle_fuel_rate_litres_per_hour{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %.10g\n",
+			pld->devid, pld->tripid, fuelSource, fuelRate);
+		if (speedSource && speed > 0.5 && fuelRate > 0.01) {
+			double mpg = speed * 0.621371 * 4.54609 / fuelRate;
+			l += snprintf(buf + l, bs - l,
+				"freematics_vehicle_fuel_economy_miles_per_imperial_gallon{device_id=\"%s\",trip_id=\"%s\",speed_source=\"%s\",fuel_source=\"%s\"} %.10g\n",
+				pld->devid, pld->tripid, speedSource, fuelSource, mpg);
+		}
+	}
+
+	/* Percent torque becomes physical torque only when the ECU also supplies its reference torque. */
+	double torquePercent;
+	double referenceTorque;
+	if (getNumericPID(pld, 0x162, &torquePercent) && getNumericPID(pld, 0x163, &referenceTorque)
+		&& getNumericPID(pld, PID_RPM, &rpm)) {
+		double torque = referenceTorque * torquePercent / 100.0;
+		l += snprintf(buf + l, bs - l,
+			"freematics_vehicle_engine_torque_newton_metres{device_id=\"%s\",trip_id=\"%s\"} %.10g\n"
+			"freematics_vehicle_engine_power_kilowatts{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
+			pld->devid, pld->tripid, torque,
+			pld->devid, pld->tripid, rpm > 0.0 ? torque * rpm / 9549.2965855 : 0.0);
+	}
+
+	return l;
+}
+
 static void formatDTC(uint16_t raw, char code[6], const char** system)
 {
 	static const char prefixes[] = "PCBU";
@@ -179,6 +265,22 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_trip_start_time_seconds gauge\n"
 		"# HELP freematics_trip_elapsed_seconds Collector-observed trip duration.\n"
 		"# TYPE freematics_trip_elapsed_seconds gauge\n"
+		"# HELP freematics_vehicle_engine_running Engine state inferred from ECU engine speed at or above 400 rpm.\n"
+		"# TYPE freematics_vehicle_engine_running gauge\n"
+		"# HELP freematics_vehicle_speed_kilometres_per_hour Preferred current speed from OBD, or GPS when OBD speed is absent.\n"
+		"# TYPE freematics_vehicle_speed_kilometres_per_hour gauge\n"
+		"# HELP freematics_vehicle_moving Whether observed vehicle speed is at or above 1 kilometre per hour.\n"
+		"# TYPE freematics_vehicle_moving gauge\n"
+		"# HELP freematics_vehicle_idling Engine running while observed vehicle speed is below 1 kilometre per hour.\n"
+		"# TYPE freematics_vehicle_idling gauge\n"
+		"# HELP freematics_vehicle_fuel_rate_litres_per_hour ECU fuel rate, or a labelled petrol MAF estimate.\n"
+		"# TYPE freematics_vehicle_fuel_rate_litres_per_hour gauge\n"
+		"# HELP freematics_vehicle_fuel_economy_miles_per_imperial_gallon Instantaneous UK fuel economy from observed speed and fuel rate.\n"
+		"# TYPE freematics_vehicle_fuel_economy_miles_per_imperial_gallon gauge\n"
+		"# HELP freematics_vehicle_engine_torque_newton_metres Physical torque derived from ECU actual and reference torque PIDs.\n"
+		"# TYPE freematics_vehicle_engine_torque_newton_metres gauge\n"
+		"# HELP freematics_vehicle_engine_power_kilowatts Engine power derived from ECU torque and engine speed.\n"
+		"# TYPE freematics_vehicle_engine_power_kilowatts gauge\n"
 		"# HELP freematics_diagnostic_trouble_codes Diagnostic trouble-code count by OBD status.\n"
 		"# TYPE freematics_diagnostic_trouble_codes gauge\n"
 		"# HELP freematics_diagnostic_trouble_code_info Diagnostic trouble codes reported by the ECU.\n"
@@ -264,6 +366,8 @@ int uhMetrics(UrlHandlerParam* param)
 				pld->devid, pld->tripid, pid, meta->name, meta->description, meta->unit, number,
 				pld->devid, pld->tripid, pid, meta->name, valueAge / 1000.0);
 		}
+
+		l = appendDerivedVehicleMetrics(buf, bs, l, pld);
 
 		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored");
 		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending");
