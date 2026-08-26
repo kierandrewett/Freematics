@@ -701,7 +701,13 @@ bool TeleClientHTTP::connect(bool quick)
 
 bool TeleClientHTTP::ping()
 {
-  return connect();
+  // Standby pings must not create a new telemetry session or archive file.
+  // Open the authenticated socket, send the lightweight EVENT_PING marker,
+  // then let the standby task close the modem again.
+  if (!connect(true)) return false;
+  bool success = notify(EVENT_PING);
+  if (success) lastSyncTime = millis();
+  return success;
 }
 
 void TeleClientHTTP::shutdown()

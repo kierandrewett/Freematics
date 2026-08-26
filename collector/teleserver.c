@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <math.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include "data2kml.h"
 #include "httpd.h"
@@ -239,8 +240,10 @@ int uhMetrics(UrlHandlerParam* param)
 	int l = 0;
 
 	l += snprintf(buf + l, bs - l,
-		"# HELP freematics_device_connected Whether telemetry arrived within the channel timeout.\n"
+		"# HELP freematics_device_connected Whether telemetry or a recent parked ping arrived within the channel timeout.\n"
 		"# TYPE freematics_device_connected gauge\n"
+		"# HELP freematics_device_parked Whether the device is intentionally parked and has checked in recently.\n"
+		"# TYPE freematics_device_parked gauge\n"
 		"# HELP freematics_device_data_age_seconds Age of the newest telemetry packet.\n"
 		"# TYPE freematics_device_data_age_seconds gauge\n"
 		"# HELP freematics_device_data_received_bytes_total Telemetry bytes accepted by the collector.\n"
@@ -290,13 +293,18 @@ int uhMetrics(UrlHandlerParam* param)
 		CHANNEL_DATA* pld = ld + n;
 		if (!pld->id) continue;
 		unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
+		unsigned int pingAge = pld->serverPingTick ? (unsigned int)(tick - pld->serverPingTick) : UINT_MAX;
+		int parked = (pld->flags & FLAG_SLEEPING) && pingAge <= CHANNEL_TIMEOUT * 1000;
+		int connected = (pld->flags & FLAG_RUNNING) || parked;
 		l += snprintf(buf + l, bs - l,
 			"freematics_device_connected{device_id=\"%s\"} %u\n"
+			"freematics_device_parked{device_id=\"%s\"} %u\n"
 			"freematics_device_data_age_seconds{device_id=\"%s\"} %.3f\n"
 			"freematics_device_data_received_bytes_total{device_id=\"%s\"} %u\n"
 			"freematics_device_sample_rate_per_minute{device_id=\"%s\"} %.3f\n"
 			"freematics_device_rssi_dbm{device_id=\"%s\"} %d\n",
-			pld->devid, (pld->flags & FLAG_RUNNING) ? 1 : 0,
+			pld->devid, connected,
+			pld->devid, parked,
 			pld->devid, age / 1000.0,
 			pld->devid, pld->dataReceived,
 			pld->devid, pld->sampleRate,
@@ -1355,6 +1363,19 @@ int uhNotify(UrlHandlerParam* param)
 		pld->flags &= ~FLAG_RUNNING;
 		deviceLogout(pld);
 		SaveChannels();
+		return FLAG_DATA_RAW;
+	}
+	else if (event == EVENT_PING) {
+		// A parked HTTP client deliberately has no telemetry session. Keep a
+		// short-lived server-side marker so dashboards and host notifications can
+		// distinguish intentional standby from an unreachable device.
+		pld->serverPingTick = tick;
+		pld->flags |= FLAG_SLEEPING | FLAG_PINGED;
+		pld->flags &= ~FLAG_RUNNING;
+		if (rssi) pld->rssi = rssi;
+		if (devflags) pld->devflags = devflags;
+		SaveChannels();
+		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"done\"}");
 		return FLAG_DATA_RAW;
 	}
 	else if (event == EVENT_SYNC) {
