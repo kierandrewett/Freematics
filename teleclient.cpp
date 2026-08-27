@@ -576,22 +576,22 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   int len;
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_GET
   if (gd && gd->ts) {
-    len = snprintf(url, sizeof(url), "%s/push?id=%s&timestamp=%s&lat=%f&lon=%f&altitude=%d&speed=%f&heading=%d",
+    len = snprintf(path, sizeof(path), "%s/push?id=%s&timestamp=%s&lat=%f&lon=%f&altitude=%d&speed=%f&heading=%d",
       SERVER_PATH, devid, isoTime,
       gd->lat, gd->lng, (int)gd->alt, gd->speed, (int)gd->heading);
   } else {
-    len = snprintf(url, sizeof(url), "%s/push?id=%s", SERVER_PATH, devid);
+    len = snprintf(path, sizeof(path), "%s/push?id=%s", SERVER_PATH, devid);
   }
 #if ENABLE_WIFI
   if (wifi.connected()) {
     Serial.println("[HTTP] GET via Wi-Fi");
-    success = wifi.send(METHOD_GET, url);
+    success = wifi.send(METHOD_GET, path);
   }
   else
 #endif
   {
     Serial.println("[HTTP] GET via cellular");
-    success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, url);
+    success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, path);
   }
 #else
   len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
