@@ -80,9 +80,6 @@ var DASH = {
   setClass: function (name, className) {
     document.getElementById('data_' + name).className = className;
   },
-  setHTML: function (name, html) {
-    document.getElementById('data_' + name).innerHTML = html;
-  },
   setTempBar: function (name, temp) {
     if (temp < 0) temp = 0;
     if (temp > 80) temp = 80;
@@ -120,30 +117,50 @@ var DASH = {
     }
   },
   updateUserInfo: function (info, devid) {
+    var container = document.getElementById('info');
+    container.textContent = '';
     if (!USER.info) {
-      document.getElementById('info').innerHTML = !devid
-        ? ''
-        : "DEVICE: <input type='text' size='7' readonly value='" +
-          devid +
-          "'/>";
+      if (!devid) return;
+      container.appendChild(document.createTextNode('DEVICE: '));
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.size = 7;
+      input.readOnly = true;
+      input.value = devid;
+      container.appendChild(input);
       return;
     }
-    var s = "<select onchange='USER.goDash(this.value)'>";
+
+    var select = document.createElement('select');
+    select.onchange = function () {
+      USER.goDash(select.value);
+    };
     var found = false;
     for (var i = 0; i < info.devid.length; i++) {
-      s += '<option value="' + info.devid[i] + '"';
+      var option = document.createElement('option');
+      option.value = info.devid[i];
+      option.textContent = info.devid[i];
       if (info.devid[i] == devid) {
-        s += ' selected';
+        option.selected = true;
         found = true;
       }
-      s += '>' + info.devid[i] + '</option>';
+      select.appendChild(option);
     }
     if (!found) {
-      s += '<option value="' + devid + '" selected>' + devid + '</option>';
+      var fallback = document.createElement('option');
+      fallback.value = devid;
+      fallback.textContent = devid;
+      fallback.selected = true;
+      select.appendChild(fallback);
     }
-    s +=
-      "</select><input type='button' onclick='USER.goNextDash(previousSibling.value)' value='Switch'></input>";
-    document.getElementById('info').innerHTML = s;
+    container.appendChild(select);
+    var button = document.createElement('input');
+    button.type = 'button';
+    button.value = 'Switch';
+    button.onclick = function () {
+      USER.goNextDash(select.value);
+    };
+    container.appendChild(button);
   },
   pickNewestData: function (data) {
     var index = [-1, -1];
@@ -201,40 +218,52 @@ var DASH = {
     this.updatePID(0);
     this.updatePID(1);
 
-    // update data grid
-    var s = '<hr/>';
+    // Render telemetry values as text because device values are untrusted.
+    var grid = document.getElementById('grid');
+    grid.textContent = '';
+    grid.appendChild(document.createElement('hr'));
     if (this.deviceFlags && (this.deviceFlags & 0xf000) == 0x1000) {
-      if (this.deviceFlags & 0x1) s += '[OBD]';
-      if (this.deviceFlags & (0x2 | 0x4)) s += '[GNSS]';
-      if (this.deviceFlags & 0x8) s += '[MEMS] ';
-      s += '<br/>';
+      if (this.deviceFlags & 0x1) grid.appendChild(document.createTextNode('[OBD]'));
+      if (this.deviceFlags & (0x2 | 0x4)) grid.appendChild(document.createTextNode('[GNSS]'));
+      if (this.deviceFlags & 0x8) grid.appendChild(document.createTextNode('[MEMS] '));
+      grid.appendChild(document.createElement('br'));
     }
-
-    s += "<span class='smaller_text'>Timestamp </span>" + ch.stats.devtick;
-
+    var label = document.createElement('span');
+    label.className = 'smaller_text';
+    label.textContent = 'Timestamp ';
+    grid.appendChild(label);
+    grid.appendChild(document.createTextNode(String(ch.stats.devtick)));
     if (this.deviceRSSI) {
-      s +=
-        "<br/><span class='smaller_text'>RSSI </span>" +
-        this.deviceRSSI +
-        'dBm';
+      var rssiBreak = document.createElement('br');
+      var rssiLabel = document.createElement('span');
+      rssiLabel.className = 'smaller_text';
+      rssiLabel.textContent = 'RSSI ';
+      grid.appendChild(rssiBreak);
+      grid.appendChild(rssiLabel);
+      grid.appendChild(document.createTextNode(String(this.deviceRSSI) + 'dBm'));
     }
-
     for (var n = 0; n < this.data.length; n++) {
       var pid = this.data[n][0];
       var value = this.data[n][1];
-      s +=
-        "<br/><span class='smaller_text'>" +
-        PID.getName(pid) +
-        ' </span>' +
-        PID.normalize(pid, value);
+      var valueBreak = document.createElement('br');
+      var valueLabel = document.createElement('span');
+      valueLabel.className = 'smaller_text';
+      valueLabel.textContent = PID.getName(pid) + ' ';
+      grid.appendChild(valueBreak);
+      grid.appendChild(valueLabel);
+      grid.appendChild(document.createTextNode(String(PID.normalize(pid, value))));
       var unit = PID.getUnit(pid);
-      if (unit) s += "<span class='small_text'> " + unit + '</span>';
+      if (unit) {
+        var unitLabel = document.createElement('span');
+        unitLabel.className = 'small_text';
+        unitLabel.textContent = ' ' + unit;
+        grid.appendChild(unitLabel);
+      }
     }
-    document.getElementById('grid').innerHTML = s;
 
     if (this.lastDataCount != this.data.length) {
       s =
-        "<hr/>Chart Data<br/><select id='chartPIDselect' onchange='DASH.selectPID(parseInt(value))'>";
+        "<hr/>Chart Data<br/><select id='chartPIDselect' onchange='DASH.selectPID(parseInt(this.value, 10))'>";
       for (var n = 0; n < this.data.length; n++) {
         var pid = this.data[n][0];
         if (!PID.illustratable(pid)) continue;

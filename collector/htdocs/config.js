@@ -15,6 +15,6 @@ var OPENCAGE_API_KEY = '';
 const serverURL =
   window.location.href.substr(0, 7) == 'file://'
     ? 'http://localhost:8080/api/'
-    : window.location.href.indexOf('localhost') > 0
+    : window.location.hostname == 'localhost' || window.location.hostname == '127.0.0.1'
     ? '/api/'
     : '/hub/api/';

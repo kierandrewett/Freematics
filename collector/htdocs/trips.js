@@ -116,21 +116,38 @@ function updateUI()
 	opts.style.display = "block";
 	TRIPS.list();
 
+	var container = document.getElementById("info");
+	container.textContent = "";
 	if (!USER.info) {
-		document.getElementById("info").innerHTML = "DEVICE: " + USER.devid;
+		container.appendChild(document.createTextNode("DEVICE: " + String(USER.devid || "")));
 		return;
 	}
-	var s = "<select onchange='goDash(this.value)'>";
+	var select = document.createElement("select");
+	select.onchange = function () { goDash(select.value); };
+	var found = false;
 	for (var i = 0; i < USER.info.devid.length; i++) {
-        s += "<option value=\"" + USER.info.devid[i] + "\"";
-        if (USER.info.devid[i] == USER.devid) {
-            s += " selected";
-            selected = true;
-        }
-        s += ">" + USER.info.devid[i] + "</option>";
-    }
-    s += "</select><input type='button' onclick='goNextDash(previousSibling.value)' value='Switch'></input>";
-    document.getElementById("info").innerHTML = s;
+		var option = document.createElement("option");
+		option.value = USER.info.devid[i];
+		option.textContent = USER.info.devid[i];
+		if (USER.info.devid[i] == USER.devid) {
+			option.selected = true;
+			found = true;
+		}
+		select.appendChild(option);
+	}
+	if (!found) {
+		var fallback = document.createElement("option");
+		fallback.value = USER.devid;
+		fallback.textContent = USER.devid;
+		fallback.selected = true;
+		select.appendChild(fallback);
+	}
+	container.appendChild(select);
+	var button = document.createElement("input");
+	button.type = "button";
+	button.value = "Switch";
+	button.onclick = function () { goNextDash(select.value); };
+	container.appendChild(button);
 }
 
 var TRIPS = {
@@ -274,9 +291,9 @@ var TRIPS = {
 		this.tripID = this.history[tripIndex].id;
 
 		var html = "";
-		html += "<a href='" + serverURL + "trip?devid=" + USER.devid + "&tripid=" + this.tripID + "' target='_blank'>JSON</a> | " 
-		html += "<a href='" + serverURL + "trip/kml?devid=" + USER.devid + "&tripid=" + this.tripID + "' target='_blank'>KML</a> | " 
-		html += "<a href='" + serverURL + "trip/raw?devid=" + USER.devid + "&tripid=" + this.tripID + "' target='_blank'>RAW</a><hr/>";
+		html += "<a href='" + serverURL + "trip?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>JSON</a> | "
+		html += "<a href='" + serverURL + "trip/kml?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>KML</a> | "
+		html += "<a href='" + serverURL + "trip/raw?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>RAW</a><hr/>";
 
 		if (tripIndex < TRIPS.history.length - 1) {
 			html += "<input type='button' value='Previous' onclick='TRIPS.loadTrip(" + (tripIndex + 1) + ")'></input>";
@@ -292,7 +309,7 @@ var TRIPS = {
 		document.getElementById("toolbar").innerHTML = html;
 
 		document.getElementById("chart").style.display = "block";
-		var url = serverURL + "trip?devid=" + USER.devid + "&tripid=" + this.tripID;
+		var url = serverURL + "trip?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID);
 		this.xhr.open('GET', url, true);
 		this.xhr.send(null);
 	},
@@ -301,7 +318,7 @@ var TRIPS = {
 	    var names = [];
 	    this.series = [];
 	    for (var i = 0; i < pids.length; i++) {
-	        var series = transport.getJSON(serverURL + "data?devid=" + USER.devid + "&tripid=" + this.tripID + "&offset=" + offset + "&pid=" + pids[i]);
+	        var series = transport.getJSON(serverURL + "data?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "&offset=" + offset + "&pid=" + pids[i]);
 	        if (series) {
 	            // Ordina la serie in base al timestamp
 	            series.sort(function(a, b) {
@@ -330,7 +347,7 @@ var TRIPS = {
 		// local date and time
 		var begin = document.getElementById("begin").value;
 		var end = document.getElementById("end").value;
-		var url = serverURL + "history?devid=" + USER.devid + "&begin=" + getISOFromLocal(parseInt(begin), 0) + "&end=" + getISOFromLocal(parseInt(end), 235959);
+		var url = serverURL + "history?devid=" + encodeURIComponent(USER.devid) + "&begin=" + getISOFromLocal(parseInt(begin), 0) + "&end=" + getISOFromLocal(parseInt(end), 235959);
 		//alert(url);
 		this.xhr.open('GET', url, true);
 		this.xhr.send(null);

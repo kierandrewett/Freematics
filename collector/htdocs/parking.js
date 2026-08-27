@@ -57,25 +57,47 @@ var DASH = {
     data: null,
     updateUserInfo: function (info, devid)
     {
-		if (!USER.info) {
-	        document.getElementById("userinfo").innerHTML = "<input type='button' onclick='location.href=\"/\";' value='Home'></input>";
-			return;
-		}
-        var s = "<select onchange='USER.goDash(this.value)'>";
-		var found = false;
+        var container = document.getElementById("userinfo");
+        container.textContent = "";
+        if (!USER.info) {
+            var home = document.createElement("input");
+            home.type = "button";
+            home.value = "Home";
+            home.onclick = function () { location.href = "/"; };
+            container.appendChild(home);
+            return;
+        }
+        var select = document.createElement("select");
+        select.onchange = function () { USER.goDash(select.value); };
+        var found = false;
         for (var i = 0; i < info.devid.length; i++) {
-            s += "<option value=\"" + info.devid[i] + "\"";
+            var option = document.createElement("option");
+            option.value = info.devid[i];
+            option.textContent = info.devid[i];
             if (info.devid[i] == devid) {
-                s += " selected";
+                option.selected = true;
                 found = true;
             }
-            s += ">" + info.devid[i] + "</option>";
+            select.appendChild(option);
         }
-		if (!found) {
-			s += "<option value=\"" + devid + "\" selected>" + devid + "</option>";
-		}
-        s += "</select><input type='button' onclick='USER.goNextDash(previousSibling.value)' value='Switch'></input><input type='button' onclick='location.href=\"/\";' value='Home'></input>";
-        document.getElementById("userinfo").innerHTML = s;
+        if (!found) {
+            var fallback = document.createElement("option");
+            fallback.value = devid;
+            fallback.textContent = devid;
+            fallback.selected = true;
+            select.appendChild(fallback);
+        }
+        container.appendChild(select);
+        var switchButton = document.createElement("input");
+        switchButton.type = "button";
+        switchButton.value = "Switch";
+        switchButton.onclick = function () { USER.goNextDash(select.value); };
+        container.appendChild(switchButton);
+        var homeButton = document.createElement("input");
+        homeButton.type = "button";
+        homeButton.value = "Home";
+        homeButton.onclick = function () { location.href = "/"; };
+        container.appendChild(homeButton);
     },
 	setText: function(name, text)
 	{
@@ -85,10 +107,6 @@ var DASH = {
     {
         document.getElementById(name).className = className;
     },
-	setHTML: function(name, html)
-	{
-		document.getElementById(name).innerHTML = html;
-	},
 	getPIDValue: function (pid)
 	{
 		for (var i = 0; i < this.data.length; i++) {
