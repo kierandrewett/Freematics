@@ -29,6 +29,10 @@ class HistoryIndexerTest(unittest.TestCase):
             with sqlite3.connect(database) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
                 self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM metric_catalogue").fetchone()[0], 80)
+                self.assertEqual(
+                    connection.execute("SELECT name, category FROM metric_catalogue WHERE pid='0x089'").fetchone(),
+                    ("obd_state", "obd"),
+                )
 
             archive.write_text("0:100,10C:900,10D:20,A:51.0,B:-1.0,0:600,10C:1200,10D:40,A:51.1,B:-1.1\n")
             # Keep the test file active so the final incomplete frame is held back.
@@ -95,6 +99,37 @@ class HistoryIndexerTest(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(gap, (0, 1, 4900))
 
+    def test_scaled_hdop_distance_acceleration_and_diagnostics_are_projected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "CAR" / "2026/08/27/20260827-001247.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text(
+                "0:100,12:1,030:12.3,20:0.1;0.2;0.3,300:1,301:4660,0:600,030:13.0,20:-0.4;-0.5;-0.6\n"
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(
+                root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000
+            )
+            indexer.index_once()
+            with sqlite3.connect(database) as connection:
+                sample = connection.execute(
+                    "SELECT gps_hdop, acceleration_x_g, acceleration_y_g, acceleration_z_g FROM sample WHERE sequence = 0"
+                ).fetchone()
+                self.assertEqual(sample, (0.1, 0.1, 0.2, 0.3))
+                distance = connection.execute(
+                    "SELECT numeric_value FROM sample_metric WHERE pid = '0x030' ORDER BY sequence"
+                ).fetchall()
+                self.assertEqual(distance, [(12.3,), (13.0,)])
+                dtc = connection.execute(
+                    "SELECT status, slot, raw_code, code, system FROM diagnostic_code"
+                ).fetchone()
+                self.assertEqual(dtc, ("stored", 0, 4660, "P1234", "powertrain"))
+                vector = connection.execute(
+                    "SELECT acceleration_x_g FROM sample WHERE sequence = 1"
+                ).fetchone()
+                self.assertEqual(vector, (-0.4,))
+
     def test_same_second_trip_ids_are_isolated_per_device(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"
@@ -141,6 +176,52 @@ class HistoryIndexerTest(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(first_file, second_file)
 
+
+    def test_equals_delimiter_is_indexed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "CAR" / "2026" / "08" / "27" / "20260827-120000.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("0=100,10C=900,0=600,10C=1200\n")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000)
+            self.assertEqual(indexer.index_once(), 1)
+            with sqlite3.connect(database) as connection:
+                values = connection.execute("SELECT numeric_value FROM sample_metric WHERE pid='0x10C' ORDER BY sequence").fetchall()
+            self.assertEqual(values, [(900.0,), (1200.0,)])
+
+    def test_duplicate_pid_fields_remain_in_source_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "CAR" / "2026" / "08" / "27" / "20260827-120000.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("0:100,10C:900,10C:901,0:600,10C:1200\n")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000)
+            self.assertEqual(indexer.index_once(), 1)
+            with sqlite3.connect(database) as connection:
+                values = connection.execute(
+                    "SELECT ordinal, pid, numeric_value FROM sample_field WHERE sequence = 0 ORDER BY ordinal"
+                ).fetchall()
+            self.assertEqual(values, [(0, "0x10C", 900.0), (1, "0x10C", 901.0)])
+
+    def test_incompatible_schema_requires_explicit_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            root.mkdir()
+            database = Path(directory) / "history.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE trip (trip_id TEXT PRIMARY KEY)")
+                connection.commit()
+
+            indexer = HistoryIndexer(root, database, now_ms=lambda: 1234)
+            with self.assertRaisesRegex(RuntimeError, "incompatible history database"):
+                indexer.index_once()
+            self.assertTrue(database.exists())
+
+            rebuilding = HistoryIndexer(root, database, now_ms=lambda: 1234, rebuild=True)
+            self.assertEqual(rebuilding.index_once(), 0)
+            self.assertTrue(database.with_name("history.sqlite.backup-1234").exists())
 
 if __name__ == "__main__":
     unittest.main()

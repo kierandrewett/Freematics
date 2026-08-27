@@ -12,27 +12,63 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import shutil
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+try:
+    from telemetry_catalog import metric_catalog
+except ImportError:  # pragma: no cover - supports package imports
+    from .telemetry_catalog import metric_catalog
+
 TRIP_ID_RE = re.compile(r"^(\d{8})-(\d{6})$")
 FIELD_RE = re.compile(r"(?:^|,)([0-9A-Fa-f]+)[:=]([^,\r\n]*)")
-FRAME_RE = re.compile(r"(?:^|,)0:(\d+)(?=,|$)", re.MULTILINE)
+FRAME_RE = re.compile(r"(?:^|,)0[:=](\d+)(?=,|$)", re.MULTILINE)
 CATALOGUE_RE = re.compile(
     r'OBD_PID\(0x([0-9A-Fa-f]+),\s*([A-Za-z0-9_]+),\s*"([^"]*)",\s*"([^"]*)",\s*(\d+)\)'
 )
 SEAL_AFTER_SECONDS = 60
 GAP_THRESHOLD_MS = 3_000
+DTC_CODE_SLOTS = 16
+DTC_GROUPS = (
+    ("stored", "300", "301"),
+    ("pending", "320", "321"),
+    ("permanent", "340", "341"),
+)
+DTC_PREFIXES = "PCBU"
+DTC_SYSTEMS = ("powertrain", "chassis", "body", "network")
+_REQUIRED_COLUMNS = {
+    "trip": {
+        "device_id", "trip_id", "archive_path", "collector_login_ms",
+        "start_capture_ms", "end_capture_ms", "timeline_start_ms", "timeline_end_ms",
+        "time_basis", "timestamp_quality", "sample_count", "data_bytes", "gap_count",
+        "archive_mtime_ms", "updated_at_ms",
+    },
+    "sample": {
+        "device_id", "trip_id", "sequence", "device_monotonic_ms", "capture_utc_ms",
+        "timeline_ms", "time_basis", "collector_received_ms", "archive_mtime_ms",
+        "timestamp_quality", "latitude", "longitude", "gps_speed_kph",
+        "gps_heading_degrees", "gps_hdop", "gps_satellites",
+    },
+    "sample_metric": {"device_id", "trip_id", "sequence", "pid", "numeric_value", "text_value"},
+}
+_REQUIRED_PRIMARY_KEYS = {
+    "trip": ("device_id", "trip_id"),
+    "sample": ("device_id", "trip_id", "sequence"),
+    "sample_metric": ("device_id", "trip_id", "sequence", "pid"),
+}
 
 
 @dataclass(frozen=True)
 class Frame:
     device_monotonic_ms: int
     fields: dict[str, str]
+    ordered_fields: tuple[tuple[str, str], ...]
 
 
 def trip_start_ms(trip_id: str) -> int:
@@ -65,10 +101,11 @@ def numeric(value: str | None) -> float | None:
 def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
     """Parse complete PID-0-delimited frames from one archive snapshot.
 
-    A frame is complete when the following PID 0 has arrived.  The final frame
+    A frame is complete when the following PID 0 has arrived. The final frame
     is included only for a file known to be sealed; this prevents a partially
     written request from becoming permanent history.
     """
+
     starts = list(FRAME_RE.finditer(raw))
     frames: list[Frame] = []
     end = len(starts) if include_final else max(0, len(starts) - 1)
@@ -82,12 +119,15 @@ def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
         if not match:
             continue
         fields: dict[str, str] = {}
+        ordered_fields: list[tuple[str, str]] = []
         for field in FIELD_RE.finditer(segment):
             pid = field.group(1).upper()
             if pid == "0":
                 continue
-            fields[pid] = field.group(2).split("*", 1)[0]
-        frames.append(Frame(int(match.group(1)), fields))
+            value = field.group(2).split("*", 1)[0]
+            fields[pid] = value
+            ordered_fields.append((pid, value))
+        frames.append(Frame(int(match.group(1)), fields, tuple(ordered_fields)))
     return frames
 
 
@@ -180,6 +220,45 @@ def gps_value(fields: dict[str, str], pid: str) -> float | None:
     return numeric(fields.get(pid))
 
 
+def acceleration_values(fields: dict[str, str]) -> tuple[float | None, float | None, float | None]:
+    """Decode the semicolon-delimited MEMS acceleration field when complete."""
+    raw = fields.get("20")
+    if raw is None:
+        return None, None, None
+    values = [numeric(part) for part in raw.split(";")]
+    if len(values) != 3 or any(value is None for value in values):
+        # Keep malformed vectors in sample_metric.text_value instead of making
+        # a partial vector look like measured acceleration.
+        return None, None, None
+    return values[0], values[1], values[2]
+
+
+def diagnostic_code(raw_code: int) -> tuple[str, str]:
+    """Format the uint16 DTC representation used by teleserver.c."""
+    raw_code &= 0xFFFF
+    family = raw_code >> 14
+    return (
+        f"{DTC_PREFIXES[family]}{(raw_code >> 12) & 0x3:X}{raw_code & 0xFFF:03X}",
+        DTC_SYSTEMS[family],
+    )
+
+
+def diagnostic_rows(fields: dict[str, str]):
+    """Yield decoded DTC detail while retaining raw fields in sample_metric."""
+    for status, count_pid, base_pid in DTC_GROUPS:
+        count = numeric(fields.get(count_pid))
+        slot_limit = DTC_CODE_SLOTS
+        if count is not None:
+            slot_limit = max(0, min(DTC_CODE_SLOTS, int(count)))
+        for slot in range(slot_limit):
+            raw = numeric(fields.get(f"{int(base_pid, 16) + slot:X}"))
+            if raw is None or int(raw) == 0:
+                continue
+            value = int(raw) & 0xFFFF
+            code, system = diagnostic_code(value)
+            yield status, slot, value, code, system
+
+
 def catalogue_category(pid: int) -> str:
     if pid in {0x01, 0x02, 0x03, 0x1C, 0x1E, 0x51}:
         return "status"
@@ -199,37 +278,116 @@ def catalogue_category(pid: int) -> str:
 
 
 class HistoryIndexer:
-    def __init__(self, archive_root: Path, database: Path, now_ms: Callable[[], int] | None = None) -> None:
+    def __init__(
+        self,
+        archive_root: Path,
+        database: Path,
+        now_ms: Callable[[], int] | None = None,
+        *,
+        rebuild: bool = False,
+    ) -> None:
         self.archive_root = archive_root
         self.database = database
         self.now_ms = now_ms or (lambda: int(time.time() * 1_000))
+        self.rebuild = rebuild
+    @staticmethod
+    def _schema_issue(connection: sqlite3.Connection) -> str | None:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if row[0] not in {"sqlite_sequence"}
+        }
+        if not tables:
+            return None
+        for table, columns in _REQUIRED_COLUMNS.items():
+            if table not in tables:
+                return f"missing table {table}"
+            actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            missing = sorted(columns - actual)
+            if missing:
+                return f"{table} is missing columns: {', '.join(missing)}"
+            primary_key = tuple(row[1] for row in connection.execute(f"PRAGMA table_info({table})") if row[5])
+            if primary_key != _REQUIRED_PRIMARY_KEYS[table]:
+                return f"{table} has primary key {primary_key!r}, expected {_REQUIRED_PRIMARY_KEYS[table]!r}"
+        return None
+
+    def _prepare_database(self) -> None:
+        if not self.database.exists():
+            return
+        with closing(sqlite3.connect(self.database)) as connection:
+            issue = self._schema_issue(connection)
+            if issue is not None and self.rebuild:
+                connection.execute("PRAGMA wal_checkpoint(FULL)")
+        if issue is None:
+            return
+        if not self.rebuild:
+            raise RuntimeError(
+                f"incompatible history database: {issue}; use --rebuild with a verified backup before rebuilding"
+            )
+        backup = self.database.with_name(f"{self.database.name}.backup-{self.now_ms()}")
+        if backup.exists():
+            raise RuntimeError(f"history backup already exists: {backup}")
+        shutil.copy2(self.database, backup)
+        self.database.unlink()
+        for suffix in ("-wal", "-shm"):
+            self.database.with_name(self.database.name + suffix).unlink(missing_ok=True)
+
 
     def initialise(self) -> None:
         self.database.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.database) as connection:
+        self._prepare_database()
+        with closing(sqlite3.connect(self.database)) as connection:
+            self._ensure_sample_columns(connection)
             connection.executescript((Path(__file__).with_name("history_schema.sql")).read_text())
             self._populate_catalogue(connection)
+            connection.commit()
+
+    @staticmethod
+    def _ensure_sample_columns(connection: sqlite3.Connection) -> None:
+        """Apply additive columns so an existing projection can be rebuilt safely."""
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(sample)")}
+        if not columns:
+            return
+        for name in ("acceleration_x_g", "acceleration_y_g", "acceleration_z_g"):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE sample ADD COLUMN {name} REAL")
 
     def _populate_catalogue(self, connection: sqlite3.Connection) -> None:
+        """Populate standard and device metric metadata from one catalogue."""
+
+        priorities: dict[int, int] = {}
         catalogue_path = Path(__file__).parent.parent / "obd_pids.h"
-        if not catalogue_path.exists():
-            return
-        for raw_pid, name, description, unit, priority in CATALOGUE_RE.findall(catalogue_path.read_text()):
-            pid = int(raw_pid, 16)
+        if catalogue_path.exists():
+            for raw_pid, _name, _description, _unit, priority in CATALOGUE_RE.findall(catalogue_path.read_text()):
+                pid = 0x100 | int(raw_pid, 16)
+                priorities[pid] = int(priority)
+
+        for pid, definition in metric_catalog().items():
+            if pid >= 0x100:
+                category = catalogue_category(pid - 0x100)
+            else:
+                category = definition.namespace.rsplit("/", 1)[-1]
             connection.execute(
                 """INSERT INTO metric_catalogue(pid, name, description, unit, priority, category)
                    VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(pid) DO UPDATE SET name=excluded.name,
                      description=excluded.description, unit=excluded.unit,
                      priority=excluded.priority, category=excluded.category""",
-                (normalise_pid(f"{0x100 | pid:X}"), name, description, unit, int(priority), catalogue_category(pid)),
+                (
+                    normalise_pid(f"{pid:X}"),
+                    definition.key,
+                    definition.description,
+                    definition.unit,
+                    priorities.get(pid, 3),
+                    category,
+                ),
             )
 
     def index_once(self) -> int:
         self.initialise()
         files = sorted(self.archive_root.glob("*/????/??/??/*.txt"))
         indexed = 0
-        with sqlite3.connect(self.database) as connection:
+        with closing(sqlite3.connect(self.database)) as connection:
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute("PRAGMA foreign_keys = ON")
             for archive in files:
@@ -325,13 +483,16 @@ class HistoryIndexer:
         connection.execute("DELETE FROM sample WHERE device_id = ? AND trip_id = ?", (device_id, trip_id))
         for sequence, (frame, capture_ms, quality) in enumerate(zip(frames, captures, qualities)):
             fields = frame.fields
+            acceleration_x_g, acceleration_y_g, acceleration_z_g = acceleration_values(fields)
+            hdop = gps_value(fields, "12")
             connection.execute(
                 """INSERT INTO sample(
                     device_id, trip_id, sequence, device_monotonic_ms, capture_utc_ms,
                     timeline_ms, time_basis, collector_received_ms, archive_mtime_ms,
                     timestamp_quality, latitude, longitude,
-                    gps_speed_kph, gps_heading_degrees, gps_hdop, gps_satellites
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    gps_speed_kph, gps_heading_degrees, gps_hdop, gps_satellites,
+                    acceleration_x_g, acceleration_y_g, acceleration_z_g
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     device_id,
                     trip_id,
@@ -347,8 +508,11 @@ class HistoryIndexer:
                     gps_value(fields, "B"),
                     gps_value(fields, "D"),
                     gps_value(fields, "E"),
-                    gps_value(fields, "12"),
+                    hdop * 0.1 if hdop is not None else None,
                     int(gps_value(fields, "F")) if gps_value(fields, "F") is not None else None,
+                    acceleration_x_g,
+                    acceleration_y_g,
+                    acceleration_z_g,
                 ),
             )
             for raw_pid, value in fields.items():
@@ -356,6 +520,25 @@ class HistoryIndexer:
                 connection.execute(
                     "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value, text_value) VALUES (?, ?, ?, ?, ?, ?)",
                     (device_id, trip_id, sequence, normalise_pid(raw_pid), parsed, value if parsed is None else None),
+                )
+            for ordinal, (raw_pid, value) in enumerate(frame.ordered_fields):
+                parsed = numeric(value)
+                connection.execute(
+                    "INSERT INTO sample_field(device_id, trip_id, sequence, ordinal, pid, numeric_value, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        device_id,
+                        trip_id,
+                        sequence,
+                        ordinal,
+                        normalise_pid(raw_pid),
+                        parsed,
+                        value if parsed is None else None,
+                    ),
+                )
+            for status, slot, raw_code, code, system in diagnostic_rows(fields):
+                connection.execute(
+                    "INSERT INTO diagnostic_code(device_id, trip_id, sequence, status, slot, raw_code, code, system) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (device_id, trip_id, sequence, status, slot, raw_code, code, system),
                 )
 
         start_ms = capture_start_ms
@@ -383,8 +566,13 @@ def main() -> None:
     parser.add_argument("--database", type=Path, default=Path("/history/history.sqlite"))
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Back up and replace an incompatible SQLite projection before indexing",
+    )
     args = parser.parse_args()
-    indexer = HistoryIndexer(args.archive_root, args.database)
+    indexer = HistoryIndexer(args.archive_root, args.database, rebuild=args.rebuild)
     while True:
         print(f"[HISTORY] indexed {indexer.index_once()} archive files", flush=True)
         if args.once:

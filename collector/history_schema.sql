@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS sample (
     gps_heading_degrees REAL,
     gps_hdop REAL,
     gps_satellites INTEGER,
+    acceleration_x_g REAL,
+    acceleration_y_g REAL,
+    acceleration_z_g REAL,
     PRIMARY KEY (device_id, trip_id, sequence),
     FOREIGN KEY (device_id, trip_id) REFERENCES trip(device_id, trip_id) ON DELETE CASCADE
 );
@@ -49,6 +52,38 @@ CREATE TABLE IF NOT EXISTS sample_metric (
     numeric_value REAL,
     text_value TEXT,
     PRIMARY KEY (device_id, trip_id, sequence, pid),
+    FOREIGN KEY (device_id, trip_id, sequence) REFERENCES sample(device_id, trip_id, sequence) ON DELETE CASCADE
+);
+
+-- This append-only projection preserves duplicate PID fields in their source order.
+-- sample_metric remains the convenient latest-value-per-PID projection.
+CREATE TABLE IF NOT EXISTS sample_field (
+    device_id TEXT NOT NULL,
+    trip_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    ordinal INTEGER NOT NULL,
+    pid TEXT NOT NULL,
+    numeric_value REAL,
+    text_value TEXT,
+    PRIMARY KEY (device_id, trip_id, sequence, ordinal),
+    FOREIGN KEY (device_id, trip_id, sequence) REFERENCES sample(device_id, trip_id, sequence) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS sample_field_pid ON sample_field(device_id, trip_id, pid, sequence, ordinal);
+
+
+-- Diagnostic rows are a decoded projection; the original count/slot fields
+-- remain in sample_metric so malformed or unknown values are never discarded.
+CREATE TABLE IF NOT EXISTS diagnostic_code (
+    device_id TEXT NOT NULL,
+    trip_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    raw_code INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    system TEXT NOT NULL,
+    PRIMARY KEY (device_id, trip_id, sequence, status, slot),
     FOREIGN KEY (device_id, trip_id, sequence) REFERENCES sample(device_id, trip_id, sequence) ON DELETE CASCADE
 );
 
@@ -73,10 +108,14 @@ CREATE TABLE IF NOT EXISTS metric_catalogue (
 
 CREATE INDEX IF NOT EXISTS sample_trip_time ON sample(device_id, trip_id, timeline_ms);
 CREATE INDEX IF NOT EXISTS sample_metric_pid ON sample_metric(device_id, trip_id, pid, sequence);
+CREATE INDEX IF NOT EXISTS diagnostic_trip_time ON diagnostic_code(device_id, trip_id, sequence);
 CREATE INDEX IF NOT EXISTS trip_device_time ON trip(device_id, start_capture_ms DESC);
 CREATE INDEX IF NOT EXISTS metric_catalogue_name ON metric_catalogue(name);
 
-CREATE VIEW IF NOT EXISTS metric_timeline AS
+-- The indexer adds new nullable columns before rerunning this script; recreate views so
+-- an existing projection sees the current evidence columns.
+DROP VIEW IF EXISTS metric_timeline;
+CREATE VIEW metric_timeline AS
 SELECT
     s.device_id,
     s.trip_id,
@@ -95,11 +134,42 @@ SELECT
     s.gps_speed_kph,
     s.gps_heading_degrees,
     s.gps_hdop,
-    s.gps_satellites
+    s.gps_satellites,
+    s.acceleration_x_g,
+    s.acceleration_y_g,
+    s.acceleration_z_g
 FROM sample AS s
 JOIN sample_metric AS m
   ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence;
 
+CREATE VIEW IF NOT EXISTS field_timeline AS
+SELECT
+    s.device_id,
+    s.trip_id,
+    s.sequence,
+    s.device_monotonic_ms,
+    s.capture_utc_ms,
+    s.timeline_ms,
+    s.time_basis,
+    s.timestamp_quality,
+    f.ordinal,
+    f.pid,
+    f.numeric_value,
+    f.text_value,
+    s.latitude,
+    s.longitude,
+    s.gps_speed_kph,
+    s.gps_heading_degrees,
+    s.gps_hdop,
+    s.gps_satellites,
+    s.acceleration_x_g,
+    s.acceleration_y_g,
+    s.acceleration_z_g
+FROM sample AS s
+JOIN sample_field AS f
+  ON f.device_id = s.device_id AND f.trip_id = s.trip_id AND f.sequence = s.sequence;
+
+DROP VIEW IF EXISTS sample_gaps;
 CREATE VIEW IF NOT EXISTS sample_gaps AS
 WITH ordered AS (
     SELECT
@@ -128,6 +198,7 @@ SELECT
 FROM ordered
 WHERE previous_device_monotonic_ms IS NOT NULL
   AND device_monotonic_ms - previous_device_monotonic_ms > 3000;
+DROP VIEW IF EXISTS trip_metric_summary;
 
 CREATE VIEW IF NOT EXISTS trip_metric_summary AS
 SELECT
