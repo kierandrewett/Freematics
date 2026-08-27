@@ -523,15 +523,6 @@ int ishex(char c)
 	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
 }
 
-int isnum(const char* s)
-{
-	if (!s || !*s) return FALSE;
-	while (*s) {
-		if (!isdigit((unsigned char)*s)) return FALSE;
-		s++;
-	}
-	return TRUE;
-}
 
 int checkVIN(const char* vin)
 {
@@ -1396,12 +1387,6 @@ int uhChannels(UrlHandlerParam* param)
 	return FLAG_DATA_RAW;
 }
 
-char* findNextToken(char* s)
-{
-	if (!s) return 0;
-	while (*s && (isdigit((unsigned char)*s) || *s == '-' || *s == '.' || *s == ',' || *s == '/' || *s == ';')) s++;
-	return s + 1;
-}
 
 CHANNEL_DATA* assignChannel(const char* devid)
 {
@@ -1868,6 +1853,13 @@ void GetFullPath(char* buffer, char* argv0, char* path)
 
 int genHttpPostPayload(CHANNEL_DATA* pld);
 
+static int copyArgument(char* destination, size_t capacity, const char* value)
+{
+	if (!destination || !capacity || !value) return 0;
+	int length = snprintf(destination, capacity, "%s", value);
+	return length >= 0 && (size_t)length < capacity;
+}
+
 int main(int argc,char* argv[])
 {
 	fprintf(stderr, "Freematics Hub Version %s (built on %s)\n(C)2016-2020 Mediatronic Pty Ltd / Developed by Stanley Huang\nThis is free software and is distributed under GPL v3.0\n\n", REVISION, __DATE__);
@@ -1885,6 +1877,7 @@ int main(int argc,char* argv[])
 	GetFullPath(path, argv[0], "htdocs");
 	mwInitParam(&httpParam, 0, path, FLAG_DISABLE_RANGE, 0, 0);
 	httpParam.maxClients = 64;
+
 	httpParam.maxClientsPerIP = 8;
 	httpParam.httpPort = 8080;
 	httpParam.udpPort = 8081;
@@ -1942,22 +1935,37 @@ int main(int argc,char* argv[])
 					noGUI = 1;
 					break;
 				case 'l':
-					if ((++i)<argc) strncpy(logDir, argv[i], sizeof(logDir) - 1);
+					if (++i >= argc || !copyArgument(logDir, sizeof(logDir), argv[i])) {
+						fprintf(stderr, "Invalid -l argument\n");
+						return -1;
+					}
 					break;
 				case 'd':
-					if ((++i)<argc) strncpy(dataDir, argv[i], sizeof(dataDir) - 1);
+					if (++i >= argc || !copyArgument(dataDir, sizeof(dataDir), argv[i])) {
+						fprintf(stderr, "Invalid -d argument\n");
+						return -1;
+					}
 					break;
 				case 'k':
-					if ((++i)<argc) strncpy(serverKey, argv[i], sizeof(serverKey) - 1);
+					if (++i >= argc || !copyArgument(serverKey, sizeof(serverKey), argv[i])) {
+						fprintf(stderr, "Invalid -k argument\n");
+						return -1;
+					}
 					break;
 				case 'u':
 					if (++i < argc) httpParam.udpPort = atoi(argv[i]);
 					break;
 				case 'n':
-					if (++i < argc) strncpy(username, argv[i], sizeof(username) - 1);
+					if (++i >= argc || !copyArgument(username, sizeof(username), argv[i])) {
+						fprintf(stderr, "Invalid -n argument\n");
+						return -1;
+					}
 					break;
 				case 'w':
-					if (++i < argc) strncpy(password, argv[i], sizeof(password) - 1);
+					if (++i >= argc || !copyArgument(password, sizeof(password), argv[i])) {
+						fprintf(stderr, "Invalid -w argument\n");
+						return -1;
+					}
 					break;
 				}
 			}
@@ -1965,7 +1973,7 @@ int main(int argc,char* argv[])
 	}
 
 	if (!password[0]) {
-		fprintf(stderr, "HTTP authentication password required; use -w or place the collector behind an authenticated local service\n");
+		fprintf(stderr, "HTTP authentication password required; use -w\n");
 		return -1;
 	}
 	if (httpParam.udpPort && !serverKey[0]) {
