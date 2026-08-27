@@ -8,9 +8,8 @@ after VIN/ECU identity and a positive response are captured.
 
 Candidate observations are represented as evidence, not as active commands:
 
-- service `0x1A` / identifier `0xDF`: ECU odometer candidate;
+- service `0x1A` / identifiers `0x90`, `0x92`, `0x97`, `0x9A`, `0xB0`, `0xDE`, and `0xDF`: VIN, supplier, engine identity, diagnostic data, ECU address, module identity, and ECU odometer candidates;
 - service `0x22`: ECU data-identifier candidate family;
-- service `0x1A` / identifier `0x90`: VIN candidate.
 
 All are read-only, identity-gated, and experimental.  A negative response is
 valuable capability evidence and must not trigger retries at high frequency.
