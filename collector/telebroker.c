@@ -83,31 +83,41 @@ Connection: keep-alive\r\n\
 Accept: application/vnd.api+json\r\n\
 Api-Key: [API token]\r\n\r\n%s"
 
+static int isSafeProxyValue(const char* value)
+{
+	if (!value) return 0;
+	for (const unsigned char* p = (const unsigned char*)value; *p; p++) {
+		if (*p < 0x21 || *p > 0x7e || *p == '&' || *p == '=' || *p == '?' || *p == '#') return 0;
+	}
+	return 1;
+}
+
 int genRequest(char* buf, int bufsize)
 {
 	uint32_t date = 0;
 	uint32_t time = 0;
-	float lat = 0;
-	float lng = 0;
-	float alt = 0;
-	float speed = 0;
-	int heading = 0;
-	int hdop = 0;
-	uint8_t mask = 0;
 	int len = 0;
+	if (!buf || bufsize <= 0) return 0;
 
 	for (int i = 0; i < MAX_CHANNELS; i++) {
 		if (ld[i].id) {
 			CHANNEL_DATA* pld = ld + i;
+			if (!isSafeProxyValue(pld->devid)) return 0;
 
-			if ((pld->flags & FLAG_PINGED)) {
-				len = snprintf(buf, bufsize, "GET ?id=%s HTTP/1.1\r\nConnection: keep-alive\r\n\r\n", pld->devid);
+			if (pld->flags & FLAG_PINGED) {
+				len = snprintf(buf, (size_t)bufsize, "GET ?id=%s HTTP/1.1\r\nConnection: keep-alive\r\n\r\n", pld->devid);
+				if (len < 0 || len >= bufsize) return 0;
 				pld->flags &= ~FLAG_PINGED;
 				fprintf(stderr, "Ping responded\n");
 				break;
 			}
 
 			if (pld->deviceTick == pld->proxyTick) continue;
+			if (!isSafeProxyValue(pld->data[PID_GPS_LATITUDE].value)
+				|| !isSafeProxyValue(pld->data[PID_GPS_LONGITUDE].value)
+				|| !isSafeProxyValue(pld->data[PID_GPS_ALTITUDE].value)
+				|| !isSafeProxyValue(pld->data[PID_GPS_HEADING].value)
+				|| !isSafeProxyValue(pld->data[PID_GPS_HDOP].value)) return 0;
 
 			char isoTime[26];
 			char* p = isoTime + sprintf(isoTime, "%04u-%02u-%02uT%02u:%02u:%02u",
@@ -118,7 +128,7 @@ int genRequest(char* buf, int bufsize)
 			*p = 'Z';
 			*(p + 1) = 0;
 
-			len = snprintf(buf, bufsize, "GET ?id=%s&timestamp=%s&lat=%s&lon=%s&altitude=%s&speed=%.2f&heading=%s&hdop=%.1f HTTP/1.1\r\nConnection: keep-alive\r\n\r\n",
+			len = snprintf(buf, (size_t)bufsize, "GET ?id=%s&timestamp=%s&lat=%s&lon=%s&altitude=%s&speed=%.2f&heading=%s&hdop=%.1f HTTP/1.1\r\nConnection: keep-alive\r\n\r\n",
 				pld->devid, isoTime,
 				pld->data[PID_GPS_LATITUDE].value,
 				pld->data[PID_GPS_LONGITUDE].value,
@@ -126,13 +136,7 @@ int genRequest(char* buf, int bufsize)
 				(float)atof(pld->data[PID_GPS_SPEED].value) / 1.852f,
 				pld->data[PID_GPS_HEADING].value,
 				(float)atoi(pld->data[PID_GPS_HDOP].value) / 10);
-
-			/*
-			char* payload = genHttpPostPayload(pld);
-			len = snprintf(buf, bufsize, HTTP_REQUEST_TEMPLATE, (unsigned int)strlen(payload), payload);
-			free(payload);
-			*/
-
+			if (len < 0 || len >= bufsize) return 0;
 			pld->proxyTick = pld->deviceTick;
 			break;
 		}

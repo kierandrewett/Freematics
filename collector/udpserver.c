@@ -100,6 +100,21 @@ int addChecksump(char* data)
 	return (int)(s - data);
 }
 
+static void logUDPRejection(const char* reason)
+{
+	static uint64_t window = 0;
+	static unsigned int count = 0;
+	uint64_t now = GetTickCount64();
+	if (now - window >= 1000) {
+		window = now;
+		count = 0;
+	}
+	if (count < 4) {
+		fprintf(stderr, "[UDP] rejected: %s\n", reason ? reason : "invalid packet");
+		count++;
+	}
+}
+
 int incomingUDPCallback(void* _hp)
 {
 	HttpParam* hp = (HttpParam*)_hp;
@@ -107,7 +122,6 @@ int incomingUDPCallback(void* _hp)
 	socklen_t socklen = sizeof(cliaddr);
 	char buf[4096];
 	int recv;
-	char* hostaddr;
 
 	if ((recv = recvfrom(hp->udpSocket, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&cliaddr, &socklen)) <= 0)
 		return -1;
@@ -119,15 +133,19 @@ int incomingUDPCallback(void* _hp)
 	*/
 
 	buf[recv] = 0;
-	hostaddr = inet_ntoa(cliaddr.sin_addr);
-	fprintf(stderr, "%u bytes from %s | ", recv, hostaddr);
+	for (int i = 0; i < recv; i++) {
+		unsigned char value = (unsigned char)buf[i];
+		if (value < 0x20 || value == 0x7f) {
+			logUDPRejection("control character");
+			return -1;
+		}
+	}
 
 	// validate checksum
 	if (!verifyChecksum(buf)) {
-		fprintf(stderr, "UDP data checksum mismatch\n%s\n", buf);
+		logUDPRejection("checksum mismatch");
 		return -1;
 	}
-
 	CHANNEL_DATA* pld = 0;
 	char *msg = 0;
 	char *data;
@@ -137,7 +155,7 @@ int incomingUDPCallback(void* _hp)
 	data = strchr(buf, '#');
 	if (!data) {
 		// invalid header
-		fprintf(stderr, "Invalid data received - %s\n", buf);
+		logUDPRejection("missing header");
 		return -1;
 	}
 
@@ -278,13 +296,13 @@ int incomingUDPCallback(void* _hp)
 		if (deviceTick) pld->deviceTick = deviceTick;
 	}
 	if (!pld) {
-		fprintf(stderr, "INVALID CHANNEL - %s\n", buf);
+		logUDPRejection("unknown channel");
 		return -1;
 	}
 
 	/* Login establishes the peer; every other packet must come from it. */
 	if (eventID != EVENT_LOGIN && !authorizedPeer(pld, &cliaddr)) {
-		fprintf(stderr, "Unauthorized peer\n");
+		logUDPRejection("unauthorized peer");
 		return -1;
 	}
 

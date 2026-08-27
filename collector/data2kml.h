@@ -3,6 +3,7 @@
 * Distributed under GPL v3.0 license
 * (c)2013 Written by Stanley Huang
 *************************************************************************/
+#include <stdint.h>
 
 typedef struct {
 	uint32_t timestamp;
