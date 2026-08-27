@@ -37,7 +37,7 @@ This firmware is not certified for six months connected directly to a vehicle ba
 2. Unplug the Freematics unit from USB.
 3. Insert it firmly into the car's OBD-II socket.
 4. Turn the ignition on without starting the engine.
-5. Leave it powered for 90 seconds while it discovers the ECU, reads the VIN and supported PIDs, scans stored/pending/permanent fault codes, acquires GNSS, and registers on LTE.
+5. Leave it powered for 90 seconds while it discovers the ECU, reads the VIN and supported PIDs, starts the stored/pending/permanent fault-code scan rotation, acquires GNSS, and registers on LTE.
 6. Check the device at [Freematics Admin](https://freematics-admin.drewett.dev/) or open the [Grafana vehicle dashboard](https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0).
 7. Once ECU data is visible, start the engine and leave it idling for two minutes. This adds live RPM, load, temperatures, fuel/air readings, voltage, and other ECU-advertised values to the inventory.
 
@@ -52,7 +52,7 @@ The unit sends data autonomously over the SIM. A laptop is only needed if live s
 ## What is collected
 
 - Every numeric standard Mode 01 PID that the ECU advertises as supported, with a complete raw metric table as well as friendly names
-- Core values every cycle: vehicle speed, engine RPM, calculated load, and throttle
+- Bounded fast OBD polling for core driving metrics, with at most two priority-1 PIDs per 500 ms slice
 - All other supported standard PIDs in a bus-safe rotating poll
 - Stored Mode 03, pending Mode 07, and permanent Mode 0A diagnostic trouble codes
 - VIN, battery voltage, device temperature, LTE/Wi-Fi signal, and connection state
