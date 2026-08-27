@@ -770,6 +770,7 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		// save data to log file
 		if (pld->fp) {
 			fprintf(pld->fp, "%s\n", payload);
+			fflush(pld->fp);
 		}
 	}
 
