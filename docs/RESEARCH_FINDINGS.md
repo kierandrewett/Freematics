@@ -263,3 +263,40 @@ proprietary decoders. Until the connected car supplies a positive capture, the
 registry can validate and classify candidates but must not poll them. The
 first vehicle session must therefore collect identity and passive evidence
 before any single known read-only candidate is enabled.
+
+## Further research: Corsa routing and software boundaries
+
+The additional source review did not produce a confirmed Corsa D proprietary
+data-identifier map. It did produce useful boundaries for the next vehicle
+session:
+
+* The [Corsa D steering-wheel-control project](https://gitlab.com/ajwilson/corsa-d-swc/-/raw/master/README.md)
+  records medium-speed CAN at about 95 kbit/s and a body-network example using
+  CAN ID `0x206`. It does not establish engine ECU diagnostic routing.
+* [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
+  records passive Corsa D captures and identified ECUs. It does not publish a
+  diagnostic service or data-identifier map.
+* The [Scapy GMLAN source](https://raw.githubusercontent.com/secdev/scapy/master/scapy/contrib/automotive/gm/gmlan.py)
+  maps service `0x1A` to ReadDataByIdentifier, `0x5A` to its positive response,
+  `0x22` to ReadDataByParameterIdentifier, `0x62` to its positive response,
+  and `0x7F` to a negative response. It lists generic identifiers such as
+  `0x90`, `0x92`, `0x97`, `0x9A`, `0xB0`, `0xDE` and `0xDF`, and requires an
+  addressing scheme of 2, 3 or 4 bytes. These values remain generic candidates.
+* [python-can-isotp](https://raw.githubusercontent.com/pylessard/python-can-isotp/v2.x/isotp/protocol.py)
+  provides bounded single-frame, first-frame, consecutive-frame and
+  flow-control parsing. [udsoncan](https://raw.githubusercontent.com/pylessard/python-udsoncan/master/udsoncan/Response.py)
+  provides explicit positive, negative and incomplete-response handling. Both
+  are transport and envelope references, not proof of Corsa support.
+* The [OBDb schema](https://raw.githubusercontent.com/OBDb/.schemas/main/signals.json)
+  models request headers, response filters, extended addresses, frequencies,
+  scaling, units, ranges and null values. It does not provide the evidence,
+  provenance or positive-response contract required by this project.
+* [OpenDBC](https://raw.githubusercontent.com/commaai/opendbc/master/docs/CARS.md)
+  and the [OBDb Vauxhall Corsa-e profile](https://raw.githubusercontent.com/OBDb/VauxhallOpel-Corsa-e/main/generations.yaml)
+  are not Corsa D evidence. OpenDBC includes passive DBC and vehicle-port
+  data, while the Corsa-e profile describes the 2020+ electric model.
+
+The next safe implementation boundary is therefore a richer disabled
+signalset: retain the request and response route, exact identity range, raw
+capture, source revision, decoder and capability result. Do not copy a DID,
+ECU address, DBC scale or write-capable operation from another model.
