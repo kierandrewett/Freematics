@@ -29,10 +29,15 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+try:
+    from telemetry_catalog import metric_values, readable_metrics
+except ImportError:  # pragma: no cover - supports package imports
+    from .telemetry_catalog import metric_values, readable_metrics
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_SEGMENT_RECORDS = 5_000
 TRIP_RE = re.compile(r"^\d{8}-\d{6}$")
 FRAME_RE = re.compile(rb"(?:^|,)0[:=](\d+)(?=,|$)", re.MULTILINE)
@@ -126,6 +131,8 @@ def source_identity(root: Path, archive: Path) -> tuple[str, str, str, str, str]
     trip_id = Path(filename).stem
     if not TRIP_RE.fullmatch(trip_id) or not (year.isdigit() and month.isdigit() and day.isdigit()):
         return None
+    if not device.isascii() or not device.isalnum() or not 1 <= len(device) < 32:
+        return None
     return relative, device, year, month, day + "/" + trip_id
 
 
@@ -139,7 +146,7 @@ class TelemetryGitMirror:
         state_dir: Path,
         *,
         flush_seconds: int = 120,
-        now_ms: callable | None = None,
+        now_ms: Callable[[], int] | None = None,
         git_push: bool = True,
         git_remote: str = "origin",
     ) -> None:
@@ -186,28 +193,37 @@ class TelemetryGitMirror:
             os.fsync(handle.fileno())
         return len(records)
 
-    def _read_new_lines(self, archive: Path, cursor: dict[str, Any]) -> tuple[list[bytes], int, int]:
+    def _read_new_lines(self, archive: Path, cursor: dict[str, Any]) -> tuple[list[bytes], int, int, str]:
         raw = archive.read_bytes()
         offset = int(cursor.get("offset", 0))
         line_number = int(cursor.get("line_number", 0))
-        if offset > len(raw):
-            # A collector rotation/truncation is a new source revision.  We
-            # replay it rather than skipping bytes; deterministic event IDs
-            # make a normal restart idempotent.
+        prefix_hash = str(cursor.get("prefix_sha256", ""))
+        reset = offset > len(raw)
+        if not reset and offset and prefix_hash:
+            reset = hashlib.sha256(raw[:offset]).hexdigest() != prefix_hash
+        if not reset and offset and not prefix_hash:
+            # Establish an integrity anchor for cursors written by schema 1.
+            # The first replay is idempotent because event IDs include payload
+            # hashes and flush de-duplicates records.
+            reset = True
+        if reset:
+            # A collector rotation/truncation or an in-place mutation is a new
+            # source revision. Replay it rather than skipping bytes.
             offset = 0
             line_number = 0
         suffix = raw[offset:]
         complete = suffix.splitlines(keepends=True)
         lines: list[bytes] = []
         consumed = 0
-        for index, chunk in enumerate(complete):
+        for chunk in complete:
             if not chunk.endswith((b"\n", b"\r")):
                 # Hold an unterminated final line until the collector closes it.
                 break
             lines.append(chunk.rstrip(b"\r\n"))
             consumed += len(chunk)
             line_number += 1
-        return lines, offset + consumed, line_number
+        next_offset = offset + consumed
+        return lines, next_offset, line_number, hashlib.sha256(raw[:next_offset]).hexdigest()
 
     def scan_once(self) -> int:
         """Append newly complete uploads to the durable spool."""
@@ -223,10 +239,16 @@ class TelemetryGitMirror:
             relative, device_id, year, month, day_trip = identity
             day, trip_id = day_trip.split("/", 1)
             cursor = dict(state.get("files", {}).get(relative, {}))
-            lines, next_offset, next_line = self._read_new_lines(archive, cursor)
+            lines, next_offset, next_line, prefix_sha256 = self._read_new_lines(archive, cursor)
+            updates[relative] = {
+                "offset": next_offset,
+                "line_number": next_line,
+                "size": archive.stat().st_size,
+                "prefix_sha256": prefix_sha256,
+            }
             if not lines:
                 continue
-            for line_index, payload in enumerate(lines, start=int(cursor.get("line_number", 0)) + 1):
+            for line_index, payload in enumerate(lines, start=next_line - len(lines) + 1):
                 batch_id = event_id(relative, str(line_index), hashlib.sha256(payload).hexdigest())
                 frames = parse_frames(payload)
                 records.append(
@@ -258,6 +280,8 @@ class TelemetryGitMirror:
                             "frame_index": frame_index,
                             "device_monotonic_ms": frame.device_monotonic_ms,
                             "fields": frame.fields,
+                            "metrics": readable_metrics(frame.fields),
+                            "metric_values": metric_values(frame.fields),
                             "raw_frame": frame.raw.decode("utf-8", errors="replace"),
                             "raw_frame_b64": base64.b64encode(frame.raw).decode("ascii"),
                             "checksum_hex": frame.checksum_hex,
@@ -265,13 +289,16 @@ class TelemetryGitMirror:
                             "mirror_observed_at": observed_at,
                         }
                     )
-            updates[relative] = {"offset": next_offset, "line_number": next_line, "size": archive.stat().st_size}
+        if updates:
+            state["files"].update(updates)
         if not records:
+            if updates:
+                self._write_state(state)
             return 0
         self._append_spool(records)
-        state["files"].update(updates)
         self._write_state(state)
         return len(records)
+
 
     def _ensure_repo_metadata(self) -> None:
         self.repo.mkdir(parents=True, exist_ok=True)
