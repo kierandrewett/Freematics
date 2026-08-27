@@ -8,3 +8,5 @@ collector/teleserver
 *.db
 .beads-credential-key
 .beads/proxieddb/
+**/__pycache__/
+*.pyc

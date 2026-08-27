@@ -100,8 +100,9 @@ Repository layout
 
 * Root: Model B TeleLogger firmware and PlatformIO configuration
 * `lib/`: only the FreematicsPlus, FreematicsOLED and embedded HTTP libraries required by the firmware
-* `collector/`: matching Freematics Hub-compatible ingestion server
-* `monitoring/`: generated Grafana dashboards and their maintainable Python source. Provision `grafana-live.json` for the current device link and fresh telemetry, and `grafana-trips.json` for the historical trip index, route and selected-trip evidence. `grafana-dashboard.json` remains as a backwards-compatible combined dashboard. Durable capture-time history is specified in [`monitoring/HISTORICAL_SQL.md`](monitoring/HISTORICAL_SQL.md); the Trips dashboard's SQLite panel remains a labelled seam until its importer and `freematics-history` datasource are provisioned.
+* `collector/`: matching Freematics Hub-compatible ingestion server, rebuildable SQLite history indexer, safe telemetry mirror, and identity-gated vehicle profile registry
+* `protocols/`: standards and manufacturer profile evidence. Opel/Vauxhall Corsa D candidates remain read-only and disabled until VIN, engine code, ECU address, and raw positive responses are captured.
+* `monitoring/`: generated Grafana dashboards and their maintainable Python source. Provision `grafana-live.json` for the current device link and fresh telemetry, and `grafana-trips.json` for the historical trip index, route, quality evidence, diagnostics, efficiency, performance, and raw metrics. `grafana-dashboard.json` remains as a backwards-compatible combined dashboard. The durable SQLite projection is built with `PYTHONPATH=collector python3 collector/history_indexer.py --archive-root /path/to/data --database /path/to/history.sqlite --once`; see [`monitoring/HISTORICAL_SQL.md`](monitoring/HISTORICAL_SQL.md).
 
 Prerequisites
 -------------

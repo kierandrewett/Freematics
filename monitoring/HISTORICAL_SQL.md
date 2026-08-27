@@ -4,124 +4,90 @@ Prometheus is the live telemetry store. Its retention is bounded and it cannot
 reconstruct capture-time samples after expiry. The Trips dashboard therefore
 has a SQLite datasource seam with UID `freematics-history`.
 
-The archive importer must expose a read-only SQLite database with these tables
-and views. It uses milliseconds for timestamp columns so it can retain the
-device capture clock and an archive-file receipt approximation separately.
-`capture_utc_ms` is populated only from valid GNSS date/time fields (or a
-monotonic interpolation explicitly marked `anchored`). Old archives without a
-GNSS date remain `unknown` and are not placed on a fabricated UTC timeline:
+## Current schema
 
-```sql
-CREATE TABLE IF NOT EXISTS trip (
-    trip_id TEXT PRIMARY KEY,
-    device_id TEXT NOT NULL,
-    archive_path TEXT NOT NULL UNIQUE,
-    collector_login_ms INTEGER NOT NULL,
-    start_capture_ms INTEGER,
-    end_capture_ms INTEGER,
-    timestamp_quality TEXT NOT NULL,
-    sample_count INTEGER NOT NULL DEFAULT 0,
-    data_bytes INTEGER NOT NULL DEFAULT 0,
-    gap_count INTEGER NOT NULL DEFAULT 0,
-    updated_at_ms INTEGER NOT NULL
-);
+The source of truth is [`collector/history_schema.sql`](../collector/history_schema.sql).
+The indexer is [`collector/history_indexer.py`](../collector/history_indexer.py).
+The database is a rebuildable projection of the raw `data/<device>/.../*.txt`
+files. The raw files remain canonical.
 
-CREATE TABLE IF NOT EXISTS sample (
-    trip_id TEXT NOT NULL REFERENCES trip(trip_id) ON DELETE CASCADE,
-    device_id TEXT NOT NULL,
-    sequence INTEGER NOT NULL,
-    device_monotonic_ms INTEGER NOT NULL,
-    capture_utc_ms INTEGER,
-    collector_received_ms INTEGER,
-    timestamp_quality TEXT NOT NULL,
-    latitude REAL,
-    longitude REAL,
-    gps_speed_kph REAL,
-    gps_heading_degrees REAL,
-    gps_hdop REAL,
-    gps_satellites INTEGER,
-    PRIMARY KEY (trip_id, sequence)
-);
+The current schema uses these boundaries:
 
-CREATE TABLE IF NOT EXISTS sample_metric (
-    trip_id TEXT NOT NULL,
-    sequence INTEGER NOT NULL,
-    pid TEXT NOT NULL,
-    numeric_value REAL,
-    text_value TEXT,
-    PRIMARY KEY (trip_id, sequence, pid),
-    FOREIGN KEY (trip_id, sequence) REFERENCES sample(trip_id, sequence) ON DELETE CASCADE
-);
+* `trip` has the composite key `(device_id, trip_id)`. It stores collector
+  login time, optional GNSS capture bounds, a display timeline, timestamp
+  quality, sample and gap counts, and the source archive path.
+* `sample` has the composite key `(device_id, trip_id, sequence)`. It stores
+  the device monotonic clock, optional `capture_utc_ms`, `timeline_ms`,
+  `time_basis`, timestamp quality, GNSS coordinates, speed, heading, HDOP,
+  satellite count, and nullable MEMS acceleration components.
+* `sample_metric` stores numeric and text values for each PID in a sample.
+  The PID is normalised as `0xNNN`, with standard Mode 01 values in the
+  `0x100` range and device fields in their original range.
+* `sample_field` and `field_timeline` preserve every PID occurrence in source
+  order. `sample_metric` remains the one-row-per-PID projection for aggregate
+  queries, so duplicate fields must use the occurrence-preserving view.
+* `diagnostic_code` is a decoded view of stored, pending, and permanent DTC
+  count/slot fields. It retains status, slot, raw uint16 code, formatted code,
+  system, and sample time. It does not replace the raw fields.
+* `metric_catalogue`, `metric_timeline`, `sample_gaps`, and
+  `trip_metric_summary` provide metadata and bounded query surfaces.
+* `ingest_file` records content hashes, processed size, sealing state, and
+  mutation detection so an index pass is idempotent.
 
-CREATE TABLE IF NOT EXISTS metric_catalogue (
-    pid TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT NOT NULL,
-    unit TEXT NOT NULL,
-    priority INTEGER NOT NULL,
-    category TEXT NOT NULL
-);
+`capture_utc_ms` is populated only from valid GNSS date/time fields or a
+monotonic interpolation anchored by valid GNSS. If capture UTC is unknown,
+`timeline_ms` uses a session-relative display position and `time_basis` is
+`collector_session`. This makes a row navigable without presenting the
+collector login time as the vehicle's capture time. Dashboard labels must
+show the basis and quality.
 
-CREATE INDEX IF NOT EXISTS sample_trip_time ON sample(trip_id, capture_utc_ms);
-CREATE INDEX IF NOT EXISTS sample_metric_pid ON sample_metric(trip_id, pid, sequence);
-CREATE INDEX IF NOT EXISTS trip_device_time ON trip(device_id, start_capture_ms DESC);
-CREATE INDEX IF NOT EXISTS metric_catalogue_name ON metric_catalogue(name);
+The indexer treats an archive as sealed after its modification time has been
+quiet for the configured sealing interval. This is an operational boundary,
+not proof that the vehicle produced a final frame. An active file holds its
+final incomplete PID-0 frame until a later frame or sealing pass makes it
+safe to project.
 
-CREATE VIEW IF NOT EXISTS metric_timeline AS
-SELECT s.device_id, s.trip_id, s.sequence, s.device_monotonic_ms,
-       s.capture_utc_ms, s.collector_received_ms, s.timestamp_quality,
-       m.pid, m.numeric_value, m.text_value, s.latitude, s.longitude,
-       s.gps_speed_kph, s.gps_heading_degrees, s.gps_hdop, s.gps_satellites
-FROM sample AS s
-JOIN sample_metric AS m USING (trip_id, sequence);
+## Dashboard query contract
 
-CREATE VIEW IF NOT EXISTS sample_gaps AS
-WITH ordered AS (
-  SELECT trip_id, sequence, device_monotonic_ms, capture_utc_ms,
-         timestamp_quality,
-         LAG(sequence) OVER (PARTITION BY trip_id ORDER BY sequence) AS previous_sequence,
-         LAG(device_monotonic_ms) OVER (PARTITION BY trip_id ORDER BY sequence) AS previous_device_monotonic_ms,
-         LAG(capture_utc_ms) OVER (PARTITION BY trip_id ORDER BY sequence) AS previous_capture_utc_ms
-  FROM sample
-)
-SELECT *, device_monotonic_ms - previous_device_monotonic_ms AS gap_ms
-FROM ordered
-WHERE previous_device_monotonic_ms IS NOT NULL
-  AND device_monotonic_ms - previous_device_monotonic_ms > 3000;
+Grafana's global `$__from` and `$__to` values are milliseconds. `$device` and
+`$trip` are SQL-escaped dashboard variables. Historical panels must filter
+`timeline_ms`, not `capture_utc_ms`, so legacy rows with unknown capture UTC
+remain inspectable. They must show `capture_utc_ms`, `timeline_ms`,
+`time_basis`, and timestamp quality when the distinction matters.
 
-CREATE VIEW IF NOT EXISTS trip_metric_summary AS
-SELECT m.trip_id, m.pid, c.name, c.description, c.unit, c.category,
-       COUNT(m.numeric_value) AS sample_count,
-       MIN(m.numeric_value) AS minimum, AVG(m.numeric_value) AS average,
-       MAX(m.numeric_value) AS maximum
-FROM sample_metric AS m
-LEFT JOIN metric_catalogue AS c ON c.pid = m.pid
-GROUP BY m.trip_id, m.pid, c.name, c.description, c.unit, c.category;
-```
-
-The current contract panel uses this Grafana SQLite query. Grafana's global
-`$__from` and `$__to` variables are milliseconds, matching
-`start_capture_ms`. `$device` and `$trip` are dashboard variables. The
-all-trips value is `$__all`, matching the existing Prometheus selector.
+Trip lists should use the display timeline and include trips with an unknown
+capture timestamp:
 
 ```sql
 SELECT trip_id AS "Trip",
        device_id AS "Vehicle",
-       CASE WHEN start_capture_ms IS NULL THEN 'Unknown capture time'
-            ELSE datetime(start_capture_ms / 1000, 'unixepoch') END AS "Start",
-       CASE WHEN end_capture_ms IS NULL THEN 'Unknown capture time'
-            ELSE datetime(end_capture_ms / 1000, 'unixepoch') END AS "End",
+       CASE WHEN timeline_start_ms IS NULL THEN 'Unknown display time'
+            ELSE datetime(timeline_start_ms / 1000, 'unixepoch') END AS "Start",
+       CASE WHEN timeline_end_ms IS NULL THEN 'Unknown display time'
+            ELSE datetime(timeline_end_ms / 1000, 'unixepoch') END AS "End",
        timestamp_quality AS "Timestamp quality",
+       time_basis AS "Display time basis",
        sample_count AS "Samples",
+       gap_count AS "Gaps",
        archive_path AS "Archive"
 FROM trip
 WHERE device_id = '$device'
-  AND (start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)
-       OR (start_capture_ms IS NULL AND collector_login_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)))
-  AND ('$trip' = '$__all' OR trip_id = '$trip')
-ORDER BY start_capture_ms DESC;
+  AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)
+ORDER BY timeline_start_ms DESC;
 ```
 
-Until this importer and datasource are provisioned, the panel is intentionally
-labelled as a pending durable archive seam. It must not be treated as proof
-that historical data is currently available.
+Metric aggregates must join `sample_metric` to `sample` before applying the
+time range. A `MAX(numeric_value)` is not a latest value. Use the highest
+sequence in the selected range when a panel says `Latest`, and use `MIN`,
+`AVG`, or `MAX` only when the panel names that aggregate.
+
+Do not turn absent PIDs into zero. Keep `numeric_value` NULL for non-numeric
+or unavailable fields, retain `text_value` for vectors and codes, and show
+unsupported or stale data as unavailable. Derived fuel rate and economy must
+identify their source and assumptions.
+
+The database datasource is intentionally read-only. The indexer may rebuild
+the projection from raw archives, but a dashboard query must not mutate
+files, generate KML, or update ingest state. Any migration from an older
+schema must create a verified backup and rebuild the projection; do not rely
+on `CREATE TABLE IF NOT EXISTS` to change an existing table.

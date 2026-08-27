@@ -213,3 +213,53 @@ another.
   overnight periods before changing the motion threshold.
 * Analysis gate: no dashboard or MCP finding may hide unsupported data,
   stale data, estimated fuel values, or a low-quality GNSS position.
+
+## Primary diagnostic source boundary
+
+The generic diagnostic layers have different responsibilities:
+
+* [SAE J1979_202505](https://saemobilus.sae.org/standards/j1979_202505-e-e-diagnostic-test-modes) defines the emissions-related diagnostic test modes and their communication scope.
+* [SAE J1979-DA 202607](https://saemobilus.sae.org/standards/j1979da_202607-j1979-da-digital-annex-e-e-diagnostic-test-modes) maintains the current global registry of regulated emissions and propulsion data identifiers.
+* [ISO 15765-2:2024](https://www.iso.org/cms/render/live/en/sites/isoorg/contents/data/standard/08/42/84211.html?browse=tc) defines CAN transport and network behaviour. [ISO 15765-4:2021](https://www.iso.org/standard/78384.html) defines the emissions-related OBD connection requirements.
+* [ISO 14229-1:2026](https://www.iso.org/standard/87962.html?browse=tc) defines UDS application services. UDS service `0x22` is not the same contract as any SAE J1979 PID.
+* [Freematics ONE+ Model B documentation](https://freematics.com/pages/products/freematics-one-plus-model-b/) confirms the hardware's standard OBD, CAN sniffing, and supported link protocols.
+
+The official [Opel Service Box](https://public-servicebox.opel.com/aides/OI/AC/documents/fr_FR/AIDE/9874/Presentation_apoi.html?id=sous_menu0%7C0_0) and [TIS2Web](https://tis2web.service.opel.com/tis2web/LTService) are the appropriate sources for VIN-specific repair and diagnostic information. The public sources retrieved for this project do not verify the connected Corsa D's ECU addresses, gateway route, bus rates, proprietary identifiers, or byte encodings. The values in the Corsa profile remain candidates until the vehicle identity and raw positive response are captured.
+
+The safe implementation order is:
+
+1. Record VIN, engine code, ECU response address, bus activity, and raw frames without injecting traffic.
+2. Read only advertised standard PIDs and bounded DTC modes `03`, `07`, and `0A`.
+3. Enable one known read-only proprietary identifier only when the identity and ECU address match a versioned profile.
+4. Store the request, raw response, timestamp, source, and result. A negative or unknown response records capability evidence and stops further probing.
+
+No profile may use session control, security access, writes, coding, fault clearing, or actuator routines. USB bench tests can validate firmware, parsers, storage, and transport. They cannot establish Corsa-specific bus or ECU facts.
+
+## Cross-vendor software patterns
+
+The public [OBDb signal schema](https://github.com/OBDb/.schemas) shows a
+useful configuration shape: a signal set can select a CAN request and response
+route, protocol, frequency, year range, and byte-level decoder. The
+[Ford F-150 profile](https://raw.githubusercontent.com/OBDb/Ford-F-150/main/signalsets/v3/default.json),
+[Volkswagen Jetta profile](https://raw.githubusercontent.com/OBDb/Volkswagen-Jetta/main/signalsets/v3/default.json),
+[BMW i4 profile](https://raw.githubusercontent.com/OBDb/BMW-i4/main/signalsets/v3/default.json),
+and [Hyundai Ioniq 5 profile](https://raw.githubusercontent.com/OBDb/Hyundai-IONIQ-5/main/signalsets/v3/default.json)
+show why ECU request/response routing, extended addressing, and model-year
+gates must be data rather than global constants. Their vehicle-specific DIDs
+must not be copied into the Corsa D profile.
+
+The [OpenXC UDS library](https://github.com/openxc/uds-c) and
+[udsoncan client documentation](https://udsoncan.readthedocs.io/en/latest/udsoncan/client.html)
+separate transport failures, negative responses, timeouts, and decoded values.
+The [Scapy automotive layers](https://scapy.readthedocs.io/en/latest/layers/automotive.html)
+also keep ISO-TP, UDS, GMLAN, addressing, and OEM extensions distinct. These
+patterns support the registry and parser in `collector/vehicle_profiles.py`
+and `collector/vendor_diagnostics.py`: a candidate has identity, route,
+decoder, raw response, provenance, and explicit capability state. It is not a
+free-form command string.
+
+The current repository does not have verified Corsa D ECU routes or
+proprietary decoders. Until the connected car supplies a positive capture, the
+registry can validate and classify candidates but must not poll them. The
+first vehicle session must therefore collect identity and passive evidence
+before any single known read-only candidate is enabled.

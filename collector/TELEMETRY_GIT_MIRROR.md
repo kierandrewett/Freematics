@@ -18,6 +18,11 @@ keeps unknown and duplicate fields inspectable. `mirror_observed_at` is only
 when the sidecar read the archive; it must not be used as collector receipt
 time or capture time.
 
+The cursor stores a SHA-256 hash of the processed file prefix. If an archive is
+rewritten without changing its size, the mirror replays the source revision
+instead of silently skipping the changed bytes. Deterministic event IDs keep
+the replay idempotent.
+
 Recommended layout:
 
 ```text

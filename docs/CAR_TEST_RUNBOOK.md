@@ -60,6 +60,30 @@ The unit sends data autonomously over the SIM. A laptop is only needed if live s
 
 Manufacturer-specific Mode 22 PIDs are not universally discoverable or decodable. They require the make/model/year and an appropriate definition set. The standard inventory above is deliberately exhaustive without guessing proprietary commands.
 
+## OBD quality and vendor discovery
+
+The firmware now emits these device fields with every active sample:
+
+| Field | Meaning |
+| --- | --- |
+| `0x085` | OBD bridge protocol number from `ATDPN`, or zero when unknown |
+| `0x086` | Count of standard Mode 01 PIDs advertised by the ECU |
+| `0x087` | Cumulative OBD read failures for the active firmware session |
+| `0x088` | Slowest OBD response in the latest collection cycle, in milliseconds |
+| `0x089` | OBD state: `0` disconnected, `1` ready, `2` degraded |
+| `0x08A` | Consecutive failed core OBD cycles |
+
+Use these fields to explain missing values. Do not treat a failed read as a
+zero measurement.
+
+For Corsa-specific discovery, collect the VIN, engine code, ECU response
+address, bus activity, bitrate evidence, and raw response before enabling a
+profile candidate. Start with passive capture and advertised standard PIDs.
+Only a known read-only identifier with a positive support response may proceed
+to decoding. Unknown identifiers and negative responses must be recorded and
+backed off. Do not send session-control, security-access, write, clear-fault,
+coding, or actuator requests.
+
 ## Optional laptop serial check
 
 Install PlatformIO and clone the focused fork:
