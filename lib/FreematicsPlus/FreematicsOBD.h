@@ -31,6 +31,8 @@ public:
 	bool setBaudRate(unsigned long baudrate);
 	// get connection state
 	OBD_STATES getState() { return m_state; }
+	// get the protocol selected by the OBD bridge, or zero when unknown
+	byte getProtocol() const { return m_protocol; }
 	// read specified OBD-II PID value
 	bool readPID(byte pid, int& result);
 	bool readPID(byte pid, float& result);
@@ -69,6 +71,8 @@ public:
 	byte dataMode = 1;
 	// occurrence of errors
 	byte errors = 0;
+	// bridge protocol number returned by ATDPN
+	byte m_protocol = 0;
 	// bit map of supported PIDs
 	byte pidmap[4 * 8] = {0};
 	// link object pointer

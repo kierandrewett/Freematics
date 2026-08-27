@@ -83,6 +83,7 @@
 
 // maximum consecutive OBD access errors before entering standby
 #define MAX_OBD_ERRORS 3
+#define OBD_RETRY_INTERVAL_MS 5000UL
 
 /**************************************
 * Networking configurations

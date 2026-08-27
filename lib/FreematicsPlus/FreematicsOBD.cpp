@@ -378,23 +378,31 @@ float COBD::getVoltage()
 
 bool COBD::getVIN(char* buffer, byte bufsize)
 {
+	if (!link || !buffer || bufsize < 5) return false;
 	for (byte n = 0; n < 2; n++) {
-		if (link && link->sendCommand("0902\r", buffer, bufsize, OBD_TIMEOUT_LONG)) {
+		if (link->sendCommand("0902\r", buffer, bufsize, OBD_TIMEOUT_LONG)) {
 			int len = hex2uint16(buffer);
 			char *p = strstr(buffer + 4, "0: 49 02 01");
-			if (p) {
+			if (p && len >= 3 && len - 3 < bufsize) {
 				char *q = buffer;
+				bool overflow = false;
 				p += 11; // skip the header
 				do {
 					while (*(++p) == ' ');
 					for (;;) {
+						if (q >= buffer + bufsize - 1) {
+							overflow = true;
+							break;
+						}
 						*(q++) = hex2uint8(p);
 						while (*p && *p != ' ') p++;
 						while (*p == ' ') p++;
 						if (!*p || *p == '\r') break;
 					}
+					if (overflow) break;
 					p = strchr(p, ':');
 				} while(p);
+				if (overflow) continue;
 				*q = 0;
 				if (q - buffer == len - 3) {
 					return true;
@@ -408,9 +416,11 @@ bool COBD::getVIN(char* buffer, byte bufsize)
 
 bool COBD::isValidPID(byte pid)
 {
-	pid--;
-	byte i = pid >> 3;
-	byte b = 0x80 >> (pid & 0x7);
+	if (pid == 0) return false;
+	uint16_t index = (uint16_t)pid - 1;
+	if (index >= sizeof(pidmap) * 8) return false;
+	byte i = index >> 3;
+	byte b = 0x80 >> (index & 0x7);
 	return (pidmap[i] & b) != 0;
 }
 
@@ -424,6 +434,8 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 		return false;
 	}
 
+	memset(pidmap, 0, sizeof(pidmap));
+	m_protocol = 0;
 	m_state = OBD_DISCONNECTED;
 	for (byte n = 0; n < 3; n++) {
 		if (link->sendCommand("ATZ\r", buffer, sizeof(buffer), OBD_TIMEOUT_SHORT)) {
@@ -440,8 +452,10 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 		if (!link->sendCommand(buffer, buffer, sizeof(buffer), OBD_TIMEOUT_SHORT) || !strstr(buffer, "OK")) {
 			return false;
 		}
+		m_protocol = (byte)protocol;
 	}
 	if (protocol == PROTO_J1939) {
+		m_protocol = (byte)protocol;
 		m_state = OBD_CONNECTED;
 		errors = 0;
 		return true;
@@ -464,8 +478,19 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 		}
 	}
 
-	// load pid map
-	memset(pidmap, 0xff, sizeof(pidmap));
+	/* ATDPN is read-only and records the bridge's auto-selected protocol. */
+	if (m_protocol == 0) {
+		char protocolBuffer[32];
+		if (link->sendCommand("ATDPN\r", protocolBuffer, sizeof(protocolBuffer), OBD_TIMEOUT_SHORT) > 0) {
+			char* protocolValue = getResultValue(protocolBuffer);
+			if (protocolValue) {
+				int selected = atoi(protocolValue);
+				if (selected > 0 && selected <= 0xFF) m_protocol = (byte)selected;
+			}
+		}
+	}
+
+	// load pid map; unqueried ranges remain unsupported
 	for (byte i = 0; i < 8; i++) {
 		byte pid = i * 0x20;
 		sprintf(buffer, "%02X%02X\r", dataMode, pid);

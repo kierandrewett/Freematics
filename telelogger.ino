@@ -121,6 +121,9 @@ uint32_t lastStatsTime = 0;
 byte dtcBatchPending = 0;
 #if ENABLE_OBD
 byte fastOBDFailureCycles = 0;
+uint16_t supportedOBDPIDs = 0;
+uint32_t lastOBDReadLatency = 0;
+uint32_t lastOBDInitAttempt = 0;
 #endif
 
 int32_t syncInterval = SERVER_SYNC_INTERVAL * 1000;
@@ -228,6 +231,7 @@ void reportOBDCapabilities()
     else if (obdData[i].priority == 2) auxiliary++;
     else inventory++;
   }
+  supportedOBDPIDs = supported;
   Serial.print("[OBD] ECU supports ");
   Serial.print(supported);
   Serial.print(" tracked PIDs: ");
@@ -259,6 +263,7 @@ void clearOBDReadings()
 {
   // A new ECU session must not carry an old vehicle's values into the next
   // trip. Buffers already queued retain their original capture timestamp.
+  memset(vin, 0, sizeof(vin));
   for (byte i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
     obdData[i].value = 0;
     obdData[i].ts = 0;
@@ -507,6 +512,7 @@ void processOBD(CBuffer* buffer)
   static uint32_t lastAuxPoll = 0;
   static bool cadenceReported = false;
   const byte count = sizeof(obdData) / sizeof(obdData[0]);
+  lastOBDReadLatency = 0;
 
   if (!cadenceReported) {
     Serial.print("[OBD] Polling fast PIDs every ");
@@ -532,6 +538,7 @@ void processOBD(CBuffer* buffer)
       continue;
     }
     const uint32_t elapsed = millis() - readStarted;
+    if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
     if (elapsed >= OBD_PID_READ_WARN_MS) {
       reportSlowOBDRead(obdData[i].pid, "Fast", elapsed);
     }
@@ -581,6 +588,7 @@ void processOBD(CBuffer* buffer)
         continue;
       }
       const uint32_t elapsed = millis() - readStarted;
+      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
       if (elapsed >= OBD_PID_READ_WARN_MS) {
         reportSlowOBDRead(item.pid, "Auxiliary", elapsed);
       }
@@ -855,10 +863,12 @@ void initialize()
   // initialize OBD communication
   if (!state.check(STATE_OBD_READY)) {
     timeoutsOBD = 0;
+    lastOBDInitAttempt = millis();
     clearOBDReadings();
     if (obd.init()) {
       Serial.println("[OBD] ECU connected");
       state.set(STATE_OBD_READY);
+      lastOBDInitAttempt = 0;
       reportOBDCapabilities();
 #if ENABLE_OLED
       oled.println("OBD OK");
@@ -888,7 +898,8 @@ void initialize()
   if (state.check(STATE_OBD_READY)) {
     char buf[128];
     if (obd.getVIN(buf, sizeof(buf))) {
-      memcpy(vin, buf, sizeof(vin) - 1);
+      strncpy(vin, buf, sizeof(vin) - 1);
+      vin[sizeof(vin) - 1] = 0;
       Serial.print("VIN:");
       Serial.println(vin);
     }
@@ -1015,27 +1026,48 @@ void process()
   buffer->state = BUFFER_STATE_FILLING;
 
 #if ENABLE_OBD
-  // process OBD data if connected
+  // Process OBD data if connected. Reinitialisation is rate-limited because
+  // a missing ECU must not block the rest of the collection loop.
+  const uint32_t obdNow = millis();
+  const bool obdInitDue = !lastOBDInitAttempt
+    || obdNow - lastOBDInitAttempt >= OBD_RETRY_INTERVAL_MS;
   if (state.check(STATE_OBD_READY)) {
     processOBD(buffer);
-    if (state.check(STATE_OBD_READY) && obd.errors >= MAX_OBD_ERRORS) {
+    if (state.check(STATE_OBD_READY) && obd.errors >= MAX_OBD_ERRORS && obdInitDue) {
+      lastOBDInitAttempt = obdNow;
       clearOBDReadings();
       if (!obd.init()) {
         Serial.println("[OBD] ECU OFF");
-        state.clear(STATE_OBD_READY | STATE_WORKING);
-        return;
+        state.clear(STATE_OBD_READY);
+      } else {
+        Serial.println("[OBD] ECU reconnected");
+        reportOBDCapabilities();
       }
-      Serial.println("[OBD] ECU reconnected");
-      reportOBDCapabilities();
     }
-  } else {
+  } else if (obdInitDue) {
+    lastOBDInitAttempt = obdNow;
     clearOBDReadings();
     if (obd.init(PROTO_AUTO, true)) {
       state.set(STATE_OBD_READY);
+      lastOBDInitAttempt = 0;
       Serial.println("[OBD] ECU ON");
       reportOBDCapabilities();
     }
   }
+#endif
+#if ENABLE_OBD
+  uint8_t obdProtocol = obd.getProtocol();
+  uint16_t supportedPIDs = supportedOBDPIDs;
+  uint32_t obdTimeoutCount = timeoutsOBD;
+  uint32_t obdLatency = lastOBDReadLatency;
+  uint8_t obdState = state.check(STATE_OBD_READY) ? (fastOBDFailureCycles ? 2 : 1) : 0;
+  uint8_t coreFailures = fastOBDFailureCycles;
+  buffer->add(PID_OBD_PROTOCOL, ELEMENT_UINT8, &obdProtocol, sizeof(obdProtocol));
+  buffer->add(PID_OBD_SUPPORTED_PIDS, ELEMENT_UINT16, &supportedPIDs, sizeof(supportedPIDs));
+  buffer->add(PID_OBD_TIMEOUTS, ELEMENT_UINT32, &obdTimeoutCount, sizeof(obdTimeoutCount));
+  buffer->add(PID_OBD_LAST_LATENCY, ELEMENT_UINT32, &obdLatency, sizeof(obdLatency));
+  buffer->add(PID_OBD_STATE, ELEMENT_UINT8, &obdState, sizeof(obdState));
+  buffer->add(PID_OBD_FAST_FAILURES, ELEMENT_UINT8, &coreFailures, sizeof(coreFailures));
 #endif
 
   if (rssi != rssiLast) {
@@ -1744,7 +1776,7 @@ void processBLE(int timeout)
     }
     if (pid) {
       float value;
-      if (obd.readPID(pid, value)) {
+      if (obd.link && state.check(STATE_OBD_READY) && obd.getState() == OBD_CONNECTED && obd.readPID(pid, value)) {
         n += snprintf(buf + n, bufsize - n, "%.2f", value);
       } else {
         n += snprintf(buf + n, bufsize - n, "N/A");
