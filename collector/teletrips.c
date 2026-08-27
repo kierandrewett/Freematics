@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include "cJSON.h"
 #include "cdecode.h"
 #include "httpd.h"
@@ -32,6 +33,9 @@ char* getUserByDeviceID(const char* devid);
 int getUserInfo(const char* username, char** ppassword, char* pdevid[], int maxdev);
 
 #define MAX_UPLOAD_SIZE 256 * 1024
+#define ARCHIVE_PATH_SIZE 512
+#define TRIP_ID_LENGTH (sizeof(((CHANNEL_DATA*)0)->tripid) - 1)
+#define DEVICE_ID_MAX_LENGTH (sizeof(((CHANNEL_DATA*)0)->devid) - 1)
 
 char fileid[17];
 int error = 0;
@@ -41,35 +45,136 @@ FILE* fpDest;
 char* xsl;
 extern char dataDir[];
 
+
+static int daysInMonth(int year, int month)
+{
+	if (month == 2) return 28 + ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0);
+	return month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31;
+}
+
+static int isValidDeviceID(const char* devid)
+{
+	if (!devid) return 0;
+	for (size_t i = 0; i <= DEVICE_ID_MAX_LENGTH; i++) {
+		unsigned char c = (unsigned char)devid[i];
+		if (!c) return i >= MIN_DEVID_LEN;
+		if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) return 0;
+	}
+	return 0;
+}
+
+static int isValidTripID(const char* tripid)
+{
+	if (!tripid) return 0;
+	for (size_t i = 0; i < TRIP_ID_LENGTH; i++) {
+		unsigned char c = (unsigned char)tripid[i];
+		if (i == 8) {
+			if (c != '-') return 0;
+		}
+		else if (c < '0' || c > '9') {
+			return 0;
+		}
+	}
+	if (tripid[TRIP_ID_LENGTH] != 0) return 0;
+
+	int year = (tripid[0] - '0') * 1000 + (tripid[1] - '0') * 100
+		+ (tripid[2] - '0') * 10 + tripid[3] - '0';
+	int month = (tripid[4] - '0') * 10 + tripid[5] - '0';
+	int day = (tripid[6] - '0') * 10 + tripid[7] - '0';
+	int hour = (tripid[9] - '0') * 10 + tripid[10] - '0';
+	int minute = (tripid[11] - '0') * 10 + tripid[12] - '0';
+	int second = (tripid[13] - '0') * 10 + tripid[14] - '0';
+	return year >= 1970 && month >= 1 && month <= 12
+		&& day >= 1 && day <= daysInMonth(year, month)
+		&& hour <= 23 && minute <= 59 && second <= 59;
+}
+
+static int buildTripPath(char* file, size_t fileSize, const char* devid, const char* tripid)
+{
+	if (!file || !fileSize || !isValidDeviceID(devid) || !isValidTripID(tripid)) return -1;
+	int len = snprintf(file, fileSize, "%s/%.*s/%.*s/%.*s/%s",
+		devid, 4, tripid, 2, tripid + 4, 2, tripid + 6, tripid);
+	return len < 0 || (size_t)len >= fileSize ? -1 : 0;
+}
+
+static int buildArchivePath(char* path, size_t pathSize, const char* file, const char* extension)
+{
+	if (!path || !pathSize || !file || !extension) return -1;
+	int len = snprintf(path, pathSize, "%s/%s%s", dataDir, file, extension);
+	return len < 0 || (size_t)len >= pathSize ? -1 : 0;
+}
+
+static int writeArchiveError(UrlHandlerParam* param, int statusCode, HttpFileType contentType, const char* message)
+{
+	if (param->hs && statusCode) param->hs->response.statusCode = statusCode;
+	param->contentType = contentType;
+	if (!param->pucBuffer || !param->bufSize) {
+		param->contentLength = 0;
+		return FLAG_DATA_RAW;
+	}
+	int len = snprintf(param->pucBuffer, param->bufSize, "%s", message ? message : "Archive request failed");
+	if (len < 0) len = 0;
+	else if ((unsigned int)len >= param->bufSize) len = (int)param->bufSize - 1;
+	param->contentLength = (unsigned int)len;
+	return FLAG_DATA_RAW;
+}
+
+static int appendResponse(char* buffer, size_t bufferSize, size_t* length, const char* format, ...)
+{
+	if (!buffer || !length || !format || *length >= bufferSize) return -1;
+	va_list args;
+	va_start(args, format);
+	int written = vsnprintf(buffer + *length, bufferSize - *length, format, args);
+	va_end(args);
+	if (written < 0 || (size_t)written >= bufferSize - *length) return -1;
+	*length += (size_t)written;
+	return 0;
+}
+
 int uhQuery(UrlHandlerParam* param)
 {
+	if (!param) return FLAG_DATA_RAW;
 	param->contentType = HTTPFILETYPE_JSON;
-	param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{}");
+	param->contentLength = 0;
+	if (!param->pucBuffer || !param->bufSize)
+		return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
 
 	loadConfig();
-
 	const char* userb64 = mwGetVarValue(param->pxVars, "user", 0);
-	if (!userb64 || !*userb64) return FLAG_DATA_RAW;
+	if (!userb64 || !*userb64) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_JSON, "{}");
+	}
+	size_t inputLength = strlen(userb64);
+	char* user = malloc(inputLength + 1);
+	if (!user) return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
+	int decodedLength = base64_decode_chars(userb64, (int)inputLength, user);
+	if (decodedLength <= 0 || (size_t)decodedLength > inputLength) {
+		free(user);
+		return writeArchiveError(param, 400, HTTPFILETYPE_JSON, "{}");
+	}
+	user[decodedLength] = 0;
 
-	int len = strlen(userb64);
-	char* user = malloc(len + 1);
-	base64_decode_chars(userb64, len, user);
-	char* devids[4] = { 0 };
+	char* devids[4] = {0};
 	char* password = 0;
 	int devcount = getUserInfo(user, &password, devids, 4);
 	free(user);
-	if (devcount == 0) {
-		return FLAG_DATA_RAW;
+	if (devcount <= 0) return writeArchiveError(param, 404, HTTPFILETYPE_JSON, "{}");
+
+	size_t length = 0;
+	if (appendResponse(param->pucBuffer, param->bufSize, &length, "{\"traccar\":\"%s\",\"devid\":[",
+		password ? password : "") < 0) {
+		return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
 	}
-	char* buf = param->pucBuffer;
-	int bs = param->bufSize;
-	len = snprintf(buf, bs, "{\"traccar\":\"%s\",\"devid\":[", password);
 	for (int i = 0; i < devcount; i++) {
-		len += snprintf(buf + len, bs - len, "\"%s\",", devids[i]);
+		if (!isValidDeviceID(devids[i])
+			|| appendResponse(param->pucBuffer, param->bufSize, &length, "%s\"%s\"",
+				i ? "," : "", devids[i]) < 0) {
+			return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
+		}
 	}
-	len--;
-	len += snprintf(buf + len, bs - len, "]}");
-	param->contentLength = len;
+	if (appendResponse(param->pucBuffer, param->bufSize, &length, "]}") < 0)
+		return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
+	param->contentLength = (unsigned int)length;
 	return FLAG_DATA_RAW;
 }
 
@@ -202,24 +307,28 @@ void WriteGeoJSON(FILE* fpout, KML_DATA* kd, int size, int count)
 
 int CreateDataFiles(KML_DATA* kd, const char* file)
 {
-	char path[256];
+	char path[ARCHIVE_PATH_SIZE];
 	FILE* fp;
 	int count;
 	int size;
 
-	snprintf(path, sizeof(path), "%s/%s.txt", dataDir, file);
+	if (buildArchivePath(path, sizeof(path), file, ".txt") < 0) return -1;
 	fp = fopen(path, "r");
 	if (!fp) {
 		return -1;
 	}
-	snprintf(path, sizeof(path), "%s/%s.kml", dataDir, file);
+	if (buildArchivePath(path, sizeof(path), file, ".kml") < 0) {
+		fclose(fp);
+		return -1;
+	}
 	count = ConvertToKML(kd, fp, path, 0, 0);
 	fseek(fp, 0, SEEK_END);
 	size = ftell(fp);
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/%s.json", dataDir, file);
+	if (buildArchivePath(path, sizeof(path), file, ".json") < 0) return -1;
 	fp = fopen(path, "w");
+	if (!fp) return -1;
 	WriteGeoJSON(fp, kd, size, count);
 	fclose(fp);
 	return count;
@@ -252,104 +361,102 @@ int uhData(UrlHandlerParam* param)
 	int pidreq = mwGetVarValueInt(param->pxVars, "pid", 0);
 	param->contentType = HTTPFILETYPE_TEXT;
 
-	int devidlen = strlen(devid);
-	if (devidlen < MIN_DEVID_LEN || devidlen > MAX_DEVID_LEN) {
-		param->contentLength = sprintf(param->pucBuffer, "Invalid device ID");
-		return FLAG_DATA_RAW;
+	if (!isValidDeviceID(devid)) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid device ID");
 	}
-	if (!devid || !tripid || strlen(tripid) != 15) {
-		param->contentLength = sprintf(param->pucBuffer, "Invalid arguments");
-		return FLAG_DATA_RAW;
+	if (!isValidTripID(tripid)) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid arguments");
 	}
 
-	char buf[1024];
-	char* p = buf + snprintf(buf, 66, "%s/", devid);
-	memcpy(p, tripid, 4);
-	p += 4;
-	*(p++) = '/';
-	memcpy(p, tripid + 4, 2);
-	p += 2;
-	*(p++) = '/';
-	memcpy(p, tripid + 6, 2);
-	p += 2;
-	*(p++) = '/';
-	strcpy(p, tripid);
+	char file[ARCHIVE_PATH_SIZE];
+	if (buildTripPath(file, sizeof(file), devid, tripid) < 0) {
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
+	}
+	char path[ARCHIVE_PATH_SIZE];
+	if (buildArchivePath(path, sizeof(path), file, ".txt") < 0) {
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
+	}
+
+	FILE* fp = fopen(path, "r");
+	if (!fp) {
+		return writeArchiveError(param, 0, HTTPFILETYPE_TEXT, "Data file not found");
+	}
 
 	param->contentType = HTTPFILETYPE_JSON;
-	snprintf(param->pucBuffer, param->bufSize, "%s/%s.txt", dataDir, buf);
-	FILE* fp = fopen(param->pucBuffer, "r");
-	if (!fp) {
-		param->contentLength = sprintf(param->pucBuffer, "Data file not found");
-		return FLAG_DATA_RAW;
+	size_t len = 0;
+	if (appendResponse(param->pucBuffer, param->bufSize, &len, "[") < 0) {
+		fclose(fp);
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
 	}
-
 	uint32_t ts = 0;
-	int len = 0;
-	len += snprintf(param->pucBuffer + len, param->bufSize - len, "[");
-	while (fscanf(fp, "%1024s\n", buf) > 0) {
-		for (char* p = strtok(buf, ","); p; p = strtok(0, ",")) {
+	char buf[1024];
+	while (fscanf(fp, "%1023s\n", buf) > 0) {
+		for (char* p = strtok(buf, ","); p; p = strtok(NULL, ",")) {
 			int pid = hex2uint16(p);
-			if (!(p = strchr(p, ':'))) break;
+			char* separator = strpbrk(p, ":=");
+			if (!separator) break;
+			char* valuePtr = separator + 1;
+			char* checksum = strchr(valuePtr, '*');
+			if (checksum) *checksum = 0;
 			float value[3] = { 0 };
 			int n = 0;
 			do {
-				value[n++] = (float)atof(++p);
-				if (!(p = strchr(p, ';'))) break;
+				value[n++] = (float)atof(valuePtr);
+				valuePtr = strchr(valuePtr, ';');
+				if (!valuePtr) break;
+				valuePtr++;
 			} while (n < 3);
 			if (pid == 0) {
 				ts = (uint32_t)value[0];
 				continue;
 			}
 			if (pid == pidreq) {
+				int result;
 				if (n == 1) {
 					if (pid >= 0x100)
-						len += snprintf(param->pucBuffer + len, param->bufSize - len, "[%lld,%d],", offset + ts, (int)value[0]);
+						result = appendResponse(param->pucBuffer, param->bufSize, &len, "[%lld,%d],", (long long)(offset + ts), (int)value[0]);
 					else
-						len += snprintf(param->pucBuffer + len, param->bufSize - len, "[%lld,%.2f],", offset + ts, value[0]);
+						result = appendResponse(param->pucBuffer, param->bufSize, &len, "[%lld,%.2f],", (long long)(offset + ts), value[0]);
 				}
 				else {
-					len += snprintf(param->pucBuffer + len, param->bufSize - len, "[%lld,[%d,%d,%d]],", offset + ts, (int)value[0], (int)value[1], (int)value[2]);
+					result = appendResponse(param->pucBuffer, param->bufSize, &len, "[%lld,[%d,%d,%d]],", (long long)(offset + ts), (int)value[0], (int)value[1], (int)value[2]);
+				}
+				if (result < 0) {
+					fclose(fp);
+					return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
 				}
 			}
 		}
 	}
 	fclose(fp);
-	if (param->pucBuffer[len - 1] == ',') len--;
-	len += snprintf(param->pucBuffer + len, param->bufSize - len, "]");
-	param->contentLength = len;
+	if (len > 0 && param->pucBuffer[len - 1] == ',') len--;
+	if (appendResponse(param->pucBuffer, param->bufSize, &len, "]") < 0) {
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
+	}
+	param->contentLength = (unsigned int)len;
 	return FLAG_DATA_RAW;
 }
 
-int processTripData(const char* devid, const char* tripid, int force, char* file, uint32_t* psize, uint32_t* pduration)
+int processTripData(const char* devid, const char* tripid, int force, char* file, size_t fileSize, uint32_t* psize, uint32_t* pduration)
 {
-	char* p = file + snprintf(file, 100, "%s/", devid);
-	memcpy(p, tripid, 4);
-	p += 4;
-	*(p++) = '/';
-	memcpy(p, tripid + 4, 2);
-	p += 2;
-	*(p++) = '/';
-	memcpy(p, tripid + 6, 2);
-	p += 2;
-	*(p++) = '/';
-	strcpy(p, tripid);
+	if (buildTripPath(file, fileSize, devid, tripid) < 0) return -1;
 
 	int processed = 0;
 
-	char path[256];
-	snprintf(path, sizeof(path), "%s/%s.json", dataDir, file);
+	char path[ARCHIVE_PATH_SIZE];
+	if (buildArchivePath(path, sizeof(path), file, ".json") < 0) return -1;
 	uint32_t size = 0, duration = 0;
 	int rev = loadMetaInfo(path, &duration, &size);
 	if (rev == META_REVISION) {
-		snprintf(path, sizeof(path), "%s/%s.txt", dataDir, file);
+		if (buildArchivePath(path, sizeof(path), file, ".txt") < 0) return -1;
 		FILE* fp = fopen(path, "r");
 		if (fp) {
 			fseek(fp, 0, SEEK_END);
 			if (ftell(fp) == size) processed = 1;
+			fclose(fp);
 		}
-		fclose(fp);
-		if (psize)* psize = size;
-		if (pduration)* pduration = duration;
+		if (psize) *psize = size;
+		if (pduration) *pduration = duration;
 	}
 
 	if (force || !processed) {
@@ -359,10 +466,11 @@ int processTripData(const char* devid, const char* tripid, int force, char* file
 		if (count <= 0) {
 			return -1;
 		}
-		int rev = loadMetaInfo(path, &duration, &size);
+		if (buildArchivePath(path, sizeof(path), file, ".json") < 0) return -1;
+		rev = loadMetaInfo(path, &duration, &size);
 		if (rev == META_REVISION) {
-			if (psize)* psize = size;
-			if (pduration)* pduration = duration;
+			if (psize) *psize = size;
+			if (pduration) *pduration = duration;
 		}
 	}
 
@@ -376,42 +484,46 @@ int uhTrip(UrlHandlerParam* param)
 	const char* redir = mwGetVarValue(param->pxVars, "redir", 0);
 	int regen = mwGetVarValueInt(param->pxVars, "regen", 0);
 	const char* ext = "json";
+	const char* suffix = ".json";
 	param->contentType = HTTPFILETYPE_TEXT;
 
-	int devidlen = strlen(devid);
-	if (devidlen < MIN_DEVID_LEN || devidlen > MAX_DEVID_LEN) {
-		param->contentLength = sprintf(param->pucBuffer, "Invalid device ID");
-		return FLAG_DATA_RAW;
+	if (!isValidDeviceID(devid)) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid device ID");
 	}
-	if (!devid || !tripid || strlen(tripid) != 15) {
-		param->contentLength = sprintf(param->pucBuffer, "Invalid arguments");
-		return FLAG_DATA_RAW;
+	if (!isValidTripID(tripid)) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid arguments");
 	}
 
 	char file[128];
-	if (processTripData(devid, tripid, regen, file, 0, 0) == -1) {
-		param->contentLength = sprintf(param->pucBuffer, "{\"status\":2,\"error\":\"No data\"}");
-		return FLAG_DATA_RAW;
+	if (processTripData(devid, tripid, regen, file, sizeof(file), 0, 0) == -1) {
+		return writeArchiveError(param, 0, HTTPFILETYPE_JSON, "{\"status\":2,\"error\":\"No data\"}");
 	}
 
 	if (!strcmp(param->pucRequest, ".kml")) {
 		ext = "kml";
+		suffix = ".kml";
 		param->contentType = HTTPFILETYPE_XML;
 	} else if (!strcmp(param->pucRequest, ".raw")) {
 		ext = "txt";
+		suffix = ".txt";
 		param->contentType = HTTPFILETYPE_TEXT;
 	}
 	else {
 		param->contentType = HTTPFILETYPE_JSON;
 	}
 
+	if (!param->pucBuffer || !param->bufSize)
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response buffer unavailable");
+	int len;
 	if (redir) {
-		snprintf(param->pucBuffer, param->bufSize, "%s/%s.%s", redir, file, ext);
+		len = snprintf(param->pucBuffer, param->bufSize, "%s/%s.%s", redir, file, ext);
+		if (len < 0 || (unsigned int)len >= param->bufSize)
+			return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Redirect path too long");
 		return FLAG_DATA_REDIRECT;
-	} else {
-		snprintf(param->pucBuffer, param->bufSize, "%s/%s.%s", dataDir, file, ext);
-		return FLAG_DATA_FILE | FLAG_ABSOLUTE_PATH;
-	}	
+	}
+	if (buildArchivePath(param->pucBuffer, param->bufSize, file, suffix) < 0)
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
+	return FLAG_DATA_FILE | FLAG_ABSOLUTE_PATH;
 }
 
 void getDateTimeInt(const char* isotime, unsigned int* dateint, unsigned int* timeint)
@@ -469,41 +581,53 @@ int uhHistory(UrlHandlerParam* param)
 	const char* szbegin = mwGetVarValue(param->pxVars, "begin", 0);
 	const char* szend = mwGetVarValue(param->pxVars, "end", 0);
 	const char* devid = mwGetVarValue(param->pxVars, "devid", 0);
-	char *pb = param->pucBuffer;
-	int bs = param->bufSize;
 
-	if (!szbegin || !szend || !devid) return 0;
-	char path[260];
-	snprintf(path, sizeof(path), "%s/%s", dataDir, devid);
-	if (!IsDir(path)) {
-		return 0;
+	if (!isValidDeviceID(devid)) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid device ID");
+	}
+	if (!szbegin || !szend) {
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid arguments");
 	}
 
 	unsigned int beginDate = 0, beginTime = 0, endDate = 0, endTime = 0;
 	getDateTimeInt(szbegin, &beginDate, &beginTime);
 	getDateTimeInt(szend, &endDate, &endTime);
 	if (beginDate == 0 || endDate == 0 || beginDate > endDate) {
-		return 0;
+		return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid arguments");
+	}
+
+	char path[ARCHIVE_PATH_SIZE];
+	if (buildArchivePath(path, sizeof(path), devid, "") < 0) {
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
+	}
+	if (!IsDir(path)) {
+		return writeArchiveError(param, 404, HTTPFILETYPE_JSON, "[]");
 	}
 
 	int year, month, day, hour, minute, second;
 	getDateTimeBreakdown(szbegin, &year, &month, &day, &hour, &minute, &second);
 
+	if (!param->pucBuffer || !param->bufSize)
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response buffer unavailable");
+	char *pb = param->pucBuffer;
+	size_t bs = param->bufSize;
+	size_t n = 0;
+	if (appendResponse(pb, bs, &n, "[\n") < 0)
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
 	int eod = 0;
-	int n = 0;
-	n += snprintf(pb + n, bs - n, "[\n");
 	int count = 0;
 	for (unsigned int date = beginDate; date <= endDate && count <= 365; count++) {
-		char *p = path + snprintf(path, sizeof(path), "%s/%s/%04u/%02u/%02u",
+		int pathLen = snprintf(path, sizeof(path), "%s/%s/%04u/%02u/%02u",
 			dataDir, devid, year, month, day);
+		if (pathLen < 0 || (size_t)pathLen >= sizeof(path))
+			return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
 		char file[260];
 		if (ReadDir(path, file) == 0) {
 			do {
-				if (strlen(file) != 19 || file[8] != '-') continue;
 				char *q = strchr(file, '.');
 				if (!q || strcmp(q + 1, "txt")) continue;
-				sprintf(p, "/%s", file);
 				*q = 0;
+				if (!isValidTripID(file)) continue;
 				unsigned int time = atoi(file + 9);
 				date = atoi(file);
 				if (date < beginDate || date > endDate)
@@ -511,12 +635,11 @@ int uhHistory(UrlHandlerParam* param)
 				if ((date == beginDate && time < beginTime) || (date == endDate && endTime && time > endTime))
 					continue;
 
-
 				// retrieve meta data
 				uint32_t duration = 0;
 				uint32_t size = 0;
 				char filepath[128];
-				if (processTripData(devid, file, 0, filepath, &size, &duration) == -1) {
+				if (processTripData(devid, file, 0, filepath, sizeof(filepath), &size, &duration) == -1) {
 					continue;
 				}
 
@@ -525,11 +648,13 @@ int uhHistory(UrlHandlerParam* param)
 				second = time % 100;
 				struct tm t = { second, minute, hour, day, month - 1, year - 1900 };
 				time_t tm = mktime(&t);
-				n += snprintf(pb + n, bs - n, "{\"id\":\"%s\",\"key\":%u,\"utc\":\"%04u-%02u-%02uT%02u:%02u:%02uZ\",\"size\":%u,\"duration\":%u},",
+				if (appendResponse(pb, bs, &n, "{\"id\":\"%s\",\"key\":%u,\"utc\":\"%04u-%02u-%02uT%02u:%02u:%02uZ\",\"size\":%u,\"duration\":%u},",
 					file, (unsigned int)tm,
 					year, month, day, hour, minute, second,
-					size, duration
-				);
+					size, duration) < 0) {
+					ReadDir(NULL, NULL);
+					return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
+				}
 			} while (ReadDir(0, file) == 0);
 		}
 
@@ -552,9 +677,10 @@ int uhHistory(UrlHandlerParam* param)
 		}
 		date = year * 10000 + month * 100 + day;
 	}
-	n--;
-	n += snprintf(pb + n, bs - n, "]");
-	param->contentLength = n;
+	if (n > 0 && pb[n - 1] == ',') n--;
+	if (appendResponse(pb, bs, &n, "]") < 0)
+		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response too large");
+	param->contentLength = (unsigned int)n;
 	param->contentType = HTTPFILETYPE_JSON;
 	return FLAG_DATA_RAW;
 }

@@ -1014,7 +1014,10 @@ int _mwCheckUrlHandlers(HttpParam* hp, HttpSocket* phsSocket)
 	up.pxVars=NULL;
 	for (puh=hp->pxUrlHandler; puh && puh->pchUrlPrefix; puh++) {
 		size_t prefixLen=strlen(puh->pchUrlPrefix);
-		if (puh->pfnUrlHandler && ((prefixLen == 0 && *path == 0) || (prefixLen && !strncmp(path,puh->pchUrlPrefix,prefixLen)))) {
+		int pathMatches = (prefixLen == 0 && *path == 0)
+			|| (prefixLen && !strncmp(path, puh->pchUrlPrefix, prefixLen)
+				&& (path[prefixLen] == 0 || path[prefixLen] == '/' || path[prefixLen] == '?'));
+		if (puh->pfnUrlHandler && pathMatches) {
 			//URL prefix matches
 			memset(&up, 0, sizeof(up));
 			up.hp=hp;

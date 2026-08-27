@@ -263,9 +263,9 @@ int ConvertToKML(KML_DATA* kd, FILE* fp, const char* kmlfile, uint32_t startpos,
 	uint32_t ts = 0;
 	char line[1024];
 
-	if (!kd) return -1;
+	if (!kd || !fp || !kmlfile) return -1;
 	kd->fp = fopen(kmlfile, "wb");
-	if (!fp || !kd->fp) return -1;
+	if (!kd->fp) return -1;
 	fprintf(stderr, "Opened %s for writing\n", kmlfile);
 
 
@@ -284,15 +284,21 @@ int ConvertToKML(KML_DATA* kd, FILE* fp, const char* kmlfile, uint32_t startpos,
 
 	fprintf(kd->fp, "<gx:Track>");
 
-	while (fscanf(fp, "%1024s\n", line) > 0) {
-		for (char* p = strtok(line, ","); p; p = strtok(0, ",")) {
+	while (fscanf(fp, "%1023s\n", line) > 0) {
+		for (char* p = strtok(line, ","); p; p = strtok(NULL, ",")) {
 			if (!ishex(*p)) break;
 			pid = hex2uint16(p);
-			if (!(p = strchr(p, ':'))) break;
+			char* separator = strpbrk(p, ":=");
+			if (!separator) break;
+			char* valuePtr = separator + 1;
+			char* checksum = strchr(valuePtr, '*');
+			if (checksum) *checksum = 0;
 			float value[3] = { 0 };
 			for (int n = 0; n < 3; n++) {
-				value[n] = (float)atof(++p);
-				if (!(p = strchr(p, ';'))) break;
+				value[n] = (float)atof(valuePtr);
+				valuePtr = strchr(valuePtr, ';');
+				if (!valuePtr) break;
+				valuePtr++;
 			}
 			if (pid == 0) ts = (uint32_t)value[0];
 			if (ts < startpos) {

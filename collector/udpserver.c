@@ -18,12 +18,16 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include "httpd.h"
 #include "teleserver.h"
 
 CHANNEL_DATA* assignChannel(const char* id);
 FILE* createDataFile(CHANNEL_DATA* pld);
+void clearLiveData(CHANNEL_DATA* pld);
 
 extern char serverKey[];
 
@@ -31,21 +35,62 @@ extern char serverKey[];
 // callback from the web server whenever it recevies UDP data
 //////////////////////////////////////////////////////////////////////////
 
+static int parseUnsignedField(const char* value, unsigned long max, unsigned long* result)
+{
+	if (!value || !*value) return 0;
+	for (const unsigned char* p = (const unsigned char*)value; *p; p++) if (!isdigit(*p)) return 0;
+	errno = 0;
+	char* end = NULL;
+	unsigned long parsed = strtoul(value, &end, 10);
+	if (end == value || *end || errno == ERANGE || parsed > max) return 0;
+	if (result) *result = parsed;
+	return 1;
+}
+
+static int parseSignedField(const char* value, long min, long max, long* result)
+{
+	if (!value || !*value) return 0;
+	const char* p = value;
+	if (*p == '+' || *p == '-') p++;
+	if (!*p) return 0;
+	for (const unsigned char* q = (const unsigned char*)p; *q; q++) if (!isdigit(*q)) return 0;
+	errno = 0;
+	char* end = NULL;
+	long parsed = strtol(value, &end, 10);
+	if (end == value || *end || errno == ERANGE || parsed < min || parsed > max) return 0;
+	if (result) *result = parsed;
+	return 1;
+}
+
+static int validDeviceID(const char* id)
+{
+	if (!id) return 0;
+	size_t len = strlen(id);
+	if (len < MIN_DEVID_LEN || len >= sizeof(((CHANNEL_DATA*)0)->devid)) return 0;
+	for (const unsigned char* p = (const unsigned char*)id; *p; p++) if (!isalnum(*p)) return 0;
+	return 1;
+}
+
+static int authorizedPeer(const CHANNEL_DATA* pld, const struct sockaddr_in* peer)
+{
+	return pld && peer && pld->udpPeer.sin_family == peer->sin_family
+		&& pld->udpPeer.sin_port == peer->sin_port
+		&& pld->udpPeer.sin_addr.s_addr == peer->sin_addr.s_addr;
+}
+
 int verifyChecksum(char* data)
 {
+	if (!data) return 0;
 	uint8_t sum = 0;
 	char *p = strrchr(data, '*');
-	if (!p) return 0;
-	for (char *s = data; s < p; s++) sum += *s;
+	if (!p || p == data || !isxdigit((unsigned char)p[1]) || (p[2] && (!isxdigit((unsigned char)p[2]) || p[3]))) return 0;
+	for (char *s = data; s < p; s++) sum += (uint8_t)*s;
 	if (hex2uint8(p + 1) == sum) {
 		*p = 0; // strip checksum
 		return 1;
 	}
-	else {
-		return 0;
-	}
+	return 0;
 }
-
 int addChecksump(char* data)
 {
 	uint8_t sum = 0;
@@ -118,125 +163,143 @@ int incomingUDPCallback(void* _hp)
 	uint16_t devflags = 0;
 	int rssi = 0;
 
+	char* vin = 0;
+	char* key = 0;
+	int hasEvent = 0;
+	int hasToken = 0;
+	int hasMessage = 0;
+	int hasDeviceID = 0;
 	if (strstr(data, "EV=")) {
-		char* vin = 0;
-		char* key = 0;
-		char *s = strtok(data, ",");
-		do {
-			if (!strncmp(s, "EV=", 3)) {
-				eventID = atoi(s + 3);
-			}
-			else if (!strncmp(s, "TS=", 3)) {
-				deviceTick = atol(s + 3);
-			}
-			else if (!strncmp(s, "TK=", 3)) {
-				token = atol(s + 3);
-			}
-			else if (!strncmp(s, "MSG=", 4)) {
-				msg = s + 4;
-			}
-			else if (!strncmp(s, "ID=", 3)) {
-				devid = s + 3;
-			}
-			else if (!strncmp(s, "VIN=", 4)) {
-				vin = s + 4;
-			}
-			else if (!strncmp(s, "DF=", 3)) {
-				devflags = atoi(s + 3);
-			}
-			else if (!strncmp(s, "SSI=", 4)) {
-				rssi = atoi(s + 4);
-			}
-			else if (!strncmp(s, "SK=", 3)) {
-				key = s + 3;
-			}
-		} while ((s = strtok(0, ",")));
+	char *s = strtok(data, ",");
+	while (s) {
+		if (!strncmp(s, "EV=", 3)) {
+			unsigned long parsed;
+			if (hasEvent || !parseUnsignedField(s + 3, EVENT_PING, &parsed)) return -1;
+			eventID = (uint16_t)parsed;
+			hasEvent = 1;
+		}
+		else if (!strncmp(s, "TS=", 3)) {
+			unsigned long parsed;
+			if (!parseUnsignedField(s + 3, UINT32_MAX, &parsed)) return -1;
+			deviceTick = (uint32_t)parsed;
+		}
+		else if (!strncmp(s, "TK=", 3)) {
+			unsigned long parsed;
+			if (hasToken || !parseUnsignedField(s + 3, UINT32_MAX, &parsed) || parsed == 0) return -1;
+			token = (uint32_t)parsed;
+			hasToken = 1;
+		}
+		else if (!strncmp(s, "MSG=", 4)) {
+			if (hasMessage || strlen(s + 4) >= MAX_COMMAND_MSG_LEN) return -1;
+			msg = s + 4;
+			hasMessage = 1;
+		}
+		else if (!strncmp(s, "ID=", 3)) {
+			if (hasDeviceID || !validDeviceID(s + 3)) return -1;
+			hasDeviceID = 1;
+			devid = s + 3;
+		}
+		else if (!strncmp(s, "VIN=", 4)) {
+			if (vin) return -1;
+			vin = s + 4;
+		}
+		else if (!strncmp(s, "DF=", 3)) {
+			unsigned long parsed;
+			if (!parseUnsignedField(s + 3, UINT16_MAX, &parsed)) return -1;
+			devflags = (uint16_t)parsed;
+		}
+		else if (!strncmp(s, "SSI=", 4)) {
+			long parsed;
+			if (!parseSignedField(s + 4, INT16_MIN, INT16_MAX, &parsed)) return -1;
+			rssi = (int)parsed;
+		}
+		else if (!strncmp(s, "SK=", 3)) {
+			if (key || strlen(s + 3) >= 256) return -1;
+			key = s + 3;
+		}
+		s = strtok(0, ",");
+	}
+	}
 
-		//fprintf(stderr, "Channel ID:%u Event ID:%u\n", id, eventID);
-		if (eventID == EVENT_LOGIN) {
-			if (!devid) devid = vin;
-			pld = assignChannel(devid);
-			if (!pld) {
-				fprintf(getLogFile(), "No more channel");
-				return 0;
-			}
+	if (hasEvent && eventID == EVENT_ACK && (!hasToken || !hasMessage)) return -1;
+	if (hasEvent && eventID == EVENT_LOGIN) {
+		if (!devid) devid = vin;
+		if (!validDeviceID(devid)) return -1;
+		/* Check credentials before allocating or mutating a channel. */
+		if (*serverKey && (!key || strcmp(serverKey, key))) return -2;
+		CHANNEL_DATA* existing = findChannelByDeviceID(devid);
+		if (!*serverKey && existing && existing->udpPeer.sin_family
+			&& !authorizedPeer(existing, &cliaddr)) return -2;
+		pld = assignChannel(devid);
+		if (!pld) {
+			fprintf(getLogFile(), "No more channel");
+			return 0;
+		}
 
-			if (vin && checkVIN(vin)) {
-				strcpy(pld->vin, vin);
-			}
-			pld->rssi = rssi;
-			pld->devflags = devflags;
-			// TODO: also check timed out device
-			if (*serverKey) {
-				// match server key
-				if (key && !strcmp(serverKey, key)) {
-					memcpy(&pld->udpPeer, &cliaddr, sizeof(cliaddr));
-				}
-				else {
-					return -2;
-				}
-			}
-			else {
-				// always accept
+		if (vin && checkVIN(vin)) {
+			strcpy(pld->vin, vin);
+		}
+		pld->rssi = rssi;
+		pld->devflags = devflags;
+		// TODO: also check timed out device
+		if (*serverKey) {
+			// match server key
+			if (key && !strcmp(serverKey, key)) {
 				memcpy(&pld->udpPeer, &cliaddr, sizeof(cliaddr));
 			}
-			if (!(pld->flags & FLAG_RUNNING) || serverTick - pld->serverDataTick > SESSION_GAP) {
-				deviceLogin(pld);
-				pld->serverDataTick = serverTick;
-				pld->sessionStartTick = serverTick;
-			}
 			else {
-				printf("DEVICE RE-LOGIN, ID:%s\n", pld->devid);
+				return -2;
 			}
-			pld->deviceTick = deviceTick;
-			// clear cache
-			pld->cacheReadPos = 0;
-			pld->cacheWritePos = 0;
-			// clear instance data cache
-			memset(pld->data, 0, sizeof(pld->data));
 		}
+		else {
+			// always accept
+			memcpy(&pld->udpPeer, &cliaddr, sizeof(cliaddr));
+		}
+		if (!pld->fp) {
+			clearLiveData(pld);
+			pld->serverDataTick = serverTick;
+			pld->sessionStartTick = serverTick;
+			deviceLogin(pld);
+		}
+		else {
+			/* Re-login after transport loss keeps the open archive trip. */
+			pld->flags |= FLAG_RUNNING;
+			pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
+			pld->serverDataTick = serverTick;
+			printf("DEVICE RE-LOGIN, ID:%s\n", pld->devid);
+		}
+		if (!pld->fp) pld->deviceTick = deviceTick;
 	}
 	if (!pld) {
 		fprintf(stderr, "INVALID CHANNEL - %s\n", buf);
 		return -1;
 	}
 
-	pld->dataReceived += recv;
-
-	// check if authorized peer
-#if 0
-	if (memcmp(&cliaddr, &pld->udpPeer, sizeof(cliaddr))) {
-		// unauthorized
+	/* Login establishes the peer; every other packet must come from it. */
+	if (eventID != EVENT_LOGIN && !authorizedPeer(pld, &cliaddr)) {
 		fprintf(stderr, "Unauthorized peer\n");
 		return -1;
 	}
-#endif
+
+	pld->dataReceived += recv;
 
 	if (eventID == 0 || eventID == EVENT_PING) {
 		processPayload(data, pld, eventID);
 	} else if (eventID == EVENT_ACK) {
 		// pending command executed
-		if (msg) {
-			for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
-				COMMAND_BLOCK *cmd = pld->cmd + i;
-				if (cmd->token && cmd->token == token) {
-					cmd->flags |= CMD_FLAG_RESPONDED;
-					cmd->elapsed = (uint16_t)(pld->serverDataTick - cmd->tick);
-					// store received message
-					int len = strlen(msg);
-					if (cmd->message) {
-						if (len > cmd->len) {
-							free(cmd->message);
-							cmd->message = malloc(len + 1);
-						}
-					}
-					else {
-						cmd->message = malloc(len + 1);
-					}
-					cmd->len = len;
-					strcpy(cmd->message, msg);
-					break;
-				}
+		for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
+			COMMAND_BLOCK *cmd = pld->cmd + i;
+			if (cmd->token && cmd->token == token) {
+				size_t len = strlen(msg);
+				char* message = malloc(len + 1);
+				if (!message) return -1;
+				memcpy(message, msg, len + 1);
+				free(cmd->message);
+				cmd->message = message;
+				cmd->len = (uint8_t)len;
+				cmd->flags |= CMD_FLAG_RESPONDED;
+				cmd->elapsed = (uint16_t)(pld->serverDataTick - cmd->tick);
+				break;
 			}
 		}
 		// no response needed for ACK
@@ -267,6 +330,10 @@ int incomingUDPCallback(void* _hp)
 		pld->flags |= (FLAG_SLEEPING | FLAG_PINGED);
 		break;
 	case EVENT_RECONNECT:
+		/* Reconnect is transport liveness; keep the open archive trip. */
+		pld->flags |= FLAG_RUNNING;
+		pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
+		pld->serverDataTick = serverTick;
 		fprintf(stderr, "DEVICE RECONNECTED, ID:%s\n", pld->devid);
 		break;
 	}
@@ -280,46 +347,41 @@ int incomingUDPCallback(void* _hp)
 	return 0;
 }
 
-uint32_t issueCommand(HttpParam* hp, CHANNEL_DATA *pld, const char* cmd, uint32_t token)
+uint32_t issueCommand(HttpParam* hp, CHANNEL_DATA* pld, const char* cmd, uint32_t token)
 {
+	if (!hp || !pld || !isReadOnlyCommand(cmd)) return 0;
 	if (token == 0) token = ++pld->cmdCount;
 	char buf[128];
-	sprintf(buf, "%X#EV=%u,TK=%u,CMD=%s", pld->id, EVENT_COMMAND, token, cmd);
+	int written = snprintf(buf, sizeof(buf), "%X#EV=%u,TK=%u,CMD=%s", pld->id, EVENT_COMMAND, token, cmd);
+	if (written < 0 || written >= (int)sizeof(buf) - 3) return 0;
 	int len = addChecksump(buf);
 	socklen_t socklen = sizeof(struct sockaddr);
 	pld->serverDataTick = GetTickCount64();
-	if (sendto(hp->udpSocket, buf, len, 0, (struct sockaddr *)&pld->udpPeer, socklen) == len) {
+	if (sendto(hp->udpSocket, buf, (size_t)len, 0, (struct sockaddr*)&pld->udpPeer, socklen) == len) {
 		fprintf(stderr, "Command sent: %s (%u)\n", cmd, token);
-		// find out checked pending command
-		COMMAND_BLOCK *cmd = 0;
+		COMMAND_BLOCK* pending = 0;
 		for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
-			cmd = pld->cmd + i;
-			if (cmd->token == 0 || (cmd->flags & CMD_FLAG_CHECKED)) {
-				break;
-			}
-			cmd = 0;
+			pending = pld->cmd + i;
+			if (pending->token == 0 || (pending->flags & CMD_FLAG_CHECKED)) break;
+			pending = 0;
 		}
-		if (!cmd) {
-			// find out oldest pending command regardless of its status
+		if (!pending) {
 			unsigned int maxElapsed = 0;
 			for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
 				unsigned int elapsed = (unsigned int)(pld->serverDataTick - pld->cmd[i].tick);
 				if (elapsed >= maxElapsed) {
-					cmd = pld->cmd + i;
+					pending = pld->cmd + i;
 					maxElapsed = elapsed;
 				}
 			}
 		}
-		if (cmd) {
-			// place sent command in pending command list
-			cmd->token = token;
-			cmd->tick = pld->serverDataTick;
-			cmd->flags = 0;
+		if (pending) {
+			pending->token = token;
+			pending->tick = pld->serverDataTick;
+			pending->flags = 0;
 		}
 		return token;
 	}
-	else {
-		fprintf(stderr, "Command unsent\n");
-		return 0;
-	}
+	fprintf(stderr, "Command unsent\n");
+	return 0;
 }

@@ -22,6 +22,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include "data2kml.h"
 #include "httpd.h"
@@ -104,37 +105,59 @@ static const OBD_PID_META* findOBDPIDMeta(uint16_t pid)
 	return NULL;
 }
 
+static int parseFiniteNumber(const char* text, double* value)
+{
+	if (!text || !*text) return 0;
+	errno = 0;
+	char* end = NULL;
+	double parsed = strtod(text, &end);
+	if (end == text || *end || errno == ERANGE || !isfinite(parsed)) return 0;
+	if (value) *value = parsed;
+	return 1;
+}
+
+static unsigned int tickAgeMs(uint64_t now, uint64_t then);
+static int appendFormat(char* buf, int bs, int l, const char* format, ...)
+{
+	if (!buf || !format || bs <= 0 || l < 0) return 0;
+	if (l >= bs - 1) return bs - 1;
+	va_list args;
+	va_start(args, format);
+	int written = vsnprintf(buf + l, (size_t)(bs - l), format, args);
+	va_end(args);
+	if (written < 0) return l;
+	return written >= bs - l ? bs - 1 : l + written;
+}
+
 static int appendScalarMetric(char* buf, int bs, int l, const char* metric,
 	const char* devid, const char* tripid, const PID_DATA* data, double scale)
 {
-	if (!data->ts || l >= bs - 1) return l;
-	char* end = NULL;
-	double value = strtod(data->value, &end);
-	if (end == data->value) return l;
-	return l + snprintf(buf + l, bs - l, "%s{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
+	if (!buf || bs <= 0 || !data || !data->ts || l < 0 || l >= bs - 1) return l;
+	double value;
+	if (!parseFiniteNumber(data->value, &value) || !isfinite(value * scale)) return l;
+	return appendFormat(buf, bs, l, "%s{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
 		metric, devid, tripid, value * scale);
 }
 
 static int getNumericPID(const CHANNEL_DATA* pld, uint16_t pid, double* value)
 {
+	if (!pld || !value || pid >= 256 * PID_MODES) return 0;
 	const PID_DATA* data = pld->data + pid;
 	if (!data->ts) return 0;
-	char* end = NULL;
-	double parsed = strtod(data->value, &end);
-	if (end == data->value || !isfinite(parsed)) return 0;
-	while (isspace((unsigned char)*end)) end++;
-	if (*end) return 0;
+	double parsed;
+	if (!parseFiniteNumber(data->value, &parsed)) return 0;
 	*value = parsed;
 	return 1;
 }
 
 static int appendDerivedVehicleMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld)
 {
+	if (!buf || !pld || bs <= 0 || l < 0) return 0;
 	/* These calculations only emit when all required source values are present. */
 	double rpm;
 	int engineRunning = getNumericPID(pld, PID_RPM, &rpm) && rpm >= 400.0;
 	if (getNumericPID(pld, PID_RPM, &rpm)) {
-		l += snprintf(buf + l, bs - l,
+		l = appendFormat(buf, bs, l,
 			"freematics_vehicle_engine_running{device_id=\"%s\",trip_id=\"%s\"} %d\n",
 			pld->devid, pld->tripid, engineRunning);
 	}
@@ -148,13 +171,13 @@ static int appendDerivedVehicleMetrics(char* buf, int bs, int l, const CHANNEL_D
 	}
 	if (speedSource) {
 		int moving = speed >= 1.0;
-		l += snprintf(buf + l, bs - l,
+		l = appendFormat(buf, bs, l,
 			"freematics_vehicle_speed_kilometres_per_hour{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %.10g\n"
 			"freematics_vehicle_moving{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %d\n",
 			pld->devid, pld->tripid, speedSource, speed,
 			pld->devid, pld->tripid, speedSource, moving);
 		if (getNumericPID(pld, PID_RPM, &rpm)) {
-			l += snprintf(buf + l, bs - l,
+			l = appendFormat(buf, bs, l,
 				"freematics_vehicle_idling{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %d\n",
 				pld->devid, pld->tripid, speedSource, engineRunning && !moving);
 		}
@@ -169,16 +192,17 @@ static int appendDerivedVehicleMetrics(char* buf, int bs, int l, const CHANNEL_D
 		double maf;
 		if (getNumericPID(pld, PID_MAF_FLOW, &maf) && maf >= 0.0) {
 			fuelRate = maf * 3600.0 / (14.7 * 745.0);
-			fuelSource = "maf_petrol_estimate";
+			if (isfinite(fuelRate)) fuelSource = "maf_petrol_estimate";
 		}
 	}
 	if (fuelSource) {
-		l += snprintf(buf + l, bs - l,
+		l = appendFormat(buf, bs, l,
 			"freematics_vehicle_fuel_rate_litres_per_hour{device_id=\"%s\",trip_id=\"%s\",source=\"%s\"} %.10g\n",
 			pld->devid, pld->tripid, fuelSource, fuelRate);
 		if (speedSource && speed > 0.5 && fuelRate > 0.01) {
 			double mpg = speed * 0.621371 * 4.54609 / fuelRate;
-			l += snprintf(buf + l, bs - l,
+			if (!isfinite(mpg)) mpg = 0.0;
+			l = appendFormat(buf, bs, l,
 				"freematics_vehicle_fuel_economy_miles_per_imperial_gallon{device_id=\"%s\",trip_id=\"%s\",speed_source=\"%s\",fuel_source=\"%s\"} %.10g\n",
 				pld->devid, pld->tripid, speedSource, fuelSource, mpg);
 		}
@@ -190,11 +214,13 @@ static int appendDerivedVehicleMetrics(char* buf, int bs, int l, const CHANNEL_D
 	if (getNumericPID(pld, 0x162, &torquePercent) && getNumericPID(pld, 0x163, &referenceTorque)
 		&& getNumericPID(pld, PID_RPM, &rpm)) {
 		double torque = referenceTorque * torquePercent / 100.0;
-		l += snprintf(buf + l, bs - l,
+		double power = rpm > 0.0 ? torque * rpm / 9549.2965855 : 0.0;
+		if (!isfinite(torque) || !isfinite(power)) return l;
+		l = appendFormat(buf, bs, l,
 			"freematics_vehicle_engine_torque_newton_metres{device_id=\"%s\",trip_id=\"%s\"} %.10g\n"
 			"freematics_vehicle_engine_power_kilowatts{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
 			pld->devid, pld->tripid, torque,
-			pld->devid, pld->tripid, rpm > 0.0 ? torque * rpm / 9549.2965855 : 0.0);
+			pld->devid, pld->tripid, power);
 	}
 
 	return l;
@@ -212,20 +238,27 @@ static void formatDTC(uint16_t raw, char code[6], const char** system)
 static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
 	uint16_t countPid, uint16_t basePid, const char* status)
 {
+	if (!pld || !status || countPid >= 256 * PID_MODES || basePid >= 256 * PID_MODES) return l;
 	const PID_DATA* countData = pld->data + countPid;
-	if (!countData->ts || l >= bs - 1) return l;
-	unsigned int count = (unsigned int)atoi(countData->value);
-	if (count > DTC_CODE_SLOTS) count = DTC_CODE_SLOTS;
-	l += snprintf(buf + l, bs - l,
+	if (!countData->ts || l < 0 || bs <= 0 || l >= bs - 1) return l;
+	double countValue;
+	if (!parseFiniteNumber(countData->value, &countValue) || countValue < 0.0
+		|| countValue > DTC_CODE_SLOTS || floor(countValue) != countValue) return l;
+	unsigned int count = (unsigned int)countValue;
+	l = appendFormat(buf, bs, l,
 		"freematics_diagnostic_trouble_codes{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %u\n",
 		pld->devid, pld->tripid, status, count);
-	for (unsigned int i = 0; i < count && l < bs - 1; i++) {
-		uint16_t raw = (uint16_t)atoi(pld->data[basePid + i].value);
+	for (unsigned int i = 0; i < count && basePid + i < 256 * PID_MODES; i++) {
+		double rawValue;
+		if (!pld->data[basePid + i].ts
+			|| !parseFiniteNumber(pld->data[basePid + i].value, &rawValue)
+			|| rawValue < 0.0 || rawValue > UINT16_MAX || floor(rawValue) != rawValue) continue;
+		uint16_t raw = (uint16_t)rawValue;
 		if (!raw) continue;
 		char code[6];
 		const char* system;
 		formatDTC(raw, code, &system);
-		l += snprintf(buf + l, bs - l,
+		l = appendFormat(buf, bs, l,
 			"freematics_diagnostic_trouble_code_info{device_id=\"%s\",trip_id=\"%s\",status=\"%s\",code=\"%s\",system=\"%s\"} 1\n",
 			pld->devid, pld->tripid, status, code, system);
 	}
@@ -234,12 +267,13 @@ static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
 
 int uhMetrics(UrlHandlerParam* param)
 {
+	if (!param || !param->pucBuffer || param->bufSize == 0) return FLAG_DATA_RAW;
 	uint64_t tick = GetTickCount64();
 	char* buf = param->pucBuffer;
-	int bs = param->bufSize;
+	int bs = (int)param->bufSize;
 	int l = 0;
 
-	l += snprintf(buf + l, bs - l,
+	l = appendFormat(buf, bs, l,
 		"# HELP freematics_device_connected Whether telemetry or a recent parked ping arrived within the channel timeout.\n"
 		"# TYPE freematics_device_connected gauge\n"
 		"# HELP freematics_device_parked Whether the device is intentionally parked and has checked in recently.\n"
@@ -258,6 +292,18 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_obd_value gauge\n"
 		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value.\n"
 		"# TYPE freematics_obd_value_age_seconds gauge\n"
+		"# HELP freematics_obd_protocol OBD bridge protocol number, or zero when unknown.\n"
+		"# TYPE freematics_obd_protocol gauge\n"
+		"# HELP freematics_obd_supported_pids Count of standard Mode 01 PIDs advertised by the ECU.\n"
+		"# TYPE freematics_obd_supported_pids gauge\n"
+		"# HELP freematics_obd_timeouts Cumulative OBD read failures since the active session started.\n"
+		"# TYPE freematics_obd_timeouts counter\n"
+		"# HELP freematics_obd_last_latency_milliseconds Slowest OBD response in the latest collection cycle.\n"
+		"# TYPE freematics_obd_last_latency_milliseconds gauge\n"
+		"# HELP freematics_obd_state OBD state: 0 disconnected, 1 ready, 2 degraded.\n"
+		"# TYPE freematics_obd_state gauge\n"
+		"# HELP freematics_obd_core_failures Consecutive failed core OBD cycles.\n"
+		"# TYPE freematics_obd_core_failures gauge\n"
 		"# HELP freematics_acceleration_g Vehicle acceleration by device axis.\n"
 		"# TYPE freematics_acceleration_g gauge\n"
 		"# HELP freematics_vehicle_info Vehicle identity reported by the ECU.\n"
@@ -292,11 +338,12 @@ int uhMetrics(UrlHandlerParam* param)
 	for (int n = 0; n < MAX_CHANNELS && l < bs - 1; n++) {
 		CHANNEL_DATA* pld = ld + n;
 		if (!pld->id) continue;
-		unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
-		unsigned int pingAge = pld->serverPingTick ? (unsigned int)(tick - pld->serverPingTick) : UINT_MAX;
-		int parked = (pld->flags & FLAG_SLEEPING) != 0;
-		int connected = (pld->flags & FLAG_RUNNING) || parked;
-		l += snprintf(buf + l, bs - l,
+		unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+		unsigned int pingAge = tickAgeMs(tick, pld->serverPingTick);
+		int parked = (pld->flags & FLAG_SLEEPING) && pingAge <= CHANNEL_TIMEOUT * 1000U;
+		int running = (pld->flags & FLAG_RUNNING) && age <= CHANNEL_TIMEOUT * 1000U;
+		int connected = running || parked;
+		l = appendFormat(buf, bs, l,
 			"freematics_device_connected{device_id=\"%s\"} %u\n"
 			"freematics_device_parked{device_id=\"%s\"} %u\n"
 			"freematics_device_data_age_seconds{device_id=\"%s\"} %.3f\n"
@@ -311,22 +358,28 @@ int uhMetrics(UrlHandlerParam* param)
 			pld->devid, (int)pld->rssi);
 
 		if (pld->vin[0]) {
-			l += snprintf(buf + l, bs - l,
+			l = appendFormat(buf, bs, l,
 				"freematics_vehicle_info{device_id=\"%s\",vin=\"%s\"} 1\n",
 				pld->devid, pld->vin);
 		}
 		if (pld->tripid[0]) {
-			l += snprintf(buf + l, bs - l,
+			l = appendFormat(buf, bs, l,
 				"freematics_trip_active{device_id=\"%s\",trip_id=\"%s\"} %u\n"
 				"freematics_trip_start_time_seconds{device_id=\"%s\",trip_id=\"%s\"} %llu\n"
 				"freematics_trip_elapsed_seconds{device_id=\"%s\",trip_id=\"%s\"} %u\n",
-				pld->devid, pld->tripid, (pld->flags & FLAG_RUNNING) ? 1 : 0,
+				pld->devid, pld->tripid, running ? 1 : 0,
 				pld->devid, pld->tripid, (unsigned long long)pld->sessionStartTime,
 				pld->devid, pld->tripid, pld->elapsedTime);
 		}
 
 		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->tripid, pld->data + PID_DEVICE_TEMP, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_network_transport", pld->devid, pld->tripid, pld->data + PID_NETWORK_TRANSPORT, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_protocol", pld->devid, pld->tripid, pld->data + PID_OBD_PROTOCOL, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_supported_pids", pld->devid, pld->tripid, pld->data + PID_OBD_SUPPORTED_PIDS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_timeouts", pld->devid, pld->tripid, pld->data + PID_OBD_TIMEOUTS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_last_latency_milliseconds", pld->devid, pld->tripid, pld->data + PID_OBD_LAST_LATENCY, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_state", pld->devid, pld->tripid, pld->data + PID_OBD_STATE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_obd_core_failures", pld->devid, pld->tripid, pld->data + PID_OBD_FAST_FAILURES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LATITUDE, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LONGITUDE, 1);
@@ -339,8 +392,9 @@ int uhMetrics(UrlHandlerParam* param)
 
 		if (pld->data[PID_ACC].ts) {
 			double x, y, z;
-			if (sscanf(pld->data[PID_ACC].value, "%lf;%lf;%lf", &x, &y, &z) == 3) {
-				l += snprintf(buf + l, bs - l,
+			if (sscanf(pld->data[PID_ACC].value, "%lf;%lf;%lf", &x, &y, &z) == 3
+				&& isfinite(x) && isfinite(y) && isfinite(z)) {
+				l = appendFormat(buf, bs, l,
 					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"x\"} %.10g\n"
 					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"y\"} %.10g\n"
 					"freematics_acceleration_g{device_id=\"%s\",trip_id=\"%s\",axis=\"z\"} %.10g\n",
@@ -349,8 +403,9 @@ int uhMetrics(UrlHandlerParam* param)
 		}
 		if (pld->data[0x25].ts) {
 			double yaw, pitch, roll;
-			if (sscanf(pld->data[0x25].value, "%lf;%lf;%lf", &yaw, &pitch, &roll) == 3) {
-				l += snprintf(buf + l, bs - l,
+			if (sscanf(pld->data[0x25].value, "%lf;%lf;%lf", &yaw, &pitch, &roll) == 3
+				&& isfinite(yaw) && isfinite(pitch) && isfinite(roll)) {
+				l = appendFormat(buf, bs, l,
 					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"yaw\"} %.10g\n"
 					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"pitch\"} %.10g\n"
 					"freematics_orientation_degrees{device_id=\"%s\",trip_id=\"%s\",axis=\"roll\"} %.10g\n",
@@ -358,17 +413,16 @@ int uhMetrics(UrlHandlerParam* param)
 			}
 		}
 
-		for (unsigned int pid = 0x100; pid < 0x200 && l < bs - 1; pid++) {
+		for (uint16_t pid = 0x100; pid < 0x200 && l < bs - 1; pid++) {
 			PID_DATA* value = pld->data + pid;
 			if (!value->ts) continue;
 			const OBD_PID_META* meta = findOBDPIDMeta(pid);
 			if (!meta) continue;
-			char* end = NULL;
-			double number = strtod(value->value, &end);
-			if (end == value->value) continue;
+			double number;
+			if (!parseFiniteNumber(value->value, &number)) continue;
 			unsigned int valueAge = age;
 			if (pld->deviceTick >= value->ts) valueAge += pld->deviceTick - value->ts;
-			l += snprintf(buf + l, bs - l,
+			l = appendFormat(buf, bs, l,
 				"freematics_obd_value{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\",description=\"%s\",unit=\"%s\"} %.10g\n"
 				"freematics_obd_value_age_seconds{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\"} %.3f\n",
 				pld->devid, pld->tripid, pid, meta->name, meta->description, meta->unit, number,
@@ -376,13 +430,12 @@ int uhMetrics(UrlHandlerParam* param)
 		}
 
 		l = appendDerivedVehicleMetrics(buf, bs, l, pld);
-
 		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored");
 		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending");
 		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, "permanent");
 	}
 
-	param->contentLength = l;
+	param->contentLength = (unsigned int)(l < 0 ? 0 : l);
 	param->contentType = HTTPFILETYPE_TEXT;
 	return FLAG_DATA_RAW;
 }
@@ -492,8 +545,14 @@ CHANNEL_DATA* findChannelByDeviceID(const char* devid)
 
 void initChannel(CHANNEL_DATA* pld, int cacheSize)
 {
-	pld->cacheSize = min(cacheSize, CACHE_MAX_SIZE);
-	pld->cache = calloc(cacheSize, sizeof(CACHE_DATA));
+	if (cacheSize <= 0) cacheSize = CACHE_INIT_SIZE;
+	if (cacheSize > CACHE_MAX_SIZE) cacheSize = CACHE_MAX_SIZE;
+	pld->cacheSize = (uint32_t)cacheSize;
+	pld->cache = calloc((size_t)cacheSize, sizeof(CACHE_DATA));
+	if (!pld->cache) {
+		/* Keep modulo operations safe even if the bounded allocation fails. */
+		pld->cacheSize = 1;
+	}
 	pld->cacheReadPos = 0;
 	pld->cacheWritePos = 0;
 	pld->recvCount = 0;
@@ -565,48 +624,53 @@ FILE* createDataFile(CHANNEL_DATA* pld)
 
 	if (pld->fp) fclose(pld->fp);
 
-	// Create data directory if it doesn't exist yet, print error message on failure
 	if (!IsDir(dataDir) && mkdir(dataDir, 0755) < 0) {
-		char *errstr = strerror(errno);
+		char* errstr = strerror(errno);
 		fprintf(getLogFile(), "Can't create data directory '%s': %s\n", dataDir, errstr);
 	}
 
 	time_t t = time(NULL);
-	struct tm *btm = gmtime(&t);
+	struct tm* btm = gmtime(&t);
+	if (!btm) return NULL;
 	char filename[256];
-	int n;
-	n = snprintf(filename, sizeof(filename), "%s/%s", dataDir, pld->devid);
+	int n = snprintf(filename, sizeof(filename), "%s/%s", dataDir, pld->devid);
+	if (n < 0 || (size_t)n >= sizeof(filename)) return NULL;
 	if (!IsDir(filename)) {
 		fprintf(getLogFile(), "New device:%s\n", pld->devid);
 		mkdir(filename, 0755);
 	}
-	n += snprintf(filename + n, sizeof(filename) - n, "/%04u", btm->tm_year + 1900);
+
+	int written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%04u", btm->tm_year + 1900);
+	if (written < 0 || (size_t)written >= sizeof(filename) - (size_t)n) return NULL;
+	n += written;
 	mkdir(filename, 0755);
-	n += snprintf(filename + n, sizeof(filename) - n, "/%02u", btm->tm_mon + 1);
+	written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%02u", btm->tm_mon + 1);
+	if (written < 0 || (size_t)written >= sizeof(filename) - (size_t)n) return NULL;
+	n += written;
 	mkdir(filename, 0755);
-	n += snprintf(filename + n, sizeof(filename) - n, "/%02u", btm->tm_mday);
-	mkdir(filename, 0755);
-	n += snprintf(filename + n, sizeof(filename) - n, "/%04u%02u%02u-%02u%02u%02u.txt",
+	written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%02u", btm->tm_mday);
+	if (written < 0 || (size_t)written >= sizeof(filename) - (size_t)n) return NULL;
+	n += written;
+	written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%04u%02u%02u-%02u%02u%02u.txt",
 		btm->tm_year + 1900,
 		btm->tm_mon + 1,
 		btm->tm_mday,
 		btm->tm_hour,
 		btm->tm_min,
 		btm->tm_sec);
-	snprintf(pld->tripid, sizeof(pld->tripid), "%04u%02u%02u-%02u%02u%02u",
+	if (written < 0 || (size_t)written >= sizeof(filename) - (size_t)n) return NULL;
+	if (snprintf(pld->tripid, sizeof(pld->tripid), "%04u%02u%02u-%02u%02u%02u",
 		btm->tm_year + 1900, btm->tm_mon + 1, btm->tm_mday,
-		btm->tm_hour, btm->tm_min, btm->tm_sec);
+		btm->tm_hour, btm->tm_min, btm->tm_sec) >= (int)sizeof(pld->tripid)) return NULL;
 	pld->sessionStartTime = (uint64_t)t;
 	pld->fp = fopen(filename, "a+");
-	if (!pld->fp) return 0;
-	if (ftell(pld->fp) == 0) {
-		// write initial data
-		if (pld->data[PID_GPS_LATITUDE].ts && pld->data[PID_GPS_LONGITUDE].ts) {
-			fprintf(pld->fp, "%X:%s,%X:%s,%X:%s\n",
-				PID_GPS_LATITUDE, pld->data[PID_GPS_LATITUDE].value,
-				PID_GPS_LONGITUDE, pld->data[PID_GPS_LONGITUDE].value,
-				PID_GPS_ALTITUDE, pld->data[PID_GPS_ALTITUDE].value);
-		}
+	if (!pld->fp) return NULL;
+	if (ftell(pld->fp) == 0
+		&& pld->data[PID_GPS_LATITUDE].ts && pld->data[PID_GPS_LONGITUDE].ts) {
+		fprintf(pld->fp, "%X:%s,%X:%s,%X:%s\n",
+			PID_GPS_LATITUDE, pld->data[PID_GPS_LATITUDE].value,
+			PID_GPS_LONGITUDE, pld->data[PID_GPS_LONGITUDE].value,
+			PID_GPS_ALTITUDE, pld->data[PID_GPS_ALTITUDE].value);
 	}
 	return pld->fp;
 }
@@ -638,7 +702,21 @@ void deviceLogout(CHANNEL_DATA* pld)
 	fprintf(getLogFile(), " LOGOUT:%s\n", pld->devid);
 }
 
-static void clearLiveData(CHANNEL_DATA* pld)
+static uint32_t payloadTimestamp(const char* payload)
+{
+	const char* p = payload;
+	while (p && *p) {
+		int pid = hex2uint16(p);
+		const char* sep = p;
+		while (ishex(*sep)) sep++;
+		if ((*sep == ':' || *sep == '=') && pid == 0) return (uint32_t)atol(sep + 1);
+		p = strchr(p, ',');
+		if (p) p++;
+	}
+	return 0;
+}
+
+void clearLiveData(CHANNEL_DATA* pld)
 {
 	/* Keep the archive cache. Only the current-value snapshot belongs to a session. */
 	memset(pld->data, 0, sizeof(pld->data));
@@ -648,9 +726,30 @@ static void clearLiveData(CHANNEL_DATA* pld)
 int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 {
 	uint64_t tick = GetTickCount64();
+	uint32_t payloadTs = eventID == 0 ? payloadTimestamp(payload) : 0;
+	int newTrip = payloadTs && pld->deviceTick &&
+		((payloadTs < pld->deviceTick && pld->deviceTick - payloadTs > PROXY_MAX_TIME_BEHIND) ||
+		 (payloadTs > pld->deviceTick && payloadTs - pld->deviceTick > SESSION_GAP));
 	if (eventID == 0) {
-		if (!pld->fp && (pld->flags & FLAG_RUNNING)) {
-			createDataFile(pld);
+		if (newTrip) {
+			/* A device clock boundary is a trip boundary, even without LOGIN. */
+			if (pld->fp) fclose(pld->fp);
+			pld->fp = 0;
+			clearLiveData(pld);
+			pld->sessionStartTick = tick;
+			pld->serverDataTick = tick;
+			deviceLogin(pld);
+		}
+		else if (!pld->fp) {
+			/* A closed archive means a real new trip; a timeout leaves fp open. */
+			clearLiveData(pld);
+			pld->sessionStartTick = pld->serverDataTick;
+			deviceLogin(pld);
+		}
+		else if (!(pld->flags & FLAG_RUNNING)) {
+			/* Transport timeout is liveness only, not an archive boundary. */
+			pld->flags |= FLAG_RUNNING;
+			pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
 		}
 		// save data to log file
 		if (pld->fp) {
@@ -681,10 +780,6 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		if (pid == 0) {
 			// special PID 0 for timestamp
 			ts = atol(value);
-			if (pld->deviceTick && ts + PROXY_MAX_TIME_BEHIND < pld->deviceTick) {
-				/* A device clock reset starts a new live snapshot even if LOGIN was lost. */
-				clearLiveData(pld);
-			}
 			continue;
 		}
 		if (ts == 0) {
@@ -708,27 +803,29 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		}
 		count++;
 		// store in cache
-		if (pld->cacheReadPos != pld->cacheWritePos && pld->cache[pld->cacheReadPos].ts > ts) {
-			// clear cache as data looks staled
-			pld->cacheReadPos = 0;
-			pld->cacheWritePos = 0;
-		}
-		CACHE_DATA *d = &pld->cache[pld->cacheWritePos];
-		d->ts = ts;
-		d->pid = pid;
-		d->len = (uint8_t)len;
-		memcpy(d->data, value, len);
-		d->data[len] = 0;
-		// adjust cache pointers
-		pld->cacheWritePos = (pld->cacheWritePos + 1) % pld->cacheSize;
-		if (pld->cacheWritePos == pld->cacheReadPos) {
-			// if write pos catch up with read pos (one lap ahead)
-			// move forward read pos to discard just overwrited data
-			pld->cacheReadPos = (pld->cacheReadPos + 1) % pld->cacheSize;
+		if (pld->cache && pld->cacheSize) {
+			if (pld->cacheReadPos != pld->cacheWritePos && pld->cache[pld->cacheReadPos].ts > ts) {
+				// clear cache as data looks staled
+				pld->cacheReadPos = 0;
+				pld->cacheWritePos = 0;
+			}
+			CACHE_DATA *d = &pld->cache[pld->cacheWritePos];
+			d->ts = ts;
+			d->pid = pid;
+			d->len = (uint8_t)len;
+			memcpy(d->data, value, len);
+			d->data[len] = 0;
+			// adjust cache pointers
+			pld->cacheWritePos = (pld->cacheWritePos + 1) % pld->cacheSize;
+			if (pld->cacheWritePos == pld->cacheReadPos) {
+				// if write pos catch up with read pos (one lap ahead)
+				// move forward read pos to discard just overwrited data
+				pld->cacheReadPos = (pld->cacheReadPos + 1) % pld->cacheSize;
+			}
 		}
 	} while (p && *p);
 	if (ts == 0) ts = pld->deviceTick;
-	int interval = ts - pld->deviceTick;
+	int64_t interval = (int64_t)ts - (int64_t)pld->deviceTick;
 	if (ts) pld->deviceTick = ts;
 
 	if (pld->flags & FLAG_RUNNING) {
@@ -738,9 +835,8 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		pld->flags &= ~FLAG_SLEEPING;
 	}
 	else if (eventID == 0) {
-		// this happens when login packet not received
-		deviceLogin(pld);
-		pld->sessionStartTick = pld->serverDataTick;
+		/* Normal recovery above preserves the open archive file. */
+		pld->flags |= FLAG_RUNNING;
 		pld->elapsedTime = (uint32_t)((tick - pld->sessionStartTick) / 1000);
 	}
 	if (!(pld->flags & FLAG_SLEEPING)) {
@@ -753,10 +849,12 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 	return count;
 }
 
-void __inline setPIDData(CHANNEL_DATA* pld, int pid, uint32_t ts, const char* value)
+static inline void setPIDData(CHANNEL_DATA* pld, int pid, uint32_t ts, const char* value)
 {
+	if (!pld || pid < 0 || pid >= 256 * PID_MODES || !value) return;
 	pld->data[pid].ts = ts;
 	strncpy(pld->data[pid].value, value, MAX_PID_DATA_LEN - 1);
+	pld->data[pid].value[MAX_PID_DATA_LEN - 1] = 0;
 }
 
 void SaveChannels()
@@ -795,11 +893,26 @@ int LoadChannels()
 	int count = 0;
 	for (int i = 0; i < MAX_CHANNELS; i++) {
 		int valid = 1;
-		for (char* p = ld[i].devid; *p; p++) if (!isalpha(*p) && !isdigit(*p)) valid = 0;
-		if (ld[i].id && valid) {
+		ld[i].devid[sizeof(ld[i].devid) - 1] = 0;
+		ld[i].tripid[sizeof(ld[i].tripid) - 1] = 0;
+		ld[i].vin[sizeof(ld[i].vin) - 1] = 0;
+		for (char* p = ld[i].devid; *p; p++) if (!isalnum((unsigned char)*p)) valid = 0;
+		if (ld[i].id && valid && strlen(ld[i].devid) >= 4) {
 			printf("[%u] ID:%u DEVID:%s\n", i, ld[i].id, ld[i].devid);
+			/* Persisted pointers, liveness flags and ticks are process-local. */
+			ld[i].cache = 0;
 			ld[i].fp = 0; /* file handle no longer valid*/
-			initChannel(&ld[i], ld[i].cacheSize);
+			ld[i].flags = 0;
+			ld[i].serverDataTick = 0;
+			ld[i].serverPingTick = 0;
+			ld[i].serverSyncTick = 0;
+			ld[i].sessionStartTick = 0;
+			ld[i].deviceTick = 0;
+			ld[i].proxyTick = 0;
+			ld[i].cmdCount = 0;
+			ld[i].ip.laddr = 0;
+			memset(ld[i].data, 0, sizeof(ld[i].data));
+			initChannel(&ld[i], (int)ld[i].cacheSize);
 			count++;
 		}
 		else {
@@ -810,16 +923,24 @@ int LoadChannels()
 	return count;
 }
 
+static unsigned int tickAgeMs(uint64_t now, uint64_t then)
+{
+	if (!then || now < then) return UINT_MAX;
+	uint64_t age = now - then;
+	return age > UINT_MAX ? UINT_MAX : (unsigned int)age;
+}
+
 void CheckChannels()
 {
 	uint64_t tick = GetTickCount64();
 	for (int i = 0; i < MAX_CHANNELS; i++) {
 		if (!ld[i].id) continue;
 		CHANNEL_DATA* pld = ld + i;
-		if (pld->flags & FLAG_RUNNING) {
-			if (tick - pld->serverDataTick > CHANNEL_TIMEOUT * 1000) {
-				pld->flags &= ~FLAG_RUNNING;
-			}
+		if ((pld->flags & FLAG_RUNNING) && tickAgeMs(tick, pld->serverDataTick) > CHANNEL_TIMEOUT * 1000U) {
+			pld->flags &= ~FLAG_RUNNING;
+		}
+		if ((pld->flags & FLAG_SLEEPING) && tickAgeMs(tick, pld->serverPingTick) > CHANNEL_TIMEOUT * 1000U) {
+			pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
 		}
 	}
 }
@@ -843,39 +964,129 @@ void showLiveData(CHANNEL_DATA* pld)
 	printf("\n");
 }
 
-static int copyData(char* d, const char* s)
+static int isJSONNumberRange(const char* start, const char* end)
 {
-	BOOL isNum = TRUE;
-	BOOL isArray = FALSE;
-	const char *p;
-	for (p = s; *p; p++) {
-		if (*p == ';') {
-			isArray = TRUE;
-		} else if (!isdigit(*p) && *p != '-' && *p != '.') {
-			isNum = FALSE;
-		}
-	}
-	int len = (int)(p - s);
-	if (!isNum) *(d++) = '\"';
-	if (isNum && isArray) {
-		*(d++) = '[';
-		memcpy(d, s, len);
-		for (int i = 0; i < len; i++) {
-			if (d[i] == ';') d[i] = ',';
-		}
-		d += len;
-		*(d++) = ']';
-		len += 2;
+	const char* p = start;
+	if (p == end) return 0;
+	if (*p == '-') p++;
+	if (p == end) return 0;
+	if (*p == '0') {
+		p++;
+		if (p != end && isdigit((unsigned char)*p)) return 0;
 	}
 	else {
-		memcpy(d, s, len);
-		d += len;
+		if (p == end || *p < '1' || *p > '9') return 0;
+		while (p != end && isdigit((unsigned char)*p)) p++;
 	}
-	if (!isNum) *(d++) = '\"';
-	*d = 0;
-	return isNum ? len : len + 2;
+	if (p != end && *p == '.') {
+		p++;
+		const char* fraction = p;
+		while (p != end && isdigit((unsigned char)*p)) p++;
+		if (p == fraction) return 0;
+	}
+	if (p != end && (*p == 'e' || *p == 'E')) {
+		p++;
+		if (p != end && (*p == '+' || *p == '-')) p++;
+		const char* exponent = p;
+		while (p != end && isdigit((unsigned char)*p)) p++;
+		if (p == exponent) return 0;
+	}
+	return p == end;
 }
 
+static int isJSONNumber(const char* text)
+{
+	return text && isJSONNumberRange(text, text + strlen(text));
+}
+
+static int copyData(char* d, int bs, const char* s)
+{
+	if (!d || bs <= 0) return 0;
+	if (!s) s = "";
+	int used = 0;
+	const int cap = bs - 1;
+	double number;
+	if (parseFiniteNumber(s, &number) && isJSONNumber(s)) {
+		size_t len = strlen(s);
+		if (len <= (size_t)cap) {
+			memcpy(d, s, len);
+			used = (int)len;
+		}
+		else if (cap >= 4) {
+			memcpy(d, "null", 4);
+			used = 4;
+		}
+	}
+	else {
+		/* A semicolon-delimited list is an array only when every item is finite. */
+		int isArray = strchr(s, ';') != NULL;
+		int validArray = isArray;
+		if (isArray) {
+			const char* item = s;
+			size_t required = 2;
+			for (;;) {
+				const char* sep = strchr(item, ';');
+				const char* end = sep ? sep : item + strlen(item);
+				if (end == item) validArray = 0;
+				else {
+					errno = 0;
+					char* parsedEnd = NULL;
+					double parsed = strtod(item, &parsedEnd);
+					if (parsedEnd != end || errno == ERANGE || !isfinite(parsed) || !isJSONNumberRange(item, end)) validArray = 0;
+				}
+				if (required > SIZE_MAX - (size_t)(end - item)) validArray = 0;
+				else required += (size_t)(end - item);
+				if (!sep) break;
+				if (required == SIZE_MAX) validArray = 0;
+				else required++;
+				item = sep + 1;
+			}
+			if (validArray && required <= (size_t)cap) {
+				used = 0;
+				d[used++] = '[';
+				for (const char* p = s; *p; p++) d[used++] = *p == ';' ? ',' : *p;
+				d[used++] = ']';
+			}
+			else if (cap >= 2) {
+				d[0] = '[';
+				d[1] = ']';
+				used = 2;
+			}
+		}
+		if (!isArray || !validArray) {
+			used = 0;
+			if (cap >= 2) {
+				d[used++] = '"';
+				for (const unsigned char* p = (const unsigned char*)s; *p && used < cap; p++) {
+					char escaped[7];
+					int escapedLen = 1;
+					switch (*p) {
+					case '\\': case '"': escaped[0] = '\\'; escaped[1] = (char)*p; escapedLen = 2; break;
+					case '\b': escaped[0] = '\\'; escaped[1] = 'b'; escapedLen = 2; break;
+					case '\f': escaped[0] = '\\'; escaped[1] = 'f'; escapedLen = 2; break;
+					case '\n': escaped[0] = '\\'; escaped[1] = 'n'; escapedLen = 2; break;
+					case '\r': escaped[0] = '\\'; escaped[1] = 'r'; escapedLen = 2; break;
+					case '\t': escaped[0] = '\\'; escaped[1] = 't'; escapedLen = 2; break;
+					default:
+						if (*p < 0x20) escapedLen = snprintf(escaped, sizeof(escaped), "\\u%04x", *p);
+						else escaped[0] = (char)*p;
+						break;
+					}
+					if (used + escapedLen >= cap) break;
+					memcpy(d + used, escaped, (size_t)escapedLen);
+					used += escapedLen;
+				}
+				d[used++] = '"';
+			}
+			else if (cap >= 4) {
+				memcpy(d, "null", 4);
+				used = 4;
+			}
+		}
+	}
+	d[used] = 0;
+	return used;
+}
 CHANNEL_DATA* locateChannel(UrlHandlerParam* param)
 {
 	const char* sid;
@@ -988,7 +1199,7 @@ int uhChannels(UrlHandlerParam* param)
 				continue;
 			}
 			l += snprintf(buf + l, bs - l, "\n{\"id\":\"%u\",\"devid\":\"%s\",\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u",
-				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
+				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
 				age, pingage, (int)pld->rssi, pld->devflags, (pld->flags & FLAG_RUNNING) ? 0 : 1);
 
 			if (extend) {
@@ -1008,7 +1219,7 @@ int uhChannels(UrlHandlerParam* param)
 				for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
 					if (pld->data[i].ts) {
 						l += snprintf(buf + l, bs - l, "[%u,", i);
-						l += copyData(buf + l, pld->data[i].value);
+						if (l < bs) l += copyData(buf + l, bs - l, pld->data[i].value);
 						l += snprintf(buf + l, bs - l, ",%u],", age + (pld->deviceTick - pld->data[i].ts));
 					}
 				}
@@ -1041,30 +1252,29 @@ char* findNextToken(char* s)
 
 CHANNEL_DATA* assignChannel(const char* devid)
 {
-	if (!devid || strlen(devid) < 4) {
+	if (!devid) {
 		fprintf(getLogFile(), "Invalid ID");
 		return 0;
 	}
-	// check invalid character in devid string
-	for (const char* p = devid; *p; p++) if (!isalpha(*p) && !isdigit(*p)) return 0;
-
-	CHANNEL_DATA *pld = findChannelByDeviceID(devid);
-	if (pld) {
-		return pld;
-	}
-	pld = findEmptyChannel();
-	if (!pld) {
+	size_t length = strlen(devid);
+	if (length < MIN_DEVID_LEN || length >= sizeof(((CHANNEL_DATA*)0)->devid)) {
+		fprintf(getLogFile(), "Invalid ID");
 		return 0;
 	}
-	strncpy(pld->devid, devid, sizeof(pld->devid) - 1);
-	initChannel(pld, CACHE_INIT_SIZE);
+	for (const unsigned char* p = (const unsigned char*)devid; *p; p++) {
+		if (!isalnum(*p)) return 0;
+	}
 
-	// clear history data cache
+	CHANNEL_DATA* pld = findChannelByDeviceID(devid);
+	if (pld) return pld;
+	pld = findEmptyChannel();
+	if (!pld) return 0;
+	strncpy(pld->devid, devid, sizeof(pld->devid) - 1);
+	pld->devid[sizeof(pld->devid) - 1] = 0;
+	initChannel(pld, CACHE_INIT_SIZE);
 	pld->cacheReadPos = 0;
 	pld->cacheWritePos = 0;
-	// clear instance data cache
 	memset(pld->data, 0, sizeof(pld->data));
-	// clear stats
 	pld->dataReceived = 0;
 	pld->elapsedTime = 0;
 	pld->serverDataTick = GetTickCount64();
@@ -1089,10 +1299,6 @@ int uhPost(UrlHandlerParam* param)
 	const char* alt = mwGetVarValue(param->pxVars, "altitude", 0);
 	const char* speed = mwGetVarValue(param->pxVars, "speed", 0);
 	const char* heading = mwGetVarValue(param->pxVars, "heading", 0);
-	if (!(pld->flags & FLAG_RUNNING)) {
-		/* A post after logout or timeout is a new session when LOGIN was not received. */
-		clearLiveData(pld);
-	}
 	if (ts) pld->deviceTick = ts;
 	if (lat) setPIDData(pld, PID_GPS_LATITUDE, ts, lat);
 	if (lon) setPIDData(pld, PID_GPS_LONGITUDE, ts, lon);
@@ -1135,14 +1341,14 @@ int uhGet(UrlHandlerParam* param)
 	unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
 	unsigned int pingage = pld->serverPingTick ? (unsigned int)(tick - pld->serverPingTick) : 0;
 	l += snprintf(buf + l, bs - l, "{\"stats\":{\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u}",
-		pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
+		(unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
 		age, pingage, (int)pld->rssi, pld->devflags, (pld->flags & FLAG_RUNNING) ? 0 : 1);
 
 	l += snprintf(buf + l, bs - l, ",\"data\":[");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
 		if (pld->data[i].ts) {
 			l += snprintf(buf + l, bs - l, "[%u,", i);
-			l += copyData(buf + l, pld->data[i].value);
+			if (l < bs) l += copyData(buf + l, bs - l, pld->data[i].value);
 			l += snprintf(buf + l, bs - l, ",%u],",
 				pld->deviceTick >= pld->data[i].ts ? (age + pld->deviceTick - pld->data[i].ts) : 0);
 		}
@@ -1181,13 +1387,13 @@ int uhPull(UrlHandlerParam* param)
 
 	bytes += sprintf(buf + bytes, "{");
 	bytes += snprintf(buf + bytes, bufsize - bytes, "\"stats\":{\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"parked\":%u}",
-		pld->dataReceived, (unsigned int)pld->sampleRate, pld->serverDataTick, pld->deviceTick, pld->elapsedTime, age, pingage, (pld->flags & FLAG_RUNNING) ? 0 : 1);
+		pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime, age, pingage, (pld->flags & FLAG_RUNNING) ? 0 : 1);
 
 	bytes += snprintf(buf + bytes, bufsize - bytes, ",\"live\":[");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
 		if (pld->data[i].ts) {
 			bytes += snprintf(buf + bytes, bufsize - bytes, "[%u,", i);
-			bytes += copyData(buf + bytes, pld->data[i].value);
+			if (bytes < bufsize) bytes += copyData(buf + bytes, bufsize - bytes, pld->data[i].value);
 			bytes += snprintf(buf + bytes, bufsize - bytes, "],");
 		}
 	}
@@ -1205,7 +1411,7 @@ int uhPull(UrlHandlerParam* param)
 	uint64_t begin = 0;
 	int bytesMargin = bytes;
 	uint32_t lastts = 0;
-	for (; readPos != pld->cacheWritePos; readPos = (readPos + 1) % pld->cacheSize) {
+	for (; pld->cache && pld->cacheSize && readPos != pld->cacheWritePos; readPos = (readPos + 1) % pld->cacheSize) {
 		CACHE_DATA *d = pld->cache + readPos;
 		if (d->ts < lastts) {
 			// timestamp looping or device reset detected, wipe out all previous data
@@ -1220,7 +1426,7 @@ int uhPull(UrlHandlerParam* param)
 			}
 			if (d->data[0] && (pid == 0 || pid == d->pid)) {
 				bytes += sprintf(buf + bytes, "[%u,%d,", d->ts, d->pid);
-				bytes += copyData(buf + bytes, d->data);
+				if (bytes < bufsize) bytes += copyData(buf + bytes, bufsize - bytes, d->data);
 				bytes += sprintf(buf + bytes, "],");
 			}
 			// keep ts range
@@ -1252,6 +1458,20 @@ int isNum(const char* s)
 	return 1;
 }
 
+int isReadOnlyCommand(const char* cmd)
+{
+	static const char* const commands[] = {
+		"UPTIME", "TICK", "BATT", "NET_OP", "NET_IP", "NET_PACKET",
+		"NET_DATA", "NET_RATE", "RSSI", "SSID?", "APN?", "TEMP",
+		"ACC", "GYRO", "GF", "VIN", "LAT", "LNG", "ALT", "SAT", "SPD", "CRS",
+	};
+	if (!cmd || !*cmd || strlen(cmd) >= MAX_COMMAND_MSG_LEN) return 0;
+	for (unsigned int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
+		if (!strcmp(cmd, commands[i])) return 1;
+	}
+	return !strncmp(cmd, "01", 2) && strlen(cmd) == 4 && ishex(cmd[2]) && ishex(cmd[3]);
+}
+
 int uhCommand(UrlHandlerParam* param)
 {
 	CHANNEL_DATA *pld = locateChannel(param);
@@ -1267,6 +1487,16 @@ int uhCommand(UrlHandlerParam* param)
 
 	if (!*cmd && !token) {
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"failed\",\"error\":\"Invalid request\"}");
+		return FLAG_DATA_RAW;
+	}
+	if (*cmd && strlen(cmd) >= MAX_COMMAND_MSG_LEN) {
+		param->hs->response.statusCode = 400;
+		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"failed\",\"error\":\"Command too long\"}");
+		return FLAG_DATA_RAW;
+	}
+	if (*cmd && !isReadOnlyCommand(cmd)) {
+		param->hs->response.statusCode = 403;
+		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"failed\",\"error\":\"Command is not read-only\"}");
 		return FLAG_DATA_RAW;
 	}
 	pld->serverDataTick = GetTickCount64();
@@ -1346,12 +1576,20 @@ int uhNotify(UrlHandlerParam* param)
 		}
 		pld->devflags = devflags;
 		pld->rssi = rssi;
-		pld->sessionStartTick = tick;
-		pld->proxyTick = 0;
-		pld->serverDataTick = tick;
 		pld->ip = param->hs->ipAddr;
-		clearLiveData(pld);
-		deviceLogin(pld);
+		if (!pld->fp) {
+			clearLiveData(pld);
+			pld->sessionStartTick = tick;
+			pld->serverDataTick = tick;
+			deviceLogin(pld);
+		}
+		else {
+			/* Re-login restores transport liveness without rotating an open trip. */
+			pld->flags |= FLAG_RUNNING;
+			pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
+			pld->proxyTick = 0;
+			pld->serverDataTick = tick;
+		}
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"id\":%u,\"result\":\"done\"}", pld->id);
 		return FLAG_DATA_RAW;
 	} else if (event == EVENT_LOGOUT) {
@@ -1408,7 +1646,7 @@ int uhPush(UrlHandlerParam* param)
 		if (isNum(s)) {
 			int pid = hex2uint16(s);
 			int mode = pid >> 8;
-			if (mode <= PID_MODES) {
+			if (pid >= 0 && mode < PID_MODES) {
 				setPIDData(pld, pid, pld->deviceTick, param->pxVars[n].value);
 				count++;
 			}
