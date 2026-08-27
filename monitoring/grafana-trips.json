@@ -49,8 +49,8 @@
   "panels": [
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Collector login time for the selected trip. Choose a trip above the dashboard.",
       "fieldConfig": {
@@ -99,15 +99,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 1000",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT start_capture_ms AS \"Trip start\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Trip start",
@@ -115,8 +112,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Collector-observed duration of the selected trip.",
       "fieldConfig": {
@@ -166,15 +163,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_trip_elapsed_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT (end_capture_ms - start_capture_ms) / 1000.0 AS \"Duration\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Duration",
@@ -182,10 +176,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
-      "description": "Distance integrated by the device from OBD speed, with GPS fallback, displayed in statute miles for UK driving.",
+      "description": "Distance is not materialised in the current SQLite contract; this value remains unavailable until the importer stores a lossless distance field.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -233,15 +227,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT NULL AS \"Distance\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Distance",
@@ -249,8 +240,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD values older than 15 seconds are excluded.",
       "fieldConfig": {
@@ -300,15 +291,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(avg(avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (avg(avg_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT AVG(m.numeric_value * 0.621371) AS \"Average speed (mph)\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10D' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Average speed",
@@ -316,8 +304,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD values older than 15 seconds are excluded.",
       "fieldConfig": {
@@ -367,15 +355,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (max(max_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT MAX(m.numeric_value * 0.621371) AS \"Maximum speed (mph)\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10D' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Maximum speed",
@@ -383,8 +368,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Highest engine RPM in the selected trip and time range.",
       "fieldConfig": {
@@ -434,15 +419,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT MAX(m.numeric_value) AS \"Peak engine speed\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10C' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Peak engine speed",
@@ -450,8 +432,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Estimated first fuel-level value from the final sample and gauge delta over the selected range.",
       "fieldConfig": {
@@ -501,15 +483,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) - delta((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence ASC LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Fuel at start",
@@ -517,8 +496,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Latest fuel-level sample in the selected time range.",
       "fieldConfig": {
@@ -568,15 +547,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence DESC LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Fuel at end",
@@ -584,8 +560,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Start minus end fuel-tank percentage. Sensor quantisation means short trips may show zero or noise.",
       "fieldConfig": {
@@ -635,15 +611,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(-delta((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence ASC LIMIT 1) AS first, (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence DESC LIMIT 1) AS last",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Fuel level change",
@@ -651,10 +624,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
-      "description": "Peak positive acceleration on device X. Confirm mounting orientation in the car before treating it as longitudinal.",
+      "description": "Acceleration is not materialised in the current SQLite contract; no value is inferred from speed.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -702,15 +675,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT NULL AS \"Peak acceleration\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Peak acceleration",
@@ -718,10 +688,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
-      "description": "Magnitude of peak negative acceleration on device X; mounting orientation must be confirmed.",
+      "description": "Braking is not materialised in the current SQLite contract; no value is inferred from speed.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -769,15 +739,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "abs(min(min_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range])))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT NULL AS \"Peak braking\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Peak braking",
@@ -785,8 +752,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Maximum fresh engine coolant temperature exposed by the ECU. Values older than 15 seconds are excluded.",
       "fieldConfig": {
@@ -848,15 +815,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x105\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
+          "rawSql": "SELECT MAX(m.numeric_value) AS \"Maximum coolant\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x105' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
           "refId": "A",
-          "instant": true
+          "format": "table"
         }
       ],
       "title": "Maximum coolant",
@@ -864,8 +828,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "One row per collector trip in the dashboard time range. Use the Trip selector for a detailed route and metric investigation.",
       "fieldConfig": {
@@ -980,67 +944,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 1000",
-          "legendFormat": "Start",
-          "range": false,
+          "rawSql": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", timestamp_quality AS \"Timestamp quality\", sample_count AS \"Samples\", gap_count AS \"Gaps\", archive_path AS \"Archive\" FROM trip WHERE device_id = '$device' AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY start_capture_ms DESC",
           "refId": "A",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_elapsed_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Duration",
-          "range": false,
-          "refId": "B",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 0.621371",
-          "legendFormat": "Distance",
-          "range": false,
-          "refId": "C",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Average speed",
-          "range": false,
-          "refId": "D",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Maximum speed",
-          "range": false,
-          "refId": "E",
-          "instant": true,
           "format": "table"
         }
       ],
@@ -1058,8 +966,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "GPS route for the selected trip and time range. No line is shown until a valid outdoor fix is received.",
       "fieldConfig": {
@@ -1159,25 +1067,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "freematics_gps_latitude_degrees{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Latitude",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_gps_longitude_degrees{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Longitude",
-          "range": true,
-          "refId": "B"
+          "rawSql": "SELECT capture_utc_ms AS time, latitude AS \"Latitude\", longitude AS \"Longitude\", gps_speed_kph AS \"Speed (km/h)\", gps_heading_degrees AS \"Heading\", sequence AS \"Sample\", device_monotonic_ms AS \"Device monotonic (ms)\", collector_received_ms AS \"Collector receipt (ms)\", timestamp_quality AS \"Timestamp quality\" FROM sample WHERE trip_id = '$trip' AND latitude IS NOT NULL AND longitude IS NOT NULL AND capture_utc_ms IS NOT NULL AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
+          "refId": "A",
+          "format": "table"
         }
       ],
       "title": "Trip route",
@@ -1194,8 +1089,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
       "fieldConfig": {
@@ -1339,36 +1234,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 0.621371)",
-          "legendFormat": "OBD speed (mph)",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371)",
-          "legendFormat": "GPS speed (mph)",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Engine RPM",
-          "range": true,
-          "refId": "C"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Road speed and engine speed",
@@ -1376,10 +1247,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
-      "description": "Bias-corrected MEMS acceleration. Mount the unit consistently before interpreting X as acceleration/braking.",
+      "description": "The current SQLite contract does not persist MEMS acceleration. The chart remains visible to show that this evidence is unavailable, not zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1457,14 +1328,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "{{axis}} axis",
-          "range": true,
-          "refId": "A"
+          "rawSql": "SELECT capture_utc_ms AS time, NULL AS \"Acceleration (g)\" FROM sample WHERE trip_id = '$trip' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Acceleration by device axis",
@@ -1472,8 +1341,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Only PIDs advertised by the ECU appear. Missing accelerator or torque series means unsupported, not zero.",
       "fieldConfig": {
@@ -1553,36 +1422,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x104\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Engine load",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x111\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Throttle",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "{{description}}",
-          "range": true,
-          "refId": "C"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Engine load and driver demand",
@@ -1590,8 +1435,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Coolant, intake, oil, catalyst and ambient temperatures, plus the logger enclosure, when exposed.",
       "fieldConfig": {
@@ -1671,25 +1516,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\".*temperature.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "{{description}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_device_temperature_celsius{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "TeleLogger enclosure",
-          "range": true,
-          "refId": "B"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Thermal system",
@@ -1697,8 +1529,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Fuel gauge percentage and closed-loop trims stay on the primary axis. Equivalence ratio uses the right axis; fuel percentage is not a volume measurement.",
       "fieldConfig": {
@@ -1795,25 +1627,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"fuel_level|.*fuel_trim.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "{{description}}",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=\"commanded_equivalence_ratio\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Equivalence ratio",
-          "range": true,
-          "refId": "B"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Fuel level, trim and mixture",
@@ -1821,8 +1640,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Intake, fuel-rail, barometric and evaporative pressures with mass airflow on its own axis.",
       "fieldConfig": {
@@ -1919,25 +1738,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Mass airflow",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\".*pressure.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "{{description}}",
-          "range": true,
-          "refId": "B"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Airflow and pressure",
@@ -1945,8 +1751,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Satellite count and HDOP explain route quality; altitude uses the right axis.",
       "fieldConfig": {
@@ -2055,36 +1861,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "freematics_gps_satellites{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Satellites",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_gps_hdop{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "HDOP",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_gps_altitude_metres{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Altitude",
-          "range": true,
-          "refId": "C"
+          "rawSql": "SELECT capture_utc_ms AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE trip_id = '$trip' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "GPS quality",
@@ -2092,274 +1874,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Connection, active trip and transport transitions over the selected range. Parked standby deliberately creates an offline interval.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "fillOpacity": 90,
-            "lineWidth": 0,
-            "spanNulls": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "red"
-              },
-              {
-                "value": 1,
-                "color": "blue"
-              },
-              {
-                "value": 2,
-                "color": "green"
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Collector link"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {
-                        "color": "red",
-                        "index": 1,
-                        "text": "Offline"
-                      },
-                      "1": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "Online"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Trip active"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {
-                        "color": "dark-red",
-                        "index": 1,
-                        "text": "Parked"
-                      },
-                      "1": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "Driving"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Uplink"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {
-                        "color": "red",
-                        "index": 2,
-                        "text": "Offline"
-                      },
-                      "1": {
-                        "color": "blue",
-                        "index": 1,
-                        "text": "Wi-Fi"
-                      },
-                      "2": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "Cellular"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 0,
-        "y": 39
-      },
-      "id": 28,
-      "options": {
-        "alignValue": "left",
-        "legend": {
-          "displayMode": "hidden",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "mergeValues": true,
-        "rowHeight": 0.8,
-        "showValue": "always",
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_device_connected{device_id=\"$device\"}",
-          "legendFormat": "Collector link",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_trip_active{device_id=\"$device\"}",
-          "legendFormat": "Trip active",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_network_transport{device_id=\"$device\"}",
-          "legendFormat": "Uplink",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "Operating state",
-      "type": "state-timeline"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Read-only stored, pending and permanent diagnostic trouble codes. The firmware never clears codes.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 39
-      },
-      "id": 29,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "status",
-            "desc": false
-          }
-        ]
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Fault",
-          "range": false,
-          "refId": "A",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "title": "Diagnostic trouble codes",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "device_id": true,
-              "job": true,
-              "instance": true
-            },
-            "indexByName": {
-              "code": 0,
-              "status": 1,
-              "system": 2,
-              "trip_id": 3
-            },
-            "renameByName": {
-              "code": "Code",
-              "status": "Status",
-              "system": "System",
-              "trip_id": "Trip"
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Fuel rate is shown directly when standard PID 0x5E is reported. The MAF estimate is a transparent petrol-only fallback (14.7:1 AFR, 745 g/L) and is not calibrated consumption; fuel percentage alone cannot produce efficiency.",
       "fieldConfig": {
@@ -2482,47 +1998,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "ECU fuel rate (L/h)",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0))",
-          "legendFormat": "MAF fuel rate estimate (L/h)",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)), 0.01))",
-          "legendFormat": "ECU economy (UK mpg)",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01))",
-          "legendFormat": "MAF economy estimate (UK mpg)",
-          "range": true,
-          "refId": "D"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Fuel rate and economy",
@@ -2530,8 +2011,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. 'Latest fresh' is blank when an ECU value is older than 15 seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
       "fieldConfig": {
@@ -2619,80 +2100,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
-          "legendFormat": "Latest fresh",
-          "range": false,
+          "rawSql": "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", MAX(m.numeric_value) AS \"Maximum\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
           "refId": "A",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "min_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Minimum",
-          "range": false,
-          "refId": "B",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Average",
-          "range": false,
-          "refId": "C",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Maximum",
-          "range": false,
-          "refId": "D",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "last_over_time(freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Age",
-          "range": false,
-          "refId": "E",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > bool 15)[$__range:])",
-          "legendFormat": "Stale",
-          "range": false,
-          "refId": "F",
-          "instant": true,
           "format": "table"
         }
       ],
@@ -2710,8 +2122,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Ignition timing, oxygen-sensor voltage and commanded air-fuel equivalence. These values help to investigate combustion behaviour; they are not a direct emissions test.",
       "fieldConfig": {
@@ -2850,36 +2262,12 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Timing advance",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"oxygen_sensor_.*_voltage\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "{{description}}",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x144\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
-          "legendFormat": "Equivalence ratio",
-          "range": true,
-          "refId": "C"
+          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
         }
       ],
       "title": "Combustion and exhaust",
@@ -2887,8 +2275,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
       "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
       "fieldConfig": {
@@ -2968,15 +2356,11 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
-          "legendFormat": "Latest",
-          "range": false,
+          "rawSql": "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
           "refId": "A",
-          "instant": true,
           "format": "table"
         }
       ],
@@ -3064,6 +2448,56 @@
         }
       ],
       "title": "Durable trip archive (SQLite)",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; collector receipt time and device monotonic time are shown separately. Gap count is computed from monotonic clock jumps over three seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      },
+      "id": 42,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": true,
+          "fields": "",
+          "reducer": [
+            "count"
+          ],
+          "show": true
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "rawSql": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.collector_received_ms AS \"Collector receipt (ms)\", CASE WHEN s.capture_utc_ms IS NULL THEN NULL ELSE s.collector_received_ms - s.capture_utc_ms END AS \"Receipt lag (ms)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t USING (trip_id) WHERE s.trip_id = '$trip' AND s.collector_received_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "title": "Capture evidence, timestamp quality and gaps",
       "type": "table"
     }
   ],

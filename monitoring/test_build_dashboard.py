@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -41,7 +42,9 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("$device", archive_sql)
         self.assertIn("$trip", archive_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
-        self.assertTrue(all("$trip" in target["expr"] for target in route["targets"]))
+        self.assertEqual(route["datasource"]["uid"], "freematics-history")
+        self.assertTrue(all("$trip" in target["rawSql"] for target in route["targets"]))
+        self.assertTrue(all("capture_utc_ms" in target["rawSql"] for target in route["targets"]))
 
     def test_live_view_is_prometheus_only(self) -> None:
         dashboard = build_dashboard("live")
@@ -51,6 +54,33 @@ class DashboardViewsTest(unittest.TestCase):
             if isinstance(panel.get("datasource"), dict)
         }
         self.assertEqual(datasources, {"freematics-prometheus"})
+
+    def test_historical_sql_compiles_against_archive_schema(self) -> None:
+        schema_path = MONITORING.parent / "collector" / "history_schema.sql"
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript(schema_path.read_text(encoding="utf-8"))
+            dashboard = build_dashboard("trips")
+            history_targets = [
+                target
+                for panel in dashboard["panels"]
+                if panel.get("datasource", {}).get("uid") == "freematics-history"
+                for target in panel.get("targets", [])
+            ]
+            self.assertGreaterEqual(len(history_targets), 20)
+            for target in history_targets:
+                sql = target["rawSql"]
+                for variable, value in {
+                    "$device": "ZKUCALJ0",
+                    "$trip": "20260827-001247",
+                    "$__all": "All",
+                    "$__from": "0",
+                    "$__to": "9999999999999",
+                }.items():
+                    sql = sql.replace(variable, value)
+                connection.execute(sql).fetchall()
+        finally:
+            connection.close()
 
     def test_view_panel_ids_are_unique_and_generated_files_are_current(self) -> None:
         for view, filename in (("live", "grafana-live.json"), ("trips", "grafana-trips.json")):
