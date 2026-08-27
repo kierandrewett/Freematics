@@ -67,8 +67,5 @@ function goParking()
 
 function goTraccar()
 {
-	var expire = document.getElementById("save").checked ? 365 : 1;
-	setCookie("user", USER.userb64, expire);
-	setCookie("password", USER.info.traccar, expire);
-	location.href = "traccar/";
+	alert("Traccar credentials are managed outside this portal.");
 }

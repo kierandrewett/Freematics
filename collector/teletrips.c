@@ -30,7 +30,7 @@ extern CHANNEL_DATA ld[];
 
 int loadConfig();
 char* getUserByDeviceID(const char* devid);
-int getUserInfo(const char* username, char** ppassword, char* pdevid[], int maxdev);
+int getUserInfo(const char* username, char* pdevid[], int maxdev);
 
 #define MAX_UPLOAD_SIZE 256 * 1024
 #define ARCHIVE_PATH_SIZE 512
@@ -155,14 +155,12 @@ int uhQuery(UrlHandlerParam* param)
 	user[decodedLength] = 0;
 
 	char* devids[4] = {0};
-	char* password = 0;
-	int devcount = getUserInfo(user, &password, devids, 4);
+	int devcount = getUserInfo(user, devids, 4);
 	free(user);
 	if (devcount <= 0) return writeArchiveError(param, 404, HTTPFILETYPE_JSON, "{}");
 
 	size_t length = 0;
-	if (appendResponse(param->pucBuffer, param->bufSize, &length, "{\"traccar\":\"%s\",\"devid\":[",
-		password ? password : "") < 0) {
+	if (appendResponse(param->pucBuffer, param->bufSize, &length, "{\"devid\":[") < 0) {
 		return writeArchiveError(param, 500, HTTPFILETYPE_JSON, "{}");
 	}
 	for (int i = 0; i < devcount; i++) {

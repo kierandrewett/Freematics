@@ -24,7 +24,7 @@ char* loadFile(const char* fn)
 	return buf;
 }
 
-int getUserInfo(const char* username, char** ppassword, char* pdevid[], int maxdev)
+int getUserInfo(const char* username, char* pdevid[], int maxdev)
 {
 	if (!users) return 0;
 	for (cJSON* entry = users->child; entry; entry = entry->next) {
@@ -34,8 +34,6 @@ int getUserInfo(const char* username, char** ppassword, char* pdevid[], int maxd
 		}
 		cJSON* devid = cJSON_GetObjectItem(entry, "devid");
 		if (!devid) continue;
-		cJSON* traccar = cJSON_GetObjectItem(entry, "traccar");
-		if (traccar) *ppassword = traccar->valuestring;
 		if (cJSON_IsArray(devid)) {
 			int length = cJSON_GetArraySize(devid);
 			if (length > maxdev) length = maxdev;

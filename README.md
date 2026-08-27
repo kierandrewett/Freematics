@@ -44,6 +44,8 @@ The collector refuses to start without a non-empty HTTP password (`-w`). If
 UDP is enabled, it also requires a server key (`-k`). Keep the collector
 listener behind the authenticated Caddy service; do not expose its HTTP or
 UDP ports directly.
+The web portal returns device IDs only. Manage Traccar credentials through its
+separate authenticated service.
 
 The onboard LED shows network state and pulses only during an active telemetry
 upload when the network is online. The production profile keeps the buzzer
