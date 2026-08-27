@@ -273,6 +273,11 @@ session:
 * The [Corsa D steering-wheel-control project](https://gitlab.com/ajwilson/corsa-d-swc/-/raw/master/README.md)
   records medium-speed CAN at about 95 kbit/s and a body-network example using
   CAN ID `0x206`. It does not establish engine ECU diagnostic routing.
+* The [EHU32 Corsa D integration](https://github.com/PNKP237/EHU32/blob/main/README.md)
+  confirms that MSCAN is available through OBD pins 3 and 11, and reports live
+  vehicle values such as speed, RPM, coolant temperature and battery voltage.
+  Its CAN source includes body-network examples, but it does not establish the
+  engine ECU's diagnostic address or proprietary DID map.
 * [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
   records passive Corsa D captures and identified ECUs. It does not publish a
   diagnostic service or data-identifier map.
