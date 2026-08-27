@@ -215,10 +215,18 @@ def build_dashboard(view: str = "combined") -> dict:
             f"({value_expression} unless on(device_id,trip_id,pid) "
             f"({obd_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
         )
+    device_age = f"freematics_device_data_age_seconds{{{DEVICE}}}"
+
+    def fresh_device(value_expression: str) -> str:
+        return f"({value_expression} unless on(device_id) ({device_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+
+    network_transport = fresh_device(f"freematics_network_transport{{{DEVICE}}}")
+    vehicle_voltage = fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}")
+    gps_satellites = fresh_device(f"freematics_gps_satellites{{{DEVICE}}}")
 
     speed_kph = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10D"}}')
     speed_mph = f"({speed_kph} * {KM_TO_MI})"
-    gps_speed_kph = f"freematics_gps_speed_kilometres_per_hour{selection}"
+    gps_speed_kph = fresh_device(f"freematics_gps_speed_kilometres_per_hour{selection}")
     gps_speed_mph = f"({gps_speed_kph} * {KM_TO_MI})"
     rpm = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10C"}}')
     fuel_level = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x12F"}}')
@@ -270,7 +278,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Active uplink",
                 3,
                 0,
-                f"max(freematics_network_transport{{{DEVICE}}})",
+                f"max({network_transport})",
                 width=3,
                 description="Transport reported by the firmware: cellular is preferred; Wi-Fi is fallback.",
                 mappings=value_mapping(
@@ -301,7 +309,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Vehicle voltage",
                 9,
                 0,
-                f"max(freematics_device_battery_voltage_volts{{{DEVICE}}})",
+                f"max({vehicle_voltage})",
                 width=3,
                 unit="volt",
                 decimals=2,
@@ -327,7 +335,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "GPS satellites",
                 15,
                 0,
-                f"max(freematics_gps_satellites{{{DEVICE}}})",
+                f"max({gps_satellites})",
                 width=3,
                 unit="short",
                 decimals=0,
@@ -750,9 +758,9 @@ def build_dashboard(view: str = "combined") -> dict:
                 8,
                 7,
                 [
-                    target(f"freematics_gps_satellites{selection}", "A", "Satellites"),
-                    target(f"freematics_gps_hdop{selection}", "B", "HDOP"),
-                    target(f"freematics_gps_altitude_metres{selection}", "C", "Altitude"),
+                    target(fresh_device(f"freematics_gps_satellites{selection}"), "A", "Satellites"),
+                    target(fresh_device(f"freematics_gps_hdop{selection}"), "B", "HDOP"),
+                    target(fresh_device(f"freematics_gps_altitude_metres{selection}"), "C", "Altitude"),
                 ],
                 unit="short",
                 description="Satellite count and HDOP explain route quality; altitude uses the right axis.",
@@ -828,7 +836,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "targets": [
                 target(f"freematics_device_connected{{{DEVICE}}}", "A", "Collector link"),
                 target(f"freematics_trip_active{{{DEVICE}}}", "B", "Trip active"),
-                target(f"freematics_network_transport{{{DEVICE}}}", "C", "Uplink"),
+                target(network_transport, "C", "Uplink"),
             ],
             "title": "Operating state",
             "type": "state-timeline",
@@ -1091,16 +1099,41 @@ def build_dashboard(view: str = "combined") -> dict:
             "type": "table",
         }
     )
+    if view in {"combined", "live"}:
+        panels.append(
+            timeseries(
+                45,
+                "OBD quality",
+                0,
+                64,
+                24,
+                7,
+                [
+                    target(fresh_device(f"freematics_obd_state{{{DEVICE}}}"), "A", "State"),
+                    target(fresh_device(f"freematics_obd_protocol{{{DEVICE}}}"), "B", "Protocol"),
+                    target(fresh_device(f"freematics_obd_supported_pids{{{DEVICE}}}"), "C", "Supported PIDs"),
+                    target(fresh_device(f"freematics_obd_timeouts{{{DEVICE}}}"), "D", "Timeouts"),
+                    target(fresh_device(f"freematics_obd_last_latency_milliseconds{{{DEVICE}}}"), "E", "Read latency (ms)"),
+                    target(fresh_device(f"freematics_obd_core_failures{{{DEVICE}}}"), "F", "Core failures"),
+                ],
+                unit="short",
+                description="OBD state, bridge protocol, advertised PID count, timeout count, response latency and core-cycle failures. A disconnected or degraded state explains missing ECU values.",
+                overrides=[
+                    by_name("Read latency (ms)", ("unit", "ms"), ("custom.axisPlacement", "right")),
+                    by_name("Timeouts", ("custom.axisPlacement", "right")),
+                    by_name("Core failures", ("custom.axisPlacement", "right")),
+                ],
+            )
+        )
 
-    # Prometheus is intentionally retained for the existing trip charts until
-    # the archive importer is deployed. This panel is the explicit hand-over
-    # seam for capture-time history and uses the durable SQLite contract in
-    # HISTORICAL_SQL.md. It is only present in the Trips dashboard.
+
+    # Trips uses the durable SQLite projection so historical samples retain
+    # their capture-time evidence instead of depending on Prometheus retention.
     if view == "trips":
         panels.append(
             {
                 "datasource": HISTORY_DS,
-                "description": "Durable capture-time history from SQLite. This contract panel stays empty or unavailable until the freematics-history datasource and archive importer are provisioned; Prometheus cannot backfill expired samples.",
+                "description": "Durable trip history from SQLite. Capture-time quality, display-time basis, sample count and archive path remain visible; missing capture timestamps stay unknown.",
                 "fieldConfig": {
                     "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
                     "overrides": [],
@@ -1161,8 +1194,12 @@ def build_dashboard(view: str = "combined") -> dict:
                 "FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
             )],
             9: [history_target(
-                "SELECT NULL AS \"Distance\" FROM trip "
-                "WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+                "SELECT m.numeric_value * " + str(KM_TO_MI) + " AS \"Distance\" "
+                "FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id "
+                "AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x030' "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "ORDER BY s.sequence DESC LIMIT 1",
             )],
             10: [history_target(metric_aggregate("0x10D", "AVG", "Average speed (mph)", KM_TO_MI))],
             11: [history_target(metric_aggregate("0x10D", "MAX", "Maximum speed (mph)", KM_TO_MI))],
@@ -1171,28 +1208,32 @@ def build_dashboard(view: str = "combined") -> dict:
                 "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m "
                 "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                 "ORDER BY s.sequence ASC LIMIT 1",
             )],
             14: [history_target(
                 "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m "
                 "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                 "ORDER BY s.sequence DESC LIMIT 1",
             )],
             15: [history_target(
                 "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" "
                 "FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
-                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1) AS first, "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence ASC LIMIT 1) AS first, "
                 "(SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
-                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1) AS last",
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence DESC LIMIT 1) AS last",
             )],
             16: [history_target(
-                "SELECT NULL AS \"Peak acceleration\" FROM trip "
-                "WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+                "SELECT MAX(acceleration_x_g) AS \"Peak acceleration (X)\" FROM sample "
+                "WHERE device_id = '$device' AND trip_id = '$trip' AND " + historical_range,
             )],
             17: [history_target(
-                "SELECT NULL AS \"Peak braking\" FROM trip "
-                "WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+                "SELECT ABS(MIN(acceleration_x_g)) AS \"Peak braking (X)\" FROM sample "
+                "WHERE device_id = '$device' AND trip_id = '$trip' AND " + historical_range,
             )],
             18: [history_target(metric_aggregate("0x105", "MAX", "Maximum coolant"))],
             19: [history_target(
@@ -1229,8 +1270,9 @@ def build_dashboard(view: str = "combined") -> dict:
                 format="time_series",
             )],
             22: [history_target(
-                "SELECT timeline_ms / 1000.0 AS time, NULL AS \"Acceleration (g)\" FROM sample "
-                f"WHERE {trip_where} AND {historical_range} ORDER BY time",
+                "SELECT timeline_ms / 1000.0 AS time, acceleration_x_g AS \"X axis (g)\", "
+                "acceleration_y_g AS \"Y axis (g)\", acceleration_z_g AS \"Z axis (g)\" "
+                f"FROM sample WHERE {trip_where} AND {historical_range} ORDER BY time",
                 format="time_series",
             )],
             23: [history_target(
@@ -1275,17 +1317,28 @@ def build_dashboard(view: str = "combined") -> dict:
                 format="time_series",
             )],
             31: [history_target(
-                "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", "
+                "SELECT m.pid AS \"PID\", COALESCE(c.name, 'Unknown metric') AS \"Metric\", "
+                "c.description AS \"Description\", c.unit AS \"Unit\", "
+                "COUNT(m.numeric_value) AS \"Numeric samples\", COUNT(m.text_value) AS \"Text samples\", "
                 "MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", "
                 "MAX(m.numeric_value) AS \"Maximum\" "
                 "FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "LEFT JOIN metric_catalogue AS c ON c.pid = m.pid "
                 f"WHERE {metric_trip_where} AND s.{historical_range} "
-                "GROUP BY m.pid ORDER BY m.pid",
+                "GROUP BY m.pid, c.name, c.description, c.unit ORDER BY m.pid",
             )],
             38: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", "
-                "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" "
+                "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\", "
+                "CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL "
+                "AND MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) > 0 THEN "
+                "MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * " + str(KPH_TO_UK_MPG_PER_LPH) + " / "
+                "MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) END AS \"ECU economy (UK mpg)\", "
+                "CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL "
+                "AND MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) > 0 THEN "
+                "MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * " + str(KPH_TO_UK_MPG_PER_LPH) + " / "
+                "(MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) * 3600.0 / " + str(PETROL_STOICH_AFR * PETROL_DENSITY_G_PER_LITRE) + ") END AS \"MAF economy estimate (UK mpg)\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
@@ -1301,10 +1354,16 @@ def build_dashboard(view: str = "combined") -> dict:
                 format="time_series",
             )],
             40: [history_target(
-                "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" "
-                "FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
-                f"WHERE {metric_trip_where} AND s.{historical_range} "
-                "GROUP BY m.pid ORDER BY m.pid",
+                "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" "
+                "FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id "
+                "AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence "
+                f"WHERE {metric_trip_where.replace('m.', 'latest.')} AND latest_sample.{historical_range} "
+                "AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate "
+                "JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id "
+                "AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence "
+                "WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id "
+                "AND candidate.pid = latest.pid AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
+                "ORDER BY latest.pid",
             )],
         }
         for panel in panels:
@@ -1314,13 +1373,55 @@ def build_dashboard(view: str = "combined") -> dict:
                 panel["targets"] = targets
 
         for panel_id, description in {
-            9: "Distance is not materialised in the current SQLite contract; this value remains unavailable until the importer stores a lossless distance field.",
-            16: "Acceleration is not materialised in the current SQLite contract; no value is inferred from speed.",
-            17: "Braking is not materialised in the current SQLite contract; no value is inferred from speed.",
-            22: "The current SQLite contract does not persist MEMS acceleration. The chart remains visible to show that this evidence is unavailable, not zero.",
+            7: "Stored display-timeline start for the selected trip. Capture UTC and display-time basis remain in the evidence panel.",
+            8: "Duration between stored display-timeline bounds for the selected trip.",
+            9: "Stored device trip distance at the latest sample in the selected range, converted to miles. Missing PID 0x030 remains unavailable.",
+            10: "Average stored OBD speed in the selected range, converted to mph. Missing PID 0x10D remains unavailable.",
+            11: "Maximum stored OBD speed in the selected range, converted to mph. Missing PID 0x10D remains unavailable.",
+            12: "Maximum stored engine speed in the selected range.",
+            13: "First stored fuel-level value in the selected range. Fuel percentage is a gauge, not a volume measurement.",
+            14: "Last stored fuel-level value in the selected range. Fuel percentage is a gauge, not a volume measurement.",
+            15: "First minus last stored fuel-level percentage in the selected range. Sensor quantisation can hide short-trip change.",
+            16: "Largest stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable; no speed-derived value is inferred.",
+            17: "Magnitude of the most negative stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable.",
+            18: "Maximum stored coolant temperature in the selected range. Missing PID 0x105 remains unavailable.",
+            22: "Stored MEMS acceleration X, Y and Z components. Missing vectors remain gaps rather than zero.",
+            24: "Stored coolant and intake-air temperatures in the selected range. Missing PID samples remain gaps.",
+            25: "Stored fuel-tank percentage and fuel trims in the selected range. Fuel percentage is not a volume measurement.",
+            26: "Stored mass-airflow readings in the selected range. No pressure series is included in this historical query.",
+            27: "Stored satellite count, HDOP and GPS speed. HDOP is decoded from the wire value in tenths; missing GNSS fields remain gaps.",
+            31: "Historical numeric and text metric inventory with catalogue metadata and explicit sample counts. Raw duplicate fields remain in field_timeline.",
+            38: "Stored ECU fuel rate and mass airflow, plus direct ECU and petrol-assumption MAF economy only when OBD speed and the required source are present. No GPS fallback is used.",
+            39: "Stored timing advance and commanded air-fuel equivalence ratio. Oxygen-sensor voltage is not included in this historical query.",
+            40: "Latest stored numeric value per PID by sample sequence within the selected range; this is not a maximum-value summary.",
         }.items():
             panel = next(item for item in panels if item["id"] == panel_id)
             panel["description"] = description
+        next(item for item in panels if item["id"] == 40)["title"] = "Latest stored PID values"
+        next(item for item in panels if item["id"] == 31)["title"] = "Historical metric inventory"
+
+        panels.append(
+            {
+                "datasource": HISTORY_DS,
+                "description": "Decoded stored, pending and permanent DTC detail from the raw archive. No rows means no decodable code was recorded; raw fields remain in the metric timeline.",
+                "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
+                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 79},
+                "id": 44,
+                "options": {"cellHeight": "sm", "footer": {"countRows": True, "fields": "", "reducer": ["count"], "show": True}, "showHeader": True},
+                "targets": [history_target(
+                    "SELECT d.sequence AS \"Sample\", d.status AS \"Status\", d.slot AS \"Slot\", "
+                    "d.code AS \"Code\", d.system AS \"System\", d.raw_code AS \"Raw code\", "
+                    "s.timeline_ms AS \"Display time (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", "
+                    "s.timestamp_quality AS \"Timestamp quality\", s.time_basis AS \"Display time basis\" "
+                    "FROM diagnostic_code AS d JOIN sample AS s ON s.device_id = d.device_id "
+                    "AND s.trip_id = d.trip_id AND s.sequence = d.sequence "
+                    f"WHERE d.device_id = '$device' AND d.trip_id = '$trip' AND s.{historical_range} "
+                    "ORDER BY s.sequence, d.status, d.slot LIMIT 5000",
+                )],
+                "title": "Diagnostic trouble code detail",
+                "type": "table",
+            }
+        )
 
         panels.append(
             {
@@ -1335,9 +1436,10 @@ def build_dashboard(view: str = "combined") -> dict:
                     "s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", "
                     "s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", "
                     "s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", "
-                    "NULL AS \"Receipt lag (ms; not instrumented)\", "
+                    "NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", "
                     "t.gap_count AS \"Trip gaps\" "
                     "FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id "
+                    "LEFT JOIN sample_gaps AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence "
                     f"WHERE {sample_trip_where} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                     "ORDER BY s.sequence LIMIT 5000",
                 )],
@@ -1349,13 +1451,13 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42,
+            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42, 44,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
 
@@ -1389,7 +1491,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "title": "Historical trips view",
             "tooltip": "Open the trip index and route evidence",
             "type": "link",
-            "url": "/d/freematics-trips?var-device=$device&var-trip=$trip",
+            "url": "/d/freematics-trips?var-device=$device" + ("&var-trip=$trip" if view in {"combined", "trips"} else ""),
         },
     ]
     if view in {"combined", "trips"}:
@@ -1411,7 +1513,7 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "trips":
         device_query = "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id"
         device_variable = {
-            "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
+            "current": {"selected": False, "text": "", "value": ""},
             "datasource": HISTORY_DS,
             "definition": device_query,
             "hide": 0,
@@ -1460,7 +1562,7 @@ def build_dashboard(view: str = "combined") -> dict:
         )
         templating.append(
             {
-                "current": {"selected": True, "text": "20260827-001247", "value": "20260827-001247"},
+                "current": {"selected": False, "text": "", "value": ""},
                 "datasource": HISTORY_DS,
                 "definition": trip_query,
                 "hide": 0,
