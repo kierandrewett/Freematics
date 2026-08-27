@@ -1,6 +1,6 @@
 # Freematics Model B car test runbook
 
-This is the portable hand-off for the Freematics ONE+ Model B installed as device `ZKUCALJ0`. The device is currently running the previously validated, token-bearing production image from source commit `b39c9f76074a09f14f2118ff4f739ceea197d7ca` and does not need a laptop to send telemetry. The focused fork now contains later OBD-freshness, silent-buzzer, and quiet-standby changes; those changes have been compiled and pushed but were not flashed during this readiness check. Treat the quiet-standby behaviour below as **source-only until a reflash and serial proof are recorded**.
+This is the portable hand-off for the Freematics ONE+ Model B installed as device `ZKUCALJ0`. The device is running the token-bearing production image from fork commit `12dc207bc559` (flashed and hash-verified 2026-08-27) and does not need a laptop to send telemetry. The boot log confirmed this revision, bearer authentication, modem time, strict TLS, and repeated accepted HTTPS posts.
 
 ## Known-good configuration
 
@@ -21,11 +21,11 @@ The final USB test registered on operator `23415`, received a cellular IP, enabl
 - Online: the LED is on only while a real HTTPS telemetry request is in flight. One flash represents one request, which may contain several samples.
 - Initial network search: slow repeating flash.
 - Reconnecting after a previously healthy link: rapid flash.
-- Parked standby (new fork image, after reflash): LED fully off; radios are shut down, the accelerometer is in low-power mode, and the ESP32 sleeps between motion checks. Tracking is paused; one parked marker is sent when standby begins. This is intentional standby, not an outage. The currently installed image may still use the older standby indication.
-- Network offline for 15 seconds while working: the current flashed image records the outage and may emit its older audible alert. The newer fork image disables routine buzzer alerts and must be flashed before relying on silent operation. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
-- Network restored after an announced outage: the current flashed image may emit its older restore tone; the newer fork image records recovery silently and leaves notification to the host-side notifier.
+- Parked standby: LED fully off; radios are shut down, the accelerometer is in low-power mode, and the ESP32 sleeps between motion checks. Tracking is paused; one parked marker is sent when standby begins. This is intentional standby, not an outage.
+- Network offline for 15 seconds while working: the production image records the outage silently. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
+- Network restored after an announced outage: the production image records recovery silently and leaves notification to the host-side notifier.
 
-On the bench, the new fork image enters standby after approximately 180 seconds without motion. It requires three consecutive 250 ms samples above the parked `0.5 g` threshold before restarting the active collection path, filtering out a single bump or vibration. Modem/GNSS/OBD startup and network registration still take additional time. There is no periodic cellular tracking while parked. The currently installed image must be reflashed before relying on this behaviour.
+On the bench, this image enters standby after approximately 180 seconds without motion. It requires three consecutive 250 ms samples above the parked `0.5 g` threshold before restarting the active collection path, filtering out a single bump or vibration. Modem/GNSS/OBD startup and network registration still take additional time. There is no periodic cellular tracking while parked.
 
 ## Six-month unattended-use boundary
 

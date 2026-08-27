@@ -51,8 +51,9 @@ checks. It sends one parked marker on entry, then performs no periodic
 cellular/GPS tracking while parked. Three consecutive samples above 0.5 g are
 required to wake the active collection path, filtering a single bump or
 vibration. Motion returns the unit to the active collection path automatically.
-This behaviour is source-only until that image has been flashed and confirmed
-over serial; the installed device may still be running the prior image.
+The production device was flashed from fork commit `12dc207bc559` and
+confirmed over serial with bearer authentication, modem time, strict TLS, and
+accepted HTTPS posts.
 
 Data Storage
 ------------
