@@ -41,6 +41,8 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(panel["datasource"]["uid"], "freematics-prometheus")
         scan = next(panel for panel in dashboard["panels"] if panel["id"] == 47)
         self.assertIn("freematics_diagnostic_trouble_codes_state", scan["targets"][0]["expr"])
+        queue = next(panel for panel in dashboard["panels"] if panel["id"] == 46)
+        self.assertGreaterEqual(scan["gridPos"]["y"], queue["gridPos"]["y"] + queue["gridPos"]["h"])
 
 
     def test_trips_view_has_historical_selector_and_route_evidence(self) -> None:
@@ -71,6 +73,10 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
         self.assertTrue(all("timeline_ms" in target["queryText"] for target in route["targets"]))
+        self.assertEqual(route["targets"][0]["queryType"], "time series")
+        self.assertEqual(route["targets"][0]["timeColumns"], ["time"])
+        self.assertNotIn("transformations", route)
+
 
     def test_live_view_is_prometheus_only(self) -> None:
         dashboard = build_dashboard("live")
@@ -114,9 +120,9 @@ class DashboardViewsTest(unittest.TestCase):
             connection.executescript(schema_path.read_text(encoding="utf-8"))
             connection.execute(
                 "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
-                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 3000, 'partial', 3, 1000, 1000)"
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 4000, 'partial', 4, 1000, 1000)"
             )
-            for sequence, timeline, acceleration in ((0, 1000, 0.2), (1, 2000, -0.6), (2, 3000, 0.4)):
+            for sequence, timeline, acceleration in ((0, 1000, 0.2), (1, 2000, -0.6), (2, 3000, 0.4), (3, 4000, 0.1)):
                 connection.execute(
                     "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, time_basis, archive_mtime_ms, timestamp_quality, acceleration_x_g) "
                     "VALUES ('CAR', 'TRIP', ?, ?, ?, 'collector_session', 1000, 'unknown', ?)",
@@ -126,6 +132,9 @@ class DashboardViewsTest(unittest.TestCase):
             connection.executemany(
                 "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
                 metrics,
+            )
+            connection.execute(
+                "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, text_value) VALUES ('CAR', 'TRIP', 3, '0x10C', 'bad')"
             )
             connection.execute(
                 "INSERT INTO diagnostic_code(device_id, trip_id, sequence, status, slot, raw_code, code, system) VALUES ('CAR', 'TRIP', 1, 'stored', 0, 4660, 'P234', 'powertrain')"

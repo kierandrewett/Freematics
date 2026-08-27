@@ -62,7 +62,7 @@ def history_target(sql: str, ref: str = "A", *, format: str = "table") -> dict:
         "datasource": HISTORY_DS,
         "queryText": sql,
         "rawQueryText": sql,
-        "queryType": "table",
+        "queryType": "time series" if format == "time_series" else "table",
         "refId": ref,
         "timeColumns": ["time"] if format == "time_series" else [],
     }
@@ -1165,7 +1165,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 47,
                 "Diagnostic scan",
                 0,
-                76,
+                96,
                 f"max({fresh_diagnostic_states})",
                 width=6,
                 unit="short",
@@ -1319,6 +1319,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "FROM sample AS s WHERE s.device_id = '$device' AND s.trip_id = '$trip' AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL "
                 "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                 "ORDER BY sequence",
+                format="time_series",
             )],
             21: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
@@ -1418,12 +1419,13 @@ def build_dashboard(view: str = "combined") -> dict:
                 "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" "
                 "FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id "
                 "AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence "
-                f"WHERE {metric_trip_where.replace('m.', 'latest.')} AND latest_sample.{historical_range} "
+                f"WHERE {metric_trip_where.replace('m.', 'latest.')} AND latest.numeric_value IS NOT NULL AND latest_sample.{historical_range} "
                 "AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate "
                 "JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id "
                 "AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence "
                 "WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id "
-                "AND candidate.pid = latest.pid AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
+                "AND candidate.pid = latest.pid AND candidate.numeric_value IS NOT NULL "
+                "AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
                 "ORDER BY latest.pid",
             )],
         }
@@ -1432,6 +1434,8 @@ def build_dashboard(view: str = "combined") -> dict:
             if targets:
                 panel["datasource"] = HISTORY_DS
                 panel["targets"] = targets
+                if panel["id"] in {19, 20, 31}:
+                    panel.pop("transformations", None)
 
         for panel_id, description in {
             7: "Stored display-timeline start for the selected trip. Capture UTC and display-time basis remain in the evidence panel.",

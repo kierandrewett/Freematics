@@ -979,15 +979,6 @@
         }
       ],
       "title": "Trip index",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "trip_id",
-            "mode": "outer"
-          }
-        }
-      ],
       "type": "table"
     },
     {
@@ -1098,21 +1089,14 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", s.gps_speed_kph * 0.621371 AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", (SELECT numeric_value * 0.621371 FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" FROM sample AS s WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", s.gps_speed_kph * 0.621371 AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", (SELECT numeric_value * 0.621371 FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" FROM sample AS s WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
-          "timeColumns": []
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Trip route",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "Time",
-            "mode": "outer"
-          }
-        }
-      ],
       "type": "geomap"
     },
     {
@@ -1267,7 +1251,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1365,7 +1349,7 @@
           },
           "queryText": "SELECT timeline_ms / 1000.0 AS time, acceleration_x_g AS \"X axis (g)\", acceleration_y_g AS \"Y axis (g)\", acceleration_z_g AS \"Z axis (g)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
           "rawQueryText": "SELECT timeline_ms / 1000.0 AS time, acceleration_x_g AS \"X axis (g)\", acceleration_y_g AS \"Y axis (g)\", acceleration_z_g AS \"Z axis (g)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1463,7 +1447,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1561,7 +1545,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1676,7 +1660,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1791,7 +1775,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -1918,7 +1902,7 @@
           },
           "queryText": "SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
           "rawQueryText": "SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -2059,7 +2043,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\", CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL AND MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) > 0 THEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * 2.82480848939 / MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) END AS \"ECU economy (UK mpg)\", CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL AND MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) > 0 THEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * 2.82480848939 / (MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) * 3600.0 / 10951.5) END AS \"MAF economy estimate (UK mpg)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\", CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL AND MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) > 0 THEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * 2.82480848939 / MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) END AS \"ECU economy (UK mpg)\", CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL AND MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) > 0 THEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * 2.82480848939 / (MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) * 3600.0 / 10951.5) END AS \"MAF economy estimate (UK mpg)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -2171,15 +2155,6 @@
         }
       ],
       "title": "Historical metric inventory",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "pid",
-            "mode": "outer"
-          }
-        }
-      ],
       "type": "table"
     },
     {
@@ -2329,7 +2304,7 @@
           },
           "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
           "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
-          "queryType": "table",
+          "queryType": "time series",
           "refId": "A",
           "timeColumns": [
             "time"
@@ -2425,8 +2400,8 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "queryText": "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence WHERE latest.device_id = ${device:sqlstring} AND latest.trip_id = ${trip:sqlstring} AND latest_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id AND candidate.pid = latest.pid AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY latest.pid",
-          "rawQueryText": "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence WHERE latest.device_id = ${device:sqlstring} AND latest.trip_id = ${trip:sqlstring} AND latest_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id AND candidate.pid = latest.pid AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY latest.pid",
+          "queryText": "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence WHERE latest.device_id = ${device:sqlstring} AND latest.trip_id = ${trip:sqlstring} AND latest.numeric_value IS NOT NULL AND latest_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id AND candidate.pid = latest.pid AND candidate.numeric_value IS NOT NULL AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY latest.pid",
+          "rawQueryText": "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence WHERE latest.device_id = ${device:sqlstring} AND latest.trip_id = ${trip:sqlstring} AND latest.numeric_value IS NOT NULL AND latest_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence WHERE candidate.device_id = latest.device_id AND candidate.trip_id = latest.trip_id AND candidate.pid = latest.pid AND candidate.numeric_value IS NOT NULL AND candidate_sample.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY latest.pid",
           "queryType": "table",
           "refId": "A",
           "timeColumns": []
