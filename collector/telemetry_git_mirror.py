@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import time
@@ -352,14 +351,41 @@ class TelemetryGitMirror:
             if askpass_dir is not None:
                 askpass_dir.cleanup()
 
+    def _maybe_push(self, state: dict[str, Any], now: int, *, force: bool) -> None:
+        if not self.git_push or not (self.repo / ".git").exists():
+            return
+        last_attempt = int(state.get("last_push_attempt_ms", 0))
+        if not force and now - last_attempt < self.flush_seconds * 1_000:
+            return
+        state["last_push_attempt_ms"] = now
+        self._write_state(state)
+        self._push()
+
     def flush(self, *, force: bool = False) -> bool:
         if not self.spool_path.exists() or self.spool_path.stat().st_size == 0:
+            state = self._read_state()
+            self._maybe_push(state, self.now_ms(), force=force)
             return False
         state = self._read_state()
         now = self.now_ms()
         if not force and now - int(state.get("last_flush_ms", 0)) < self.flush_seconds * 1_000:
             return False
-        pending = [json.loads(line) for line in self.spool_path.read_text(encoding="utf-8").splitlines() if line]
+        pending: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        # A crash can occur after the spool fsync but before the cursor write.
+        # De-duplicate that replay by deterministic event_id before creating a
+        # segment; the exact payload is still present in the first record.
+        with self.spool_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                record_id = str(record.get("event_id", ""))
+                if record_id and record_id in seen_ids:
+                    continue
+                if record_id:
+                    seen_ids.add(record_id)
+                pending.append(record)
         if not pending:
             return False
         self._ensure_repo_metadata()
@@ -376,7 +402,8 @@ class TelemetryGitMirror:
             for segment_number in range(0, len(records), MAX_SEGMENT_RECORDS):
                 segment = records[segment_number : segment_number + MAX_SEGMENT_RECORDS]
                 first_id = str(segment[0]["event_id"])[:16]
-                target = self.repo / "events" / device / year / month / day / trip_id / f"part-{first_id}.jsonl"
+                last_id = str(segment[-1]["event_id"])[:16]
+                target = self.repo / "events" / device / year / month / day / trip_id / f"part-{first_id}-{last_id}.jsonl"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 content = b"".join(json_line(record) for record in segment)
                 if target.exists():
@@ -399,11 +426,14 @@ class TelemetryGitMirror:
             return False
         count = len(pending)
         self._git("commit", "-m", f"telemetry: publish {count} raw records")
-        if self.git_push:
-            self._push()
         self.spool_path.write_bytes(b"")
         state["last_flush_ms"] = now
         self._write_state(state)
+        # A local commit is the durable acknowledgement.  Push afterwards so
+        # a transient GitHub outage cannot cause the same records to be
+        # re-emitted alongside the next batch; the next cycle retries the
+        # already-created local commit.
+        self._maybe_push(state, now, force=True)
         return True
 
     def run_once(self, *, force_flush: bool = False) -> tuple[int, bool]:

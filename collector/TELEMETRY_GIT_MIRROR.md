@@ -8,8 +8,8 @@ protocol and it is not the source of truth:
 2. The history indexer projects that archive into SQLite for Grafana trips.
 3. This sidecar tails complete archive lines into a durable local spool.
 4. Every flush writes immutable JSONL segments and creates one robot-authored
-   Git commit. Push failures leave both the local commit and spool in place;
-   the next cycle retries the push before acknowledging the spool.
+   Git commit. The local commit is the durable acknowledgement; push failures
+   leave it ahead of the remote and the next cycle retries that commit.
 
 Each upload has a `batch` record with exact `raw_payload_b64` bytes and each
 PID-0-delimited frame has a `sample` record with exact `raw_frame_b64` bytes,
