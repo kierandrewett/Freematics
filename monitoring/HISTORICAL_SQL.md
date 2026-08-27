@@ -15,7 +15,8 @@ The current schema uses these boundaries:
 
 * `trip` has the composite key `(device_id, trip_id)`. It stores collector
   login time, optional GNSS capture bounds, a display timeline, timestamp
-  quality, sample and gap counts, and the source archive path.
+  quality, sample and gap counts, GPS fix/HDOP quality counts, OBD/GNSS speed
+  disagreement counts, and the source archive path.
 * `sample` has the composite key `(device_id, trip_id, sequence)`. It stores
   the device monotonic clock, optional `capture_utc_ms`, `timeline_ms`,
   `time_basis`, timestamp quality, GNSS coordinates, speed, heading, HDOP,
@@ -33,6 +34,10 @@ The current schema uses these boundaries:
   `trip_metric_summary` provide metadata and bounded query surfaces.
 * `ingest_file` records content hashes, processed size, sealing state, and
   mutation detection so an index pass is idempotent.
+
+The indexer marks HDOP above `5.0` as poor and an OBD/GNSS speed difference
+above `10 km/h` as a disagreement. These are data-quality flags, not vehicle
+fault diagnoses.
 
 `capture_utc_ms` is populated only from valid GNSS date/time fields or a
 monotonic interpolation anchored by valid GNSS. If capture UTC is unknown,

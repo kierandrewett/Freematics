@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS trip (
     sample_count INTEGER NOT NULL DEFAULT 0,
     data_bytes INTEGER NOT NULL DEFAULT 0,
     gap_count INTEGER NOT NULL DEFAULT 0,
+    gps_fix_count INTEGER NOT NULL DEFAULT 0,
+    gps_poor_quality_count INTEGER NOT NULL DEFAULT 0,
+    speed_disagreement_count INTEGER NOT NULL DEFAULT 0,
     archive_mtime_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     PRIMARY KEY (device_id, trip_id)

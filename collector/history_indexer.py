@@ -34,6 +34,8 @@ CATALOGUE_RE = re.compile(
 )
 SEAL_AFTER_SECONDS = 60
 GAP_THRESHOLD_MS = 3_000
+GPS_HDOP_POOR_THRESHOLD = 5.0
+SPEED_DISAGREEMENT_THRESHOLD_KPH = 10.0
 DTC_CODE_SLOTS = 16
 DTC_GROUPS = (
     ("stored", "300", "301"),
@@ -219,6 +221,27 @@ def display_timestamps(
 def gps_value(fields: dict[str, str], pid: str) -> float | None:
     return numeric(fields.get(pid))
 
+def tracking_quality(frames: list[Frame]) -> tuple[int, int, int]:
+    """Count fixes, poor-HDOP samples, and OBD/GNSS speed disagreements."""
+
+    gps_fixes = 0
+    poor_hdop = 0
+    speed_disagreements = 0
+    for frame in frames:
+        fields = frame.fields
+        latitude = gps_value(fields, "A")
+        longitude = gps_value(fields, "B")
+        if latitude is not None and longitude is not None:
+            gps_fixes += 1
+        hdop = gps_value(fields, "12")
+        if hdop is not None and hdop * 0.1 > GPS_HDOP_POOR_THRESHOLD:
+            poor_hdop += 1
+        obd_speed = gps_value(fields, "10D")
+        gps_speed = gps_value(fields, "D")
+        if obd_speed is not None and gps_speed is not None and abs(obd_speed - gps_speed) > SPEED_DISAGREEMENT_THRESHOLD_KPH:
+            speed_disagreements += 1
+    return gps_fixes, poor_hdop, speed_disagreements
+
 
 def acceleration_values(fields: dict[str, str]) -> tuple[float | None, float | None, float | None]:
     """Decode the semicolon-delimited MEMS acceleration field when complete."""
@@ -338,6 +361,7 @@ class HistoryIndexer:
         self._prepare_database()
         with closing(sqlite3.connect(self.database)) as connection:
             self._ensure_sample_columns(connection)
+            self._ensure_trip_columns(connection)
             connection.executescript((Path(__file__).with_name("history_schema.sql")).read_text())
             self._populate_catalogue(connection)
             connection.commit()
@@ -351,6 +375,17 @@ class HistoryIndexer:
         for name in ("acceleration_x_g", "acceleration_y_g", "acceleration_z_g"):
             if name not in columns:
                 connection.execute(f"ALTER TABLE sample ADD COLUMN {name} REAL")
+
+    @staticmethod
+    def _ensure_trip_columns(connection: sqlite3.Connection) -> None:
+        """Apply additive trip quality columns to an existing current schema."""
+
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(trip)")}
+        if not columns:
+            return
+        for name in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE trip ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
 
     def _populate_catalogue(self, connection: sqlite3.Connection) -> None:
         """Populate standard and device metric metadata from one catalogue."""
@@ -430,6 +465,7 @@ class HistoryIndexer:
             1 for previous_frame, frame in zip(frames, frames[1:])
             if frame.device_monotonic_ms - previous_frame.device_monotonic_ms > GAP_THRESHOLD_MS
         )
+        gps_fix_count, gps_poor_quality_count, speed_disagreement_count = tracking_quality(frames)
 
         known_captures = [capture for capture in captures if capture is not None]
         capture_start_ms = known_captures[0] if known_captures else None
@@ -442,9 +478,10 @@ class HistoryIndexer:
             """INSERT INTO trip(
                 device_id, trip_id, archive_path, collector_login_ms,
                 start_capture_ms, end_capture_ms, timestamp_quality,
-                sample_count, data_bytes, gap_count, timeline_start_ms,
+                sample_count, data_bytes, gap_count, gps_fix_count,
+                gps_poor_quality_count, speed_disagreement_count, timeline_start_ms,
                 timeline_end_ms, time_basis, archive_mtime_ms, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(device_id, trip_id) DO UPDATE SET
                 archive_path=excluded.archive_path,
                 collector_login_ms=excluded.collector_login_ms,
@@ -452,7 +489,9 @@ class HistoryIndexer:
                 end_capture_ms=excluded.end_capture_ms,
                 timestamp_quality=excluded.timestamp_quality,
                 sample_count=excluded.sample_count, data_bytes=excluded.data_bytes,
-                gap_count=excluded.gap_count,
+                gap_count=excluded.gap_count, gps_fix_count=excluded.gps_fix_count,
+                gps_poor_quality_count=excluded.gps_poor_quality_count,
+                speed_disagreement_count=excluded.speed_disagreement_count,
                 timeline_start_ms=excluded.timeline_start_ms,
                 timeline_end_ms=excluded.timeline_end_ms,
                 time_basis=excluded.time_basis,
@@ -469,6 +508,9 @@ class HistoryIndexer:
                 len(frames),
                 stat.st_size,
                 gap_count,
+                gps_fix_count,
+                gps_poor_quality_count,
+                speed_disagreement_count,
                 timelines[0] if timelines else None,
                 timelines[-1] if timelines else None,
                 "unknown" if not frames or all(basis == "unknown" for basis in time_bases)

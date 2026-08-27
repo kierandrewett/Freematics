@@ -63,6 +63,8 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("$__from", archive_sql)
         self.assertIn("$__to", archive_sql)
         self.assertIn("${device:sqlstring}", archive_sql)
+        for quality_field in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
+            self.assertIn(quality_field, archive_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))

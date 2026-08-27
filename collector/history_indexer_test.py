@@ -105,7 +105,7 @@ class HistoryIndexerTest(unittest.TestCase):
             archive = root / "CAR" / "2026/08/27/20260827-001247.txt"
             archive.parent.mkdir(parents=True)
             archive.write_text(
-                "0:100,12:1,030:12.3,20:0.1;0.2;0.3,300:1,301:4660,0:600,030:13.0,20:-0.4;-0.5;-0.6\n"
+                "0:100,12:1,030:12.3,20:0.1;0.2;0.3,300:1,301:4660,A:51.0,B:-1.0,D:30,10D:50,0:600,030:13.0,20:-0.4;-0.5;-0.6\n"
             )
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(
@@ -125,6 +125,10 @@ class HistoryIndexerTest(unittest.TestCase):
                     "SELECT status, slot, raw_code, code, system FROM diagnostic_code"
                 ).fetchone()
                 self.assertEqual(dtc, ("stored", 0, 4660, "P1234", "powertrain"))
+                quality = connection.execute(
+                    "SELECT gps_fix_count, gps_poor_quality_count, speed_disagreement_count FROM trip"
+                ).fetchone()
+                self.assertEqual(quality, (1, 0, 1))
                 vector = connection.execute(
                     "SELECT acceleration_x_g FROM sample WHERE sequence = 1"
                 ).fetchone()

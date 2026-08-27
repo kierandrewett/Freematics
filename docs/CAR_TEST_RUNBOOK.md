@@ -72,9 +72,14 @@ The firmware now emits these device fields with every active sample:
 | `0x088` | Slowest OBD response in the latest collection cycle, in milliseconds |
 | `0x089` | OBD state: `0` disconnected, `1` ready, `2` degraded |
 | `0x08A` | Consecutive failed core OBD cycles |
+| `0x08B` | Filled telemetry readings waiting for upload |
+| `0x08C` | Encoded telemetry bytes waiting for upload |
 
 Use these fields to explain missing values. Do not treat a failed read as a
 zero measurement.
+
+The queue fields report the backlog before the current sample enters the
+firmware queue. A later sample reflects any change caused by that sample.
 
 For Corsa-specific discovery, collect the VIN, engine code, ECU response
 address, bus activity, bitrate evidence, and raw response before enabling a
