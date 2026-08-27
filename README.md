@@ -60,9 +60,10 @@ checks. It sends one parked marker on entry, then performs no periodic
 cellular/GPS tracking while parked. Three consecutive samples above 0.5 g are
 required to wake the active collection path, filtering a single bump or
 vibration. Motion returns the unit to the active collection path automatically.
-The production device was flashed from fork commit `12dc207bc559` and
-confirmed over serial with bearer authentication, modem time, strict TLS, and
-accepted HTTPS posts.
+The last recorded device-side image was fork commit `12dc207bc559`. This
+historical record does not prove that the current checkout's 1.0.0 image is
+installed. After a current production flash, record the host image SHA-256 and
+the serial `[BOOT] Release:` and `[BOOT] Build:` lines.
 
 Data Storage
 ------------
@@ -94,17 +95,43 @@ A BLE SPP server is implemented in [FreematicsPlus](https://github.com/stanleyhu
 Build and flash
 ---------------
 
-Install PlatformIO, create an ignored `local_config.h` from the example, and connect the ONE+ Model B over USB. Production builds require the 64-character bearer token used by the Caddy-protected collector:
+Install PlatformIO, create an ignored `local_config.h` from the example, and
+connect the ONE+ Model B over USB. Production builds require the 64-character
+bearer token used by the Caddy-protected collector. Keep these committed
+sampling settings unchanged unless the vehicle test plan records a new
+cadence:
+
+* `OBD_FAST_INTERVAL_MS=500UL`, with two priority-1 PIDs per cycle
+* `OBD_AUX_INTERVAL_MS=5000UL`, with eight rotating auxiliary PIDs per cycle
+* `STANDBY_POLL_INTERVAL_MS=250UL`
+
+Build the production image, record its hash, then flash it. Before running
+this block, manually confirm that `local_config.h` contains the intended
+deployment server and APN without printing credentials:
 
 ```sh
+set -eu
+test -f local_config.h || { printf '%s\n' 'local_config.h is required'; exit 1; }
+device_token="${FREEMATICS_TOKEN:-}"
+test "${#device_token}" -eq 64 || { printf '%s\n' 'FREEMATICS_TOKEN must contain 64 hexadecimal characters'; exit 1; }
+case "$device_token" in
+  *[!0123456789abcdefABCDEF]*) printf '%s\n' 'FREEMATICS_TOKEN contains a non-hexadecimal character'; exit 1 ;;
+esac
+PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
+sha256sum .pio/build/esp32dev/firmware.bin
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. Do not store it in the repository or a shared shell script.
-The boot log prints `[BOOT] Release: 1.0.0` and `[BOOT] Build:` with the
-short Git revision (or `-dirty` when the source tree was modified). Record
-both values after every production flash.
+`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. When
+`PRODUCTION_BUILD=1` is set, `build_secrets.py` stops before creating the image
+if the token is missing or malformed. The ignored `local_config.h` must also
+contain this deployment's server and APN settings; without it, the firmware
+falls back to the upstream UDP endpoint and an empty APN. Stop before flashing
+when either input is absent. Do not use a bench-only build or a placeholder
+token as an installable fallback. Do not store the real token in the
+repository or a shared shell script. Record the image SHA-256 and both boot
+values after every production flash.
 
 Repository layout
 -----------------

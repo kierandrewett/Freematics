@@ -1,6 +1,13 @@
 # Freematics Model B car test runbook
 
-This is the portable hand-off for the Freematics ONE+ Model B installed as device `ZKUCALJ0`. The device is running the token-bearing production image from fork commit `12dc207bc559` (flashed and hash-verified 2026-08-27) and does not need a laptop to send telemetry. The boot log confirmed this revision, bearer authentication, modem time, strict TLS, and repeated accepted HTTPS posts.
+This is the portable hand-off for the Freematics ONE+ Model B installed as
+device `ZKUCALJ0`. The last recorded device-side image was fork commit
+`12dc207bc559`, based on an earlier hardware observation. That historical
+record does not verify the image currently installed after the interrupted
+flash attempt. The source tree release marker is `1.0.0`, but use the
+production rebuild and boot verification below before calling it installed.
+Bench USB checks can verify boot, time, TLS, cellular attach and server
+responses. They cannot verify vehicle facts.
 
 ## Known-good configuration
 
@@ -114,40 +121,80 @@ after the evidence run.
 
 ## Optional laptop serial check
 
-Install PlatformIO and clone the focused fork:
+Use a verified checkout of this repository. Do not clone the default branch
+and treat its build as the production image:
 
 ```bash
-git clone https://github.com/kierandrewett/Freematics.git
-cd Freematics
+cd /path/to/freematics
+git status --short --branch
 pio run -e esp32dev
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-Expected milestones include:
+The `pio run` command above is a bench build only. It does not inject the
+production bearer token and it is not release evidence. Use the production
+rebuild command in the next section before flashing a vehicle device.
+
+Current source-emitted milestones include:
 
 ```text
-DEVICE ID:ZKUCALJ0
-TYPE:14
-OBD:OK
+[BOOT] Release: 1.0.0
+[BOOT] Build: <short source commit>
+[BOOT] Device ID: ZKUCALJ0
+[BOOT] Hardware type: 14
+[OBD] ECU connected
+VIN:<vehicle VIN>
 CELL:SIM7670E-LN
 APN:simbase
 [CELL] In service
-[DAT x2]
-[HTTP] OK 10
+[HTTP] Server accepted <N> values
 ```
 
-The batch count varies. `[DAT x1]` is normal when only one sample is ready; `[DAT x24]` is the maximum HTTP backlog batch. The number after `HTTP OK` is the count of decoded values, not the count of requests.
+The OBD and HTTP lines depend on the connected hardware and server response.
+The batch count varies. The number in `[HTTP] Server accepted` is the count of
+decoded values, not the count of requests.
 
-`OBD:NO` means the ECU is not awake, the unit is not seated in the OBD socket, or the vehicle/protocol has not responded. It does not indicate a SIM or server failure.
+`[OBD] ECU not available` means the ECU is not awake, the unit is not seated in
+the OBD socket, or the vehicle/protocol has not responded. It does not indicate
+a SIM or server failure.
 
 ## Rebuilding or reflashing
 
-The committed `local_config.h.example` documents configuration, but Wi-Fi and telemetry credentials are intentionally not committed. The collector is gated by Caddy on both public and private ingress, so production firmware must be built with the device's 64-character bearer token obtained through the authorised server-secret process. To reproduce it on another unit, create an ignored `local_config.h`, then run:
+The committed `local_config.h.example` documents configuration, but Wi-Fi and
+telemetry credentials are intentionally not committed. The collector is gated
+by Caddy on both public and private ingress, so production firmware must be
+built with the device's 64-character bearer token obtained through the
+authorised server-secret process. Keep the committed production cadence:
+
+* `OBD_FAST_INTERVAL_MS=500UL`, with two priority-1 PIDs per cycle
+* `OBD_AUX_INTERVAL_MS=5000UL`, with eight rotating auxiliary PIDs per cycle
+* `STANDBY_POLL_INTERVAL_MS=250UL`
+
+Build the image, record its hash, then flash it. Before running this block,
+manually confirm that `local_config.h` contains the intended deployment server
+and APN without printing credentials:
 
 ```bash
+set -eu
+test -f local_config.h || { printf '%s\n' 'local_config.h is required'; exit 1; }
+device_token="${FREEMATICS_TOKEN:-}"
+test "${#device_token}" -eq 64 || { printf '%s\n' 'FREEMATICS_TOKEN must contain 64 hexadecimal characters'; exit 1; }
+case "$device_token" in
+  *[!0123456789abcdefABCDEF]*) printf '%s\n' 'FREEMATICS_TOKEN contains a non-hexadecimal character'; exit 1 ;;
+esac
+PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
+sha256sum .pio/build/esp32dev/firmware.bin
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
+pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. Never paste the token into Git, shell history, screenshots or support logs.
-
-Do not clear diagnostic codes from the firmware or dashboard during initial testing. Reading codes is non-destructive; clearing them can erase useful freeze-frame evidence and readiness state.
+`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. When
+`PRODUCTION_BUILD=1` is set, `build_secrets.py` stops before creating the image
+if the token is missing or malformed. The ignored `local_config.h` must also
+contain this deployment's server and APN settings; without it, the firmware
+falls back to the upstream UDP endpoint and an empty APN. Stop before flashing
+when either input is absent. Do not use a bench-only build or a placeholder
+token as an installable fallback. Never paste the token into Git, shell
+history, screenshots or support logs. Do not clear diagnostic codes from the
+firmware or dashboard during initial testing. Reading codes is non-destructive;
+clearing them can erase useful freeze-frame evidence and readiness state.
