@@ -255,7 +255,14 @@ int incomingUDPCallback(void* _hp)
 			// always accept
 			memcpy(&pld->udpPeer, &cliaddr, sizeof(cliaddr));
 		}
-		if (!pld->fp) {
+		int deviceRestarted = deviceTick && pld->deviceTick
+			&& deviceTick < pld->deviceTick
+			&& pld->deviceTick - deviceTick > PROXY_MAX_TIME_BEHIND;
+		if (!pld->fp || deviceRestarted) {
+			if (pld->fp) {
+				fclose(pld->fp);
+				pld->fp = 0;
+			}
 			clearLiveData(pld);
 			pld->serverDataTick = serverTick;
 			pld->sessionStartTick = serverTick;
@@ -268,7 +275,7 @@ int incomingUDPCallback(void* _hp)
 			pld->serverDataTick = serverTick;
 			printf("DEVICE RE-LOGIN, ID:%s\n", pld->devid);
 		}
-		if (!pld->fp) pld->deviceTick = deviceTick;
+		if (deviceTick) pld->deviceTick = deviceTick;
 	}
 	if (!pld) {
 		fprintf(stderr, "INVALID CHANNEL - %s\n", buf);

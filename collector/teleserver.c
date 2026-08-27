@@ -117,6 +117,8 @@ static int parseFiniteNumber(const char* text, double* value)
 }
 
 static unsigned int tickAgeMs(uint64_t now, uint64_t then);
+static int channelIsRunning(const CHANNEL_DATA* pld, uint64_t now);
+static int channelIsParked(const CHANNEL_DATA* pld, uint64_t now);
 static int appendFormat(char* buf, int bs, int l, const char* format, ...)
 {
 	if (!buf || !format || bs <= 0 || l < 0) return 0;
@@ -664,6 +666,7 @@ FILE* createDataFile(CHANNEL_DATA* pld)
 	written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%02u", btm->tm_mday);
 	if (written < 0 || (size_t)written >= sizeof(filename) - (size_t)n) return NULL;
 	n += written;
+	mkdir(filename, 0755);
 	written = snprintf(filename + n, sizeof(filename) - (size_t)n, "/%04u%02u%02u-%02u%02u%02u.txt",
 		btm->tm_year + 1900,
 		btm->tm_mon + 1,
@@ -942,6 +945,18 @@ static unsigned int tickAgeMs(uint64_t now, uint64_t then)
 	uint64_t age = now - then;
 	return age > UINT_MAX ? UINT_MAX : (unsigned int)age;
 }
+static int channelIsRunning(const CHANNEL_DATA* pld, uint64_t now)
+{
+	return pld && (pld->flags & FLAG_RUNNING)
+		&& tickAgeMs(now, pld->serverDataTick) <= CHANNEL_TIMEOUT * 1000U;
+}
+
+static int channelIsParked(const CHANNEL_DATA* pld, uint64_t now)
+{
+	return pld && (pld->flags & FLAG_SLEEPING)
+		&& tickAgeMs(now, pld->serverPingTick) <= CHANNEL_TIMEOUT * 1000U;
+}
+
 
 void CheckChannels()
 {
@@ -1131,9 +1146,11 @@ int uhChannelsXML(UrlHandlerParam* param)
 	for (int n = 0; n < MAX_CHANNELS; n++) {
 		CHANNEL_DATA* pld = ld + n;
 		if (pld->id) {
+			unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+			int parked = channelIsParked(pld, tick);
 			p += sprintf(p, "<channel id=\"%u\" devid=\"%s\" recv=\"%u\" rate=\"%u\" tick=\"%u\" elapsed=\"%u\" age=\"%u\" parked=\"%u\" rssi=\"%d\" flags=\"%u\"",
-				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, pld->deviceTick, pld->elapsedTime, 
-				(int)(tick - pld->serverDataTick), (pld->flags & FLAG_RUNNING) ? 0 : 1, (int)pld->rssi, pld->devflags);
+				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, pld->deviceTick, pld->elapsedTime,
+				age, parked, (int)pld->rssi, pld->devflags);
 
 			if (extend) {
 				if (*pld->vin) p += sprintf(p, "<vin>%s</vin>", pld->vin);
@@ -1205,15 +1222,15 @@ int uhChannels(UrlHandlerParam* param)
 		if (!pld->id) continue;
 		if (devid && strcmp(pld->devid, devid)) continue;
 		if (id == 0 || pld->id == id) {
-			unsigned int age = (unsigned int)(tick - pld->serverDataTick);
-			unsigned int pingage = (unsigned int)(tick - pld->serverPingTick);
+			unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+			unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
 			if (refresh && (age > refresh && pingage > refresh)) {
 				removeChannel(pld);
 				continue;
 			}
 			l += snprintf(buf + l, bs - l, "\n{\"id\":\"%u\",\"devid\":\"%s\",\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u",
 				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
-				age, pingage, (int)pld->rssi, pld->devflags, (pld->flags & FLAG_RUNNING) ? 0 : 1);
+				age, pingage, (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
 
 			if (extend) {
 				if (*pld->vin) {
@@ -1351,11 +1368,11 @@ int uhGet(UrlHandlerParam* param)
 	int bs = param->bufSize;
 	char* buf = param->pucBuffer;
 	int l = 0;
-	unsigned int age = pld->serverDataTick ? (unsigned int)(tick - pld->serverDataTick) : 0;
-	unsigned int pingage = pld->serverPingTick ? (unsigned int)(tick - pld->serverPingTick) : 0;
+	unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+	unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
 	l += snprintf(buf + l, bs - l, "{\"stats\":{\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u}",
 		(unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
-		age, pingage, (int)pld->rssi, pld->devflags, (pld->flags & FLAG_RUNNING) ? 0 : 1);
+		age, pingage, (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
 
 	l += snprintf(buf + l, bs - l, ",\"data\":[");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
@@ -1391,8 +1408,8 @@ int uhPull(UrlHandlerParam* param)
 	int pid = mwGetVarValueInt(param->pxVars, "pid", 0);
 
 	uint64_t tick = GetTickCount64();
-	unsigned int age = (unsigned int)(tick - pld->serverDataTick);
-	unsigned int pingage = (unsigned int)(tick - pld->serverPingTick);
+	unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+	unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
 
 	int bytes = 0;
 	char* buf = param->pucBuffer;
@@ -1400,7 +1417,7 @@ int uhPull(UrlHandlerParam* param)
 
 	bytes += sprintf(buf + bytes, "{");
 	bytes += snprintf(buf + bytes, bufsize - bytes, "\"stats\":{\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"parked\":%u}",
-		pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime, age, pingage, (pld->flags & FLAG_RUNNING) ? 0 : 1);
+		pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime, age, pingage, channelIsParked(pld, tick));
 
 	bytes += snprintf(buf + bytes, bufsize - bytes, ",\"live\":[");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
@@ -1553,6 +1570,7 @@ int uhNotify(UrlHandlerParam* param)
 	int event = mwGetVarValueInt(param->pxVars, "EV", 0);
 	unsigned int devflags = mwGetVarValueInt(param->pxVars, "DF", 0);
 	int rssi = mwGetVarValueInt(param->pxVars, "SSI", 0);
+	uint32_t deviceTick = (uint32_t)mwGetVarValueInt(param->pxVars, "TS", 0);
 	const char* sid;
 	if (param->pucRequest[0] == '/') {
 		sid = param->pucRequest + 1;
@@ -1573,8 +1591,8 @@ int uhNotify(UrlHandlerParam* param)
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"failed\",\"error\":\"Invalid channel\"}");
 		return FLAG_DATA_RAW;
 	}
-
 	uint64_t tick = GetTickCount64();
+
 	if (event == EVENT_LOGIN) {
 		if (!pld) {
 			pld = assignChannel(sid);
@@ -1586,11 +1604,19 @@ int uhNotify(UrlHandlerParam* param)
 
 		if (checkVIN(vin)) {
 			strncpy(pld->vin, vin, sizeof(pld->vin) - 1);
+			pld->vin[sizeof(pld->vin) - 1] = 0;
 		}
 		pld->devflags = devflags;
 		pld->rssi = rssi;
 		pld->ip = param->hs->ipAddr;
-		if (!pld->fp) {
+		int deviceRestarted = deviceTick && pld->deviceTick
+			&& deviceTick < pld->deviceTick
+			&& pld->deviceTick - deviceTick > PROXY_MAX_TIME_BEHIND;
+		if (!pld->fp || deviceRestarted) {
+			if (pld->fp) {
+				fclose(pld->fp);
+				pld->fp = 0;
+			}
 			clearLiveData(pld);
 			pld->sessionStartTick = tick;
 			pld->serverDataTick = tick;
@@ -1603,9 +1629,11 @@ int uhNotify(UrlHandlerParam* param)
 			pld->proxyTick = 0;
 			pld->serverDataTick = tick;
 		}
+		if (deviceTick) pld->deviceTick = deviceTick;
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"id\":%u,\"result\":\"done\"}", pld->id);
 		return FLAG_DATA_RAW;
-	} else if (event == EVENT_LOGOUT) {
+	}
+	else if (event == EVENT_LOGOUT) {
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"done\"}");
 		if (pld->fp) {
 			fclose(pld->fp);

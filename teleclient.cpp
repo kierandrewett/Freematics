@@ -540,8 +540,8 @@ void TeleClientUDP::shutdown()
 bool TeleClientHTTP::notify(byte event, const char* payload)
 {
   char path[256];
-  snprintf(path, sizeof(path), "%s/notify/%s?EV=%u&SSI=%d&VIN=%s", SERVER_PATH, devid,
-    (unsigned int)event, (int)rssi, vin);
+  snprintf(path, sizeof(path), "%s/notify/%s?EV=%u&SSI=%d&TS=%lu&VIN=%s", SERVER_PATH, devid,
+    (unsigned int)event, (int)rssi, (unsigned long)millis(), vin);
   if (event == EVENT_LOGOUT) login = false;
 #if ENABLE_WIFI
   if (wifi.connected())
