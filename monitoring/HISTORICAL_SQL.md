@@ -77,7 +77,8 @@ SELECT trip_id AS "Trip",
        archive_path AS "Archive"
 FROM trip
 WHERE device_id = '$device'
-  AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)
+  AND (timeline_start_ms IS NULL OR
+       timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER))
 ORDER BY timeline_start_ms DESC;
 ```
 

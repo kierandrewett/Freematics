@@ -1257,7 +1257,7 @@ def build_dashboard(view: str = "combined") -> dict:
                         "archive_path AS \"Archive\" "
                         "FROM trip "
                         "WHERE device_id = '$device' "
-                        "AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                        "AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
                         "ORDER BY timeline_start_ms DESC",
                     )
                 ],
@@ -1346,7 +1346,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", "
                 "speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" "
                 "FROM trip WHERE device_id = '$device' "
-                "AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
                 "ORDER BY timeline_start_ms DESC",
             )],
             20: [history_target(

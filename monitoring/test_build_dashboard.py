@@ -101,6 +101,10 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("${device:sqlstring}", archive_sql)
         for quality_field in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
             self.assertIn(quality_field, archive_sql)
+        trip_index = next(panel for panel in dashboard["panels"] if panel["id"] == 19)
+        trip_index_sql = trip_index["targets"][0]["queryText"]
+        self.assertIn("timeline_start_ms IS NULL OR", trip_index_sql)
+        self.assertIn("timeline_start_ms IS NULL OR", archive_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
@@ -149,6 +153,24 @@ class DashboardViewsTest(unittest.TestCase):
             if isinstance(panel.get("datasource"), dict)
         }
         self.assertEqual(datasources, {"freematics-prometheus"})
+
+    def test_trip_index_includes_unknown_display_time(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            schema_path = MONITORING.parent / "collector" / "history_schema.sql"
+            connection.executescript(schema_path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timestamp_quality, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'UNKNOWN', '/data/CAR/UNKNOWN.txt', 1000, 'unknown', 1000, 1000)"
+            )
+            panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 19)
+            sql = panel["targets"][0]["queryText"]
+            sql = sql.replace("${device:sqlstring}", "'CAR'").replace("$__from", "0").replace("$__to", "9999")
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual(rows[0][0], "UNKNOWN")
+            self.assertIsNone(rows[0][2])
+        finally:
+            connection.close()
 
     def test_historical_sql_compiles_against_archive_schema(self) -> None:
         schema_path = MONITORING.parent / "collector" / "history_schema.sql"
