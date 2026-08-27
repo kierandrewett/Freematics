@@ -307,6 +307,17 @@ session:
   decoded tool output, not raw request/response bytes, so confidence is
   medium-to-high for that named diesel example and zero for an unverified
   2012 petrol ECU.
+* The [OP-COM Advanced 2015 feature list](https://op-com.pci-diagnosetechnik.de/wp-content/downloads/pdf/OP-COM_Advanced.pdf)
+  lists several Corsa D petrol engine codes (`Z10XEP`, `Z12XEP`, `Z14XEP`,
+  `Z16LEL` and `Z16LER`) as Bosch Motronic units accessed through K-Line.
+  It does not list the target engine `A12XER`, publish raw request/response
+  frames or define a proprietary DID map. The same document lists write and
+  crash-data functions, so it is tool capability evidence, not permission to
+  execute those operations.
+* A [Comunidad Corsa D protocol discussion](https://www.comunidadcorsa.com/foros/forum/modelos-especificos/corsa-d-2006-2014/456683-protocolo-conexion-obd)
+  reports ISO 15765-4 CAN 11/500 for the model range, but provides no year,
+  engine, ECU address or raw frame. Treat it as low-confidence corroboration
+  only.
 * [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
   records passive Corsa D captures and identified ECUs. It does not publish a
   diagnostic service or data-identifier map.
