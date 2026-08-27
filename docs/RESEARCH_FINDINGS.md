@@ -310,10 +310,16 @@ session:
 * The [OP-COM Advanced 2015 feature list](https://op-com.pci-diagnosetechnik.de/wp-content/downloads/pdf/OP-COM_Advanced.pdf)
   lists several Corsa D petrol engine codes (`Z10XEP`, `Z12XEP`, `Z14XEP`,
   `Z16LEL` and `Z16LER`) as Bosch Motronic units accessed through K-Line.
-  It does not list the target engine `A12XER`, publish raw request/response
-  frames or define a proprietary DID map. The same document lists write and
-  crash-data functions, so it is tool capability evidence, not permission to
-  execute those operations.
+  It does not list `A12XER`, so it does not identify the engine installed in
+  this project. It also does not publish raw request/response frames or define
+  a proprietary DID map. The same document lists write and crash-data
+  functions, so it is tool capability evidence, not permission to execute
+  those operations.
+* The [A12XER telemetry dataset card](https://huggingface.co/datasets/PedroCuisinier2025/OBD2_panel_opel_2012/raw/main/README.md)
+  describes 394,406 decoded rows from a 2012 Opel Corsa with an A12XER 1.2
+  petrol engine, collected with an ELM327 adapter and python-OBD. It is useful
+  as a standard PID and latency benchmark, but it contains no VIN, CAN frames,
+  ECU route, positive/negative response envelope or proprietary DID evidence.
 * A [Comunidad Corsa D protocol discussion](https://www.comunidadcorsa.com/foros/forum/modelos-especificos/corsa-d-2006-2014/456683-protocolo-conexion-obd)
   reports ISO 15765-4 CAN 11/500 for the model range, but provides no year,
   engine, ECU address or raw frame. Treat it as low-confidence corroboration
