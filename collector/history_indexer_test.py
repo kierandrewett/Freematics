@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from history_indexer import HistoryIndexer
@@ -26,7 +27,7 @@ class HistoryIndexerTest(unittest.TestCase):
                 now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 1_000,
             )
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
                 self.assertGreaterEqual(connection.execute("SELECT COUNT(*) FROM metric_catalogue").fetchone()[0], 80)
                 self.assertEqual(
@@ -37,7 +38,7 @@ class HistoryIndexerTest(unittest.TestCase):
             archive.write_text("0:100,10C:900,10D:20,A:51.0,B:-1.0,0:600,10C:1200,10D:40,A:51.1,B:-1.1\n")
             # Keep the test file active so the final incomplete frame is held back.
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 1)
                 first = connection.execute("SELECT capture_utc_ms, timestamp_quality FROM sample").fetchone()
                 self.assertIsNone(first[0])
@@ -45,13 +46,13 @@ class HistoryIndexerTest(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample_metric").fetchone()[0], 4)
 
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 1)
 
             # A subsequent frame seals the previous final frame; no duplicate rows.
             archive.write_text(archive.read_text() + "0:1100,10C:1400,10D:50\n")
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 2)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample_metric WHERE pid='0x10C'").fetchone()[0], 2)
 
@@ -70,7 +71,7 @@ class HistoryIndexerTest(unittest.TestCase):
                 now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 1_000,
             )
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 rows = connection.execute(
                     "SELECT sequence, capture_utc_ms, timestamp_quality FROM sample ORDER BY sequence"
                 ).fetchall()
@@ -93,7 +94,7 @@ class HistoryIndexerTest(unittest.TestCase):
                 now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 1_000,
             )
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 gap = connection.execute(
                     "SELECT previous_sequence, sequence, gap_ms FROM sample_gaps"
                 ).fetchone()
@@ -112,7 +113,7 @@ class HistoryIndexerTest(unittest.TestCase):
                 root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000
             )
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 sample = connection.execute(
                     "SELECT gps_hdop, acceleration_x_g, acceleration_y_g, acceleration_z_g FROM sample WHERE sequence = 0"
                 ).fetchone()
@@ -144,7 +145,7 @@ class HistoryIndexerTest(unittest.TestCase):
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(root, database, now_ms=lambda: int(time.time() * 1_000))
             indexer.index_once()
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM trip").fetchone()[0], 2)
                 rows = connection.execute(
                     "SELECT device_id, numeric_value FROM sample_metric WHERE pid='0x10C' ORDER BY device_id"
@@ -161,7 +162,7 @@ class HistoryIndexerTest(unittest.TestCase):
             clock = [2_000_000]
             indexer = HistoryIndexer(root, database, now_ms=lambda: clock[0])
             self.assertEqual(indexer.index_once(), 1)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 first = connection.execute(
                     "SELECT updated_at_ms FROM trip"
                 ).fetchone()
@@ -170,7 +171,7 @@ class HistoryIndexerTest(unittest.TestCase):
                 ).fetchone()
             clock[0] += 10_000
             self.assertEqual(indexer.index_once(), 0)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 second = connection.execute(
                     "SELECT updated_at_ms FROM trip"
                 ).fetchone()
@@ -190,7 +191,7 @@ class HistoryIndexerTest(unittest.TestCase):
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000)
             self.assertEqual(indexer.index_once(), 1)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 values = connection.execute("SELECT numeric_value FROM sample_metric WHERE pid='0x10C' ORDER BY sequence").fetchall()
             self.assertEqual(values, [(900.0,), (1200.0,)])
 
@@ -203,7 +204,7 @@ class HistoryIndexerTest(unittest.TestCase):
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(root, database, now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000)
             self.assertEqual(indexer.index_once(), 1)
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 values = connection.execute(
                     "SELECT ordinal, pid, numeric_value FROM sample_field WHERE sequence = 0 ORDER BY ordinal"
                 ).fetchall()
@@ -214,7 +215,7 @@ class HistoryIndexerTest(unittest.TestCase):
             root = Path(directory) / "data"
             root.mkdir()
             database = Path(directory) / "history.sqlite"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 connection.execute("CREATE TABLE trip (trip_id TEXT PRIMARY KEY)")
                 connection.commit()
 
