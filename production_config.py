@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 _DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+?)\s*$")
+_ENDIF_RE = re.compile(r"^#endif(?:\s*//.*)?$")
 _REQUIRED_DEFINES = (
     "SERVER_HOST",
     "SERVER_PORT",
@@ -16,14 +17,49 @@ _REQUIRED_DEFINES = (
 
 def _parse_defines(text: str) -> dict[str, str]:
     defines: dict[str, str] = {}
+    guard_seen = False
+    guard_depth = 0
     for line_number, line in enumerate(text.splitlines(), 1):
-        match = _DEFINE_RE.match(line)
-        if not match:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
             continue
-        name, value = match.groups()
-        if name in defines:
-            raise ValueError(f"local_config.h:{line_number}: duplicate {name}")
-        defines[name] = value
+        if guard_seen and guard_depth == 0:
+            raise ValueError(f"local_config.h:{line_number}: content after include guard")
+        if not guard_seen and stripped != "#ifndef LOCAL_CONFIG_H_INCLUDED":
+            raise ValueError(f"local_config.h:{line_number}: include guard must be first")
+        if "/*" in line or "*/" in line:
+            raise ValueError(f"local_config.h:{line_number}: block comments are not supported")
+        if "\\" in line:
+            raise ValueError(f"local_config.h:{line_number}: line continuations are not supported")
+        if stripped == "#ifndef LOCAL_CONFIG_H_INCLUDED":
+            if guard_seen:
+                raise ValueError(f"local_config.h:{line_number}: duplicate include guard")
+            guard_seen = True
+            guard_depth = 1
+            continue
+        if stripped == "#define LOCAL_CONFIG_H_INCLUDED":
+            if guard_depth != 1:
+                raise ValueError(f"local_config.h:{line_number}: invalid include guard")
+            continue
+        if _ENDIF_RE.fullmatch(stripped):
+            if guard_depth != 1:
+                raise ValueError(f"local_config.h:{line_number}: unexpected #endif")
+            guard_depth = 0
+            continue
+        match = _DEFINE_RE.match(line)
+        if match:
+            name, value = match.groups()
+            if name in defines:
+                raise ValueError(f"local_config.h:{line_number}: duplicate {name}")
+            defines[name] = value
+            continue
+        if stripped.startswith("#"):
+            raise ValueError(f"local_config.h:{line_number}: unsupported preprocessor directive")
+        raise ValueError(f"local_config.h:{line_number}: unsupported configuration text")
+    if guard_depth:
+        raise ValueError("local_config.h: include guard is not closed")
+    if not guard_seen:
+        raise ValueError("local_config.h: include guard is required")
     return defines
 
 
@@ -36,6 +72,8 @@ def _quoted(defines: dict[str, str], name: str) -> str:
     result = value[1:-1]
     if not result or any(character.isspace() for character in result):
         raise ValueError(f"local_config.h: {name} must be a non-empty value without whitespace")
+    if "\\" in result:
+        raise ValueError(f"local_config.h: {name} must not contain C escape sequences")
     return result
 
 

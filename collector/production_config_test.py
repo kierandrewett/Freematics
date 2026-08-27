@@ -6,11 +6,14 @@ from production_config import validate_production_config
 
 
 VALID_CONFIG = """
+#ifndef LOCAL_CONFIG_H_INCLUDED
+#define LOCAL_CONFIG_H_INCLUDED
 #define SERVER_HOST "freematics.drewett.dev"
 #define SERVER_PORT 443
 #define SERVER_PROTOCOL PROTOCOL_HTTPS_POST
 #define SERVER_PATH "/api"
 #define CELL_APN "simbase"
+#endif
 """
 
 
@@ -40,8 +43,37 @@ class ProductionConfigTests(unittest.TestCase):
                 validate_production_config(invalid)
 
     def test_duplicate_required_definition_is_rejected(self) -> None:
+        duplicate = VALID_CONFIG.replace(
+            "#endif",
+            '#define SERVER_HOST "other.example"\n#endif',
+        )
         with self.assertRaisesRegex(ValueError, "duplicate SERVER_HOST"):
-            validate_production_config(f'{VALID_CONFIG}\n#define SERVER_HOST "other.example"\n')
+            validate_production_config(duplicate)
+
+    def test_include_guard_is_required_and_contains_all_definitions(self) -> None:
+        unguarded = VALID_CONFIG.replace("#ifndef LOCAL_CONFIG_H_INCLUDED\n#define LOCAL_CONFIG_H_INCLUDED\n", "")
+        unguarded = unguarded.replace("#endif\n", "")
+        with self.assertRaisesRegex(ValueError, "include guard"):
+            validate_production_config(unguarded)
+
+        trailing = VALID_CONFIG + '#define SERVER_HOST "other.example"\n'
+        with self.assertRaisesRegex(ValueError, "after include guard"):
+            validate_production_config(trailing)
+
+    def test_unsupported_preprocessor_controls_are_rejected(self) -> None:
+        for directive in (
+            "#if 0\n",
+            "#undef SERVER_HOST\n",
+            "#include \"other_config.h\"\n",
+        ):
+            candidate = VALID_CONFIG.replace("#endif", f"{directive}#endif")
+            with self.assertRaisesRegex(ValueError, "preprocessor directive"):
+                validate_production_config(candidate)
+
+    def test_escaped_values_are_rejected(self) -> None:
+        escaped = VALID_CONFIG.replace('"/api"', r'"/\x61pi"')
+        with self.assertRaisesRegex(ValueError, "escape|line continuation"):
+            validate_production_config(escaped)
 
 
 if __name__ == "__main__":

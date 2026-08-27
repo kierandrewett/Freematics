@@ -127,13 +127,14 @@ and treat its build as the production image:
 ```bash
 cd /path/to/freematics
 git status --short --branch
-pio run -e esp32dev
+env -u FREEMATICS_TOKEN -u PRODUCTION_BUILD pio run -e esp32dev
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-The `pio run` command above is a bench build only. It does not inject the
-production bearer token and it is not release evidence. Use the production
-rebuild command in the next section before flashing a vehicle device.
+The `env -u` prefixes keep credentials and production mode out of this bench
+build even when a production token is exported in the shell. This command is a
+bench build only and is not release evidence. Use the production rebuild command
+in the next section before flashing a vehicle device.
 
 Current source-emitted milestones include:
 
