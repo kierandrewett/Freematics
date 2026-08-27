@@ -291,9 +291,11 @@ var TRIPS = {
 		this.tripID = this.history[tripIndex].id;
 
 		var html = "";
-		html += "<a href='" + serverURL + "trip?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>JSON</a> | "
-		html += "<a href='" + serverURL + "trip/kml?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>KML</a> | "
-		html += "<a href='" + serverURL + "trip/raw?devid=" + encodeURIComponent(USER.devid) + "&tripid=" + encodeURIComponent(this.tripID) + "' target='_blank'>RAW</a><hr/>";
+		var safeDeviceID = encodeURIComponent(USER.devid).replace(/'/g, "%27");
+		var safeTripID = encodeURIComponent(this.tripID).replace(/'/g, "%27");
+		html += "<a href='" + serverURL + "trip?devid=" + safeDeviceID + "&tripid=" + safeTripID + "' target='_blank'>JSON</a> | "
+		html += "<a href='" + serverURL + "trip/kml?devid=" + safeDeviceID + "&tripid=" + safeTripID + "' target='_blank'>KML</a> | "
+		html += "<a href='" + serverURL + "trip/raw?devid=" + safeDeviceID + "&tripid=" + safeTripID + "' target='_blank'>RAW</a><hr/>";
 
 		if (tripIndex < TRIPS.history.length - 1) {
 			html += "<input type='button' value='Previous' onclick='TRIPS.loadTrip(" + (tripIndex + 1) + ")'></input>";
