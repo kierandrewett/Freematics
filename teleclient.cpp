@@ -548,12 +548,12 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 #if ENABLE_WIFI
   if (wifi.connected())
   {
-    return wifi.send(METHOD_GET, path) && wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1) && wifi.code() == 200;
+    return wifi.send(METHOD_POST, path) && wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1) && wifi.code() == 200;
   }
   else
 #endif
   {
-    return cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, path) && cell.receive() && cell.code() == 200;
+    return cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, 0, 0) && cell.receive() && cell.code() == 200;
   }
 }
 

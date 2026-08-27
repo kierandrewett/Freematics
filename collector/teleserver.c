@@ -1664,8 +1664,26 @@ int uhCommand(UrlHandlerParam* param)
 	return FLAG_DATA_RAW;
 }
 
+static int hasValidDeviceBearer(const char* authorization)
+{
+	if (!authorization || strncmp(authorization, "Bearer ", 7)) return 0;
+	const char* token = authorization + 7;
+	unsigned int length = 0;
+	while (ishex(*token)) {
+		token++;
+		length++;
+	}
+	return length == 64 && (*token == 0 || *token == '\r' || *token == '\n');
+}
+
 int uhNotify(UrlHandlerParam* param)
 {
+	if (!param || !param->hs) return FLAG_DATA_RAW;
+	if (ISFLAGSET(param->hs, FLAG_REQUEST_GET) && !hasValidDeviceBearer(param->hs->request.pucAuthInfo)) {
+		param->hs->response.statusCode = 405;
+		param->contentLength = 0;
+		return FLAG_DATA_RAW;
+	}
 	char* vin = mwGetVarValue(param->pxVars, "VIN", 0);
 	int event = mwGetVarValueInt(param->pxVars, "EV", 0);
 	unsigned int devflags = mwGetVarValueInt(param->pxVars, "DF", 0);
