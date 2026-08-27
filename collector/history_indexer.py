@@ -134,7 +134,7 @@ def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
             fields[pid] = value
             ordered_fields.append((pid, value))
         timestamp = int(match.group(1))
-        if timestamp > 0xFFFFFFFF:
+        if timestamp >= 0xFFFFFFFF:
             continue
         frames.append(Frame(timestamp, fields, tuple(ordered_fields)))
     return frames
@@ -220,8 +220,29 @@ def display_timestamps(
     if not frames:
         return [], []
     first = frames[0].device_monotonic_ms
-    timeline = [capture if capture is not None else login_ms + frame.device_monotonic_ms - first for frame, capture in zip(frames, captures)]
-    basis = [quality if quality != "unknown" else "collector_session" for quality in qualities]
+    timeline: list[int] = []
+    basis: list[str] = []
+    offset = login_ms - first
+    previous_tick = first
+    previous_timeline = login_ms
+    for index, (frame, capture, quality) in enumerate(zip(frames, captures, qualities)):
+        tick = frame.device_monotonic_ms
+        if index == 0:
+            candidate = capture if capture is not None else login_ms
+            offset = candidate - tick
+        else:
+            if tick < previous_tick:
+                offset = previous_timeline - tick
+            candidate = capture if capture is not None else tick + offset
+            if candidate < previous_timeline:
+                candidate = previous_timeline
+                offset = candidate - tick
+            elif capture is not None:
+                offset = candidate - tick
+        timeline.append(candidate)
+        basis.append(quality if quality != "unknown" else "collector_session")
+        previous_tick = tick
+        previous_timeline = candidate
     return timeline, basis
 
 

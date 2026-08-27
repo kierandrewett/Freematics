@@ -6,7 +6,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from history_indexer import DTC_CODE_SLOTS, DTC_GROUPS, HistoryIndexer, parse_frames
+from history_indexer import DTC_CODE_SLOTS, DTC_GROUPS, Frame, HistoryIndexer, display_timestamps, parse_frames
 
 
 class HistoryIndexerTest(unittest.TestCase):
@@ -260,5 +260,22 @@ class HistoryIndexerTest(unittest.TestCase):
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0].device_monotonic_ms, 100)
 
+    def test_parser_rejects_sentinel_device_tick(self) -> None:
+        frames = parse_frames("0:4294967295,10C:1,0:100,10C:2", include_final=True)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].device_monotonic_ms, 100)
+
+    def test_display_timeline_stays_monotonic_after_clock_reset(self) -> None:
+        frames = [
+            Frame(100, {}, ()),
+            Frame(5000, {}, ()),
+            Frame(500, {}, ()),
+            Frame(1000, {}, ()),
+        ]
+        timelines, bases = display_timestamps(frames, [None] * len(frames), ["unknown"] * len(frames), 1_000_000)
+        self.assertEqual(timelines, [1_000_000, 1_004_900, 1_004_900, 1_005_400])
+        self.assertEqual(bases, ["collector_session"] * len(frames))
+
 if __name__ == "__main__":
+
     unittest.main()
