@@ -15,6 +15,13 @@ class VendorDiagnosticResponseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         profile = load_profile(PROFILE_PATH)
+        profile = replace(
+            profile,
+            manufacturer_candidates=tuple(
+                replace(candidate, enabled=True, evidence="test response", provenance="test fixture")
+                for candidate in profile.manufacturer_candidates
+            ),
+        )
         identity = VehicleIdentity(
             manufacturer="Opel/Vauxhall",
             model="Corsa D",
