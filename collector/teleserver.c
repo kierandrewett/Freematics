@@ -1564,7 +1564,6 @@ int uhPull(UrlHandlerParam* param)
 	bytes = appendCheckedFormat(buf, capacity, bytes, ",\"data\":[");
 	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	uint32_t readPos = pld->cacheReadPos;
-	uint64_t begin = 0;
 	int bytesMargin = bytes;
 	uint32_t lastts = 0;
 	for (; pld->cache && pld->cacheSize && readPos != pld->cacheWritePos; readPos = (readPos + 1) % pld->cacheSize) {
@@ -1578,7 +1577,6 @@ int uhPull(UrlHandlerParam* param)
 				if (next < 0) break;
 				bytes = next;
 			}
-			if (begin == 0) begin = d->ts;
 		}
 	}
 	if (bytes > 0 && buf[bytes - 1] == ',') bytes--;
