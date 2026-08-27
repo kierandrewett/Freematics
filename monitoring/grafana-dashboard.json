@@ -3942,7 +3942,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+      "description": "Useful ECU lifetime and service counters, including odometer when the ECU advertises optional Mode 01 PID A6. They are direct ECU reports, not values calculated from the short current trip.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -4024,7 +4024,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131|0x1A6\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
           "legendFormat": "Latest",
           "range": false,
           "refId": "A",
