@@ -6,7 +6,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from history_indexer import HistoryIndexer
+from history_indexer import DTC_CODE_SLOTS, DTC_GROUPS, HistoryIndexer, parse_frames
 
 
 class HistoryIndexerTest(unittest.TestCase):
@@ -126,6 +126,10 @@ class HistoryIndexerTest(unittest.TestCase):
                     "SELECT status, slot, raw_code, code, system FROM diagnostic_code"
                 ).fetchone()
                 self.assertEqual(dtc, ("stored", 0, 4660, "P1234", "powertrain"))
+                categories = connection.execute(
+                    "SELECT pid, category FROM metric_catalogue WHERE pid IN ('0x310', '0x330', '0x350') ORDER BY pid"
+                ).fetchall()
+                self.assertEqual(categories, [("0x310", "diagnostics"), ("0x330", "diagnostics"), ("0x350", "diagnostics")])
                 quality = connection.execute(
                     "SELECT gps_fix_count, gps_poor_quality_count, speed_disagreement_count FROM trip"
                 ).fetchone()
@@ -134,6 +138,11 @@ class HistoryIndexerTest(unittest.TestCase):
                     "SELECT acceleration_x_g FROM sample WHERE sequence = 1"
                 ).fetchone()
                 self.assertEqual(vector, (-0.4,))
+
+    def test_dtc_status_fields_do_not_overlap_code_slots(self) -> None:
+        for _status, _count_pid, base_pid, status_pid in DTC_GROUPS:
+            emitted = {int(base_pid, 16) + slot for slot in range(DTC_CODE_SLOTS)}
+            self.assertNotIn(int(status_pid, 16), emitted)
 
     def test_same_second_trip_ids_are_isolated_per_device(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -227,6 +236,29 @@ class HistoryIndexerTest(unittest.TestCase):
             rebuilding = HistoryIndexer(root, database, now_ms=lambda: 1234, rebuild=True)
             self.assertEqual(rebuilding.index_once(), 0)
             self.assertTrue(database.with_name("history.sqlite.backup-1234").exists())
+
+
+
+    def test_initialise_replaces_stale_field_timeline_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            indexer.initialise()
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("DROP VIEW field_timeline")
+                connection.execute("CREATE VIEW field_timeline AS SELECT 1 AS stale")
+                connection.commit()
+            indexer.initialise()
+            with closing(sqlite3.connect(database)) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(field_timeline)")}
+                self.assertIn("pid", columns)
+                self.assertNotIn("stale", columns)
+
+    def test_parser_rejects_out_of_range_frame_timestamp(self) -> None:
+        frames = parse_frames("0:4294967296,10C:1,0:100,10C:2", include_final=True)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].device_monotonic_ms, 100)
 
 if __name__ == "__main__":
     unittest.main()

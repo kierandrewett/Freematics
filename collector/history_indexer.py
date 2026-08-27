@@ -27,8 +27,10 @@ except ImportError:  # pragma: no cover - supports package imports
     from .telemetry_catalog import metric_catalog
 
 TRIP_ID_RE = re.compile(r"^(\d{8})-(\d{6})$")
-FIELD_RE = re.compile(r"(?:^|,)([0-9A-Fa-f]+)[:=]([^,\r\n]*)")
-FRAME_RE = re.compile(r"(?:^|,)0[:=](\d+)(?=,|$)", re.MULTILINE)
+FIELD_RE = re.compile(r"(?:^|,)([0-9A-Fa-f]{1,4})[:=]([^,\r\n]*)")
+FRAME_RE = re.compile(r"(?:^|,)0[:=](\d{1,10})(?=,|$)", re.MULTILINE)
+MAX_ARCHIVE_RECORD_SIZE = 64 * 1024
+MAX_ARCHIVE_FILE_SIZE = 64 * 1024 * 1024
 CATALOGUE_RE = re.compile(
     r'OBD_PID\(0x([0-9A-Fa-f]+),\s*([A-Za-z0-9_]+),\s*"([^"]*)",\s*"([^"]*)",\s*(\d+)\)'
 )
@@ -36,11 +38,11 @@ SEAL_AFTER_SECONDS = 60
 GAP_THRESHOLD_MS = 3_000
 GPS_HDOP_POOR_THRESHOLD = 5.0
 SPEED_DISAGREEMENT_THRESHOLD_KPH = 10.0
-DTC_CODE_SLOTS = 16
+DTC_CODE_SLOTS = 15
 DTC_GROUPS = (
-    ("stored", "300", "301"),
-    ("pending", "320", "321"),
-    ("permanent", "340", "341"),
+    ("stored", "300", "301", "310"),
+    ("pending", "320", "321", "330"),
+    ("permanent", "340", "341", "350"),
 )
 DTC_PREFIXES = "PCBU"
 DTC_SYSTEMS = ("powertrain", "chassis", "body", "network")
@@ -117,6 +119,8 @@ def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
             start += 1
         stop = starts[index + 1].start() if index + 1 < len(starts) else len(raw)
         segment = raw[start:stop]
+        if len(segment) > MAX_ARCHIVE_RECORD_SIZE:
+            continue
         match = FRAME_RE.match(segment)
         if not match:
             continue
@@ -129,7 +133,10 @@ def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
             value = field.group(2).split("*", 1)[0]
             fields[pid] = value
             ordered_fields.append((pid, value))
-        frames.append(Frame(int(match.group(1)), fields, tuple(ordered_fields)))
+        timestamp = int(match.group(1))
+        if timestamp > 0xFFFFFFFF:
+            continue
+        frames.append(Frame(timestamp, fields, tuple(ordered_fields)))
     return frames
 
 
@@ -268,7 +275,7 @@ def diagnostic_code(raw_code: int) -> tuple[str, str]:
 
 def diagnostic_rows(fields: dict[str, str]):
     """Yield decoded DTC detail while retaining raw fields in sample_metric."""
-    for status, count_pid, base_pid in DTC_GROUPS:
+    for status, count_pid, base_pid, _status_pid in DTC_GROUPS:
         count = numeric(fields.get(count_pid))
         slot_limit = DTC_CODE_SLOTS
         if count is not None:
@@ -398,7 +405,7 @@ class HistoryIndexer:
                 priorities[pid] = int(priority)
 
         for pid, definition in metric_catalog().items():
-            if pid >= 0x100:
+            if pid in priorities:
                 category = catalogue_category(pid - 0x100)
             else:
                 category = definition.namespace.rsplit("/", 1)[-1]
@@ -436,9 +443,11 @@ class HistoryIndexer:
         device_id = archive.parent.parent.parent.parent.name
         if not TRIP_ID_RE.fullmatch(trip_id) or not device_id:
             return False
+        stat = archive.stat()
+        if stat.st_size > MAX_ARCHIVE_FILE_SIZE:
+            return False
         raw_bytes = archive.read_bytes()
         digest = hashlib.sha256(raw_bytes).hexdigest()
-        stat = archive.stat()
         previous = connection.execute(
             "SELECT content_sha256, byte_size, sealed, mutation_detected FROM ingest_file WHERE archive_path = ?",
             (str(archive),),

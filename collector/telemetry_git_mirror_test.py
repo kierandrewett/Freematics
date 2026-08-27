@@ -62,6 +62,11 @@ class TelemetryGitMirrorTests(unittest.TestCase):
         self.assertEqual(frames[0].fields[0]["pid"], "0x010")
         self.assertTrue(frames[0].checksum_valid)
 
+    def test_parser_rejects_out_of_range_frame_timestamp(self) -> None:
+        frames = parse_frames(b"0:4294967296,10C:1,0:100,10C:2")
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].device_monotonic_ms, 100)
+
     def test_same_size_source_mutation_is_replayed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"

@@ -145,6 +145,7 @@ FROM sample AS s
 JOIN sample_metric AS m
   ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence;
 
+DROP VIEW IF EXISTS field_timeline;
 CREATE VIEW IF NOT EXISTS field_timeline AS
 SELECT
     s.device_id,

@@ -40,8 +40,10 @@ except ImportError:  # pragma: no cover - supports package imports
 SCHEMA_VERSION = 2
 MAX_SEGMENT_RECORDS = 5_000
 TRIP_RE = re.compile(r"^\d{8}-\d{6}$")
-FRAME_RE = re.compile(rb"(?:^|,)0[:=](\d+)(?=,|$)", re.MULTILINE)
-FIELD_RE = re.compile(rb"(?:^|,)([0-9A-Fa-f]+)[:=]([^,\r\n]*)")
+FRAME_RE = re.compile(rb"(?:^|,)0[:=](\d{1,10})(?=,|$)", re.MULTILINE)
+FIELD_RE = re.compile(rb"(?:^|,)([0-9A-Fa-f]{1,4})[:=]([^,\r\n]*)")
+MAX_ARCHIVE_RECORD_SIZE = 64 * 1024
+MAX_ARCHIVE_FILE_SIZE = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,11 @@ def parse_frames(payload: bytes) -> list[SourceFrame]:
         start = match.start() + (1 if payload[match.start() : match.start() + 1] == b"," else 0)
         stop = starts[index + 1].start() if index + 1 < len(starts) else len(payload)
         raw = payload[start:stop]
+        if len(raw) > MAX_ARCHIVE_RECORD_SIZE:
+            continue
+        timestamp = int(match.group(1))
+        if timestamp > 0xFFFFFFFF:
+            continue
         fields: list[dict[str, str]] = []
         for field in FIELD_RE.finditer(raw):
             pid = field.group(1)
@@ -94,7 +101,7 @@ def parse_frames(payload: bytes) -> list[SourceFrame]:
         frames.append(
             SourceFrame(
                 raw=raw,
-                device_monotonic_ms=int(match.group(1)),
+                device_monotonic_ms=timestamp,
                 fields=fields,
                 checksum_hex=checksum_hex,
                 checksum_valid=checksum_valid,
@@ -194,6 +201,8 @@ class TelemetryGitMirror:
         return len(records)
 
     def _read_new_lines(self, archive: Path, cursor: dict[str, Any]) -> tuple[list[bytes], int, int, str]:
+        if archive.stat().st_size > MAX_ARCHIVE_FILE_SIZE:
+            return [], int(cursor.get("offset", 0)), int(cursor.get("line_number", 0)), str(cursor.get("prefix_sha256", ""))
         raw = archive.read_bytes()
         offset = int(cursor.get("offset", 0))
         line_number = int(cursor.get("line_number", 0))
