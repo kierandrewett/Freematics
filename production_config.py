@@ -72,8 +72,6 @@ def _quoted(defines: dict[str, str], name: str) -> str:
     result = value[1:-1]
     if not result or any(character.isspace() for character in result):
         raise ValueError(f"local_config.h: {name} must be a non-empty value without whitespace")
-    if "\\" in result:
-        raise ValueError(f"local_config.h: {name} must not contain C escape sequences")
     return result
 
 

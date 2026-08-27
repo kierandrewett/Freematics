@@ -70,9 +70,9 @@ class ProductionConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "preprocessor directive"):
                 validate_production_config(candidate)
 
-    def test_escaped_values_are_rejected(self) -> None:
+    def test_line_continuations_are_rejected(self) -> None:
         escaped = VALID_CONFIG.replace('"/api"', r'"/\x61pi"')
-        with self.assertRaisesRegex(ValueError, "escape|line continuation"):
+        with self.assertRaisesRegex(ValueError, "line continuations"):
             validate_production_config(escaped)
 
 
