@@ -3009,6 +3009,62 @@
         }
       ],
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Durable capture-time history from SQLite. This contract panel stays empty or unavailable until the freematics-history datasource and archive importer are provisioned; Prometheus cannot backfill expired samples.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "id": 41,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": true,
+          "fields": "",
+          "reducer": [
+            "count"
+          ],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Start",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "rawSql": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", sample_count AS \"Samples\", archive_path AS \"Archive\" FROM trip WHERE device_id = '$device' AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND ('$trip' = '$__all' OR trip_id = '$trip') ORDER BY start_capture_ms DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ],
+      "title": "Durable trip archive (SQLite)",
+      "type": "table"
     }
   ],
   "refresh": "1m",

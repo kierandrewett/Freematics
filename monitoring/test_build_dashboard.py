@@ -30,8 +30,27 @@ class DashboardViewsTest(unittest.TestCase):
         titles = {panel["title"] for panel in dashboard["panels"]}
         self.assertIn("Trip index", titles)
         self.assertIn("Trip route", titles)
+        archive_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 41)
+        self.assertEqual(archive_panel["datasource"]["uid"], "freematics-history")
+        self.assertEqual(archive_panel["datasource"]["type"], "frser-sqlite-datasource")
+        archive_sql = archive_panel["targets"][0]["rawSql"]
+        self.assertIn("FROM trip", archive_sql)
+        self.assertIn("start_capture_ms BETWEEN", archive_sql)
+        self.assertIn("$__from", archive_sql)
+        self.assertIn("$__to", archive_sql)
+        self.assertIn("$device", archive_sql)
+        self.assertIn("$trip", archive_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertTrue(all("$trip" in target["expr"] for target in route["targets"]))
+
+    def test_live_view_is_prometheus_only(self) -> None:
+        dashboard = build_dashboard("live")
+        datasources = {
+            panel.get("datasource", {}).get("uid")
+            for panel in dashboard["panels"]
+            if isinstance(panel.get("datasource"), dict)
+        }
+        self.assertEqual(datasources, {"freematics-prometheus"})
 
     def test_view_panel_ids_are_unique_and_generated_files_are_current(self) -> None:
         for view, filename in (("live", "grafana-live.json"), ("trips", "grafana-trips.json")):

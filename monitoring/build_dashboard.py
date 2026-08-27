@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 DS = {"type": "prometheus", "uid": "freematics-prometheus"}
+HISTORY_DS = {"type": "frser-sqlite-datasource", "uid": "freematics-history"}
 DEVICE = 'device_id="$device"'
 TRIP = 'trip_id=~"$trip"'
 KM_TO_MI = 0.621371
@@ -43,6 +44,14 @@ def target(
     }
     if instant:
         result["instant"] = True
+    if table:
+        result["format"] = "table"
+    return result
+
+
+def history_target(sql: str, ref: str = "A", *, table: bool = True) -> dict:
+    """Build a query for the durable Freematics SQLite archive contract."""
+    result = {"datasource": HISTORY_DS, "rawSql": sql, "refId": ref}
     if table:
         result["format"] = "table"
     return result
@@ -1053,6 +1062,45 @@ def build_dashboard(view: str = "combined") -> dict:
         }
     )
 
+    # Prometheus is intentionally retained for the existing trip charts until
+    # the archive importer is deployed. This panel is the explicit hand-over
+    # seam for capture-time history and uses the durable SQLite contract in
+    # HISTORICAL_SQL.md. It is only present in the Trips dashboard.
+    if view == "trips":
+        panels.append(
+            {
+                "datasource": HISTORY_DS,
+                "description": "Durable capture-time history from SQLite. This contract panel stays empty or unavailable until the freematics-history datasource and archive importer are provisioned; Prometheus cannot backfill expired samples.",
+                "fieldConfig": {
+                    "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
+                    "overrides": [],
+                },
+                "gridPos": {"h": 7, "w": 24, "x": 0, "y": 64},
+                "id": 41,
+                "options": {
+                    "cellHeight": "sm",
+                    "footer": {"countRows": True, "fields": "", "reducer": ["count"], "show": True},
+                    "showHeader": True,
+                    "sortBy": [{"displayName": "Start", "desc": True}],
+                },
+                "targets": [
+                    history_target(
+                        "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", "
+                        "datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", "
+                        "datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", "
+                        "sample_count AS \"Samples\", archive_path AS \"Archive\" "
+                        "FROM trip "
+                        "WHERE device_id = '$device' "
+                        "AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                        "AND ('$trip' = '$__all' OR trip_id = '$trip') "
+                        "ORDER BY start_capture_ms DESC",
+                    )
+                ],
+                "title": "Durable trip archive (SQLite)",
+                "type": "table",
+            }
+        )
+
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
@@ -1062,7 +1110,7 @@ def build_dashboard(view: str = "combined") -> dict:
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 28, 29, 31, 38, 39, 40,
+            22, 23, 24, 25, 26, 27, 28, 29, 31, 38, 39, 40, 41,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
 
