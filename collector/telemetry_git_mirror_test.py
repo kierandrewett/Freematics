@@ -26,6 +26,7 @@ class TelemetryGitMirrorTests(unittest.TestCase):
                 {"pid": "0x084", "value": "2"},
                 {"pid": "0x085", "value": "6"},
                 {"pid": "0x089", "value": "2"},
+                {"pid": "0x08C", "value": "128"},
             ]
         )
         self.assertEqual(metrics["engine_rpm"]["label"], "Engine speed")
@@ -35,6 +36,7 @@ class TelemetryGitMirrorTests(unittest.TestCase):
         self.assertEqual(metrics["acceleration"]["value"]["x"], 0.1)
         self.assertEqual(metrics["network_transport"]["value"], {"code": 2, "name": "cellular"})
         self.assertEqual(metrics["obd_state"]["value"], {"code": 2, "name": "degraded"})
+        self.assertEqual(metrics["queue_bytes"]["value"], 128)
         self.assertEqual(metrics["obd_protocol"]["value"], {"code": 6, "name": "iso15765_11bit_500k"})
 
     def test_catalog_covers_shared_standard_odometer_and_unknown_fields(self) -> None:
