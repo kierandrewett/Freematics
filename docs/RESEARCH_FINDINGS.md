@@ -278,13 +278,23 @@ session:
   vehicle values such as speed, RPM, coolant temperature and battery voltage.
   Its CAN source includes body-network examples, but it does not establish the
   engine ECU's diagnostic address or proprietary DID map.
+* [Adam Wilson's Corsa D CAN article](https://blog.ajwilson.me/posts/2021-05-06-reading-corsa-d-canbus/)
+  lists three buses: high speed at 500 kbit/s, medium speed at 95 kbit/s and
+  low speed at 33.3 kbit/s. It describes MSCAN access through the OBD port and
+  radio, but covers steering-wheel messages rather than engine diagnostics.
 * A [public openHASP discussion](https://github.com/HASwitchPlate/openHASP/discussions/442)
-  contains a direct enhanced-diagnostic example for a Corsa Z13DTJ 1.3 CDTI:
-  CAN at 500 kbit/s, request ID `0x7E0`, response ID `0x5E8`, service `0xAA`,
-  and packet identifiers `0x0129` and `0x012A` for DPF data. A second report
-  says the same query works on Z13DTC but returns unusable data on A13DTC.
-  This is valuable engine-specific evidence, but it is not safe to apply to
-  an unknown 2012 engine or to a petrol ECU.
+  provides a direct but narrow capture for a Corsa Z13DTJ 1.3 CDTI. The
+  reported bus is 500 kbit/s, the request CAN ID is `0x7E0`, and the response
+  CAN ID is `0x5E8`. The logical request bytes are `AA 01 29` and `AA 01 2A`,
+  with a reported CAN payload length byte of `0x03`; padding bytes are not
+  specified. The reported positive payloads are `5D 13 05 00 0C 00 00` for
+  `AA0129` and `00 1A 5C 00 03 31 00` for `AA012A`.
+  The source reports DPF regeneration, load, differential pressure and
+  regeneration state. It reports no negative response, so it provides no
+  negative-response evidence. A second report says the query works on Z13DTC
+  but returns unusable data on A13DTC. Confidence is medium: this is a direct
+  community capture tied to named diesel engines, but it is not manufacturer
+  documentation and does not apply to an unknown 2012 engine or a petrol ECU.
 * [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
   records passive Corsa D captures and identified ECUs. It does not publish a
   diagnostic service or data-identifier map.
