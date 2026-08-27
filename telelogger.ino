@@ -65,12 +65,14 @@ typedef struct {
   uint8_t count;
   uint16_t codes[DTC_CODE_SLOTS];
   uint32_t lastScan;
+  uint16_t statusPid;
+  uint8_t status;
 } DTC_POLLING_INFO;
 
 DTC_POLLING_INFO dtcData[] = {
-  {0x03, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, 0, {0}, 0},
-  {0x07, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, 0, {0}, 0},
-  {0x0A, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, 0, {0}, 0},
+  {0x03, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, 0, {0}, 0, PID_DTC_STORED_STATUS, DTC_STATUS_NO_RESPONSE},
+  {0x07, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, 0, {0}, 0, PID_DTC_PENDING_STATUS, DTC_STATUS_NO_RESPONSE},
+  {0x0A, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, 0, {0}, 0, PID_DTC_PERMANENT_STATUS, DTC_STATUS_NO_RESPONSE},
 };
 
 CBufferManager bufman;
@@ -272,12 +274,18 @@ void clearOBDReadings()
   dtcData[0].mode = 0x03;
   dtcData[0].countPid = PID_DTC_STORED_COUNT;
   dtcData[0].basePid = PID_DTC_STORED_BASE;
+  dtcData[0].statusPid = PID_DTC_STORED_STATUS;
+  dtcData[0].status = DTC_STATUS_NO_RESPONSE;
   dtcData[1].mode = 0x07;
   dtcData[1].countPid = PID_DTC_PENDING_COUNT;
   dtcData[1].basePid = PID_DTC_PENDING_BASE;
+  dtcData[1].statusPid = PID_DTC_PENDING_STATUS;
+  dtcData[1].status = DTC_STATUS_NO_RESPONSE;
   dtcData[2].mode = 0x0A;
   dtcData[2].countPid = PID_DTC_PERMANENT_COUNT;
   dtcData[2].basePid = PID_DTC_PERMANENT_BASE;
+  dtcData[2].statusPid = PID_DTC_PERMANENT_STATUS;
+  dtcData[2].status = DTC_STATUS_NO_RESPONSE;
   dtcBatchPending = 0;
   fastOBDFailureCycles = 0;
   lastOBDSpeed = 0;
@@ -461,6 +469,7 @@ void scanDiagnostics()
   DTC_POLLING_INFO& item = dtcData[scanIndex];
   memset(item.codes, 0, sizeof(item.codes));
   item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
+  item.status = obd.getDTCStatus();
   item.lastScan = millis();
   dtcBatchPending = scanIndex + 1;
   Serial.print("DTC mode ");
@@ -486,6 +495,7 @@ void processDiagnostics(CBuffer* buffer)
 
   DTC_POLLING_INFO& item = dtcData[dtcBatchPending - 1];
   buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
+  buffer->add(item.statusPid, ELEMENT_UINT8, &item.status, sizeof(item.status));
   for (byte i = 0; i < DTC_CODE_SLOTS; i++) {
     buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
   }

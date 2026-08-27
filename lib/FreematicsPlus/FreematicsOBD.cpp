@@ -136,11 +136,12 @@ int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
 	0: 43 04 01 08 01 09
 	1: 01 11 01 15 00 00 00
 	*/
+	m_dtcStatus = DTC_STATUS_NO_RESPONSE;
 	int codesRead = 0;
-	if (!link || (mode != 0x03 && mode != 0x07 && mode != 0x0A)) return 0;
+	if (!link || !codes || maxCodes == 0 || (mode != 0x03 && mode != 0x07 && mode != 0x0A)) return 0;
 	char expected[3];
 	sprintf(expected, "%02X", 0x40 + mode);
- 	for (int n = 0; n < 6; n++) {
+	for (int n = 0; n < 6; n++) {
 		char buffer[128];
 		if (n == 0) {
 			sprintf(buffer, "%02X\r", mode);
@@ -150,7 +151,8 @@ int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
 		link->send(buffer);
 		if (link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_LONG) > 0) {
 			if (!strstr(buffer, "NO DATA")) {
-				char *p = strstr(buffer, expected);
+				m_dtcStatus = DTC_STATUS_RESPONSE;
+				char* p = strstr(buffer, expected);
 				if (p) {
 					while (codesRead < maxCodes && *p) {
 						p += 6;
@@ -163,6 +165,7 @@ int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
 						if (code == 0) break;
 						codes[codesRead++] = code;
 					}
+					if (codesRead) m_dtcStatus = DTC_STATUS_CODES;
 				}
 				break;
 			}

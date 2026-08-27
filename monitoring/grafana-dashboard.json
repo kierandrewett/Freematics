@@ -4367,6 +4367,102 @@
       ],
       "title": "Telemetry queue",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Latest fresh diagnostic scan result: no response, a response with no codes, or one or more codes. The age gate prevents an old scan from being presented as current.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 2,
+                  "text": "No response"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "No codes"
+                },
+                "2": {
+                  "color": "orange",
+                  "index": 1,
+                  "text": "Codes found"
+                }
+              }
+            }
+          ],
+          "noValue": "Not scanned",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              },
+              {
+                "value": 2,
+                "color": "orange"
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 76
+      },
+      "id": 47,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max((freematics_diagnostic_trouble_codes_state{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 300)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "Diagnostic scan",
+      "type": "stat"
     }
   ],
   "refresh": "2s",

@@ -39,6 +39,8 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertTrue(any("freematics_obd_state{" in expression for expression in expressions))
         self.assertTrue(any("freematics_obd_last_latency_milliseconds{" in expression for expression in expressions))
         self.assertEqual(panel["datasource"]["uid"], "freematics-prometheus")
+        scan = next(panel for panel in dashboard["panels"] if panel["id"] == 47)
+        self.assertIn("freematics_diagnostic_trouble_codes_state", scan["targets"][0]["expr"])
 
 
     def test_trips_view_has_historical_selector_and_route_evidence(self) -> None:

@@ -238,9 +238,20 @@ static void formatDTC(uint16_t raw, char code[6], const char** system)
 }
 
 static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
-	uint16_t countPid, uint16_t basePid, const char* status, unsigned int packetAge)
+	uint16_t countPid, uint16_t statusPid, uint16_t basePid, const char* status, unsigned int packetAge)
 {
-	if (!pld || !status || countPid >= 256 * PID_MODES || basePid >= 256 * PID_MODES) return l;
+	if (!pld || !status || countPid >= 256 * PID_MODES
+		|| statusPid >= 256 * PID_MODES || basePid >= 256 * PID_MODES) return l;
+	const PID_DATA* statusData = pld->data + statusPid;
+	if (statusData->ts) {
+		double statusValue;
+		if (parseFiniteNumber(statusData->value, &statusValue) && statusValue >= DTC_STATUS_NO_RESPONSE
+			&& statusValue <= DTC_STATUS_CODES && floor(statusValue) == statusValue) {
+			l = appendFormat(buf, bs, l,
+				"freematics_diagnostic_trouble_codes_state{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %u\n",
+				pld->devid, pld->tripid, status, (unsigned int)statusValue);
+		}
+	}
 	const PID_DATA* countData = pld->data + countPid;
 	if (!countData->ts || l < 0 || bs <= 0 || l >= bs - 1) return l;
 	double countValue;
@@ -345,6 +356,8 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_diagnostic_trouble_codes gauge\n"
 		"# HELP freematics_diagnostic_trouble_codes_age_seconds Age of the latest diagnostic scan by status.\n"
 		"# TYPE freematics_diagnostic_trouble_codes_age_seconds gauge\n"
+		"# HELP freematics_diagnostic_trouble_codes_state Diagnostic scan state: 0 no response, 1 response, 2 codes.\n"
+		"# TYPE freematics_diagnostic_trouble_codes_state gauge\n"
 		"# HELP freematics_diagnostic_trouble_code_info Diagnostic trouble codes reported by the ECU.\n"
 		"# TYPE freematics_diagnostic_trouble_code_info gauge\n");
 
@@ -445,9 +458,9 @@ int uhMetrics(UrlHandlerParam* param)
 		}
 
 		l = appendDerivedVehicleMetrics(buf, bs, l, pld);
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored", age);
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending", age);
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, "permanent", age);
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_STATUS, PID_DTC_STORED_BASE, "stored", age);
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_STATUS, PID_DTC_PENDING_BASE, "pending", age);
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_STATUS, PID_DTC_PERMANENT_BASE, "permanent", age);
 	}
 
 	param->contentLength = (unsigned int)(l < 0 ? 0 : l);

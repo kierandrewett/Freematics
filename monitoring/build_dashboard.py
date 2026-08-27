@@ -231,6 +231,11 @@ def build_dashboard(view: str = "combined") -> dict:
         f"({diagnostic_info} unless on(device_id,trip_id,status) "
         f"({diagnostic_ages} > {DTC_FRESH_MAX_AGE_SECONDS}))"
     )
+    diagnostic_states = f"freematics_diagnostic_trouble_codes_state{selection}"
+    fresh_diagnostic_states = (
+        f"({diagnostic_states} unless on(device_id,trip_id,status) "
+        f"({diagnostic_ages} > {DTC_FRESH_MAX_AGE_SECONDS}))"
+    )
 
     network_transport = fresh_device(f"freematics_network_transport{{{DEVICE}}}")
     vehicle_voltage = fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}")
@@ -1154,6 +1159,29 @@ def build_dashboard(view: str = "combined") -> dict:
                 overrides=[by_name("Queued bytes", ("unit", "decbytes"))],
             )
         )
+    if view in {"combined", "live"}:
+        panels.append(
+            stat(
+                47,
+                "Diagnostic scan",
+                0,
+                76,
+                f"max({fresh_diagnostic_states})",
+                width=6,
+                unit="short",
+                decimals=0,
+                description="Latest fresh diagnostic scan result: no response, a response with no codes, or one or more codes. The age gate prevents an old scan from being presented as current.",
+                mappings=value_mapping(
+                    {
+                        "0": {"color": "red", "index": 2, "text": "No response"},
+                        "1": {"color": "green", "index": 0, "text": "No codes"},
+                        "2": {"color": "orange", "index": 1, "text": "Codes found"},
+                    }
+                ),
+                no_value="Not scanned",
+                threshold_steps=((None, "red"), (1, "green"), (2, "orange")),
+            )
+        )
 
 
 
@@ -1484,7 +1512,7 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
     elif view == "trips":

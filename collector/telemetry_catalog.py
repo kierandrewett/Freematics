@@ -68,6 +68,9 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x8A, "obd_fast_failures", "OBD core failures", "Consecutive failed core OBD cycles.", "count", "freematics/obd", decoder="integer"),
     MetricDefinition(0x8B, "queue_readings", "Queued readings", "Number of filled telemetry readings waiting for upload.", "count", "freematics/transport", decoder="integer"),
     MetricDefinition(0x8C, "queue_bytes", "Queued bytes", "Encoded bytes waiting for upload.", "byte", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
+    MetricDefinition(0x330, "pending_dtc_read_status", "Pending DTC read status", "Pending DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
+    MetricDefinition(0x350, "permanent_dtc_read_status", "Permanent DTC read status", "Permanent DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
 )
 
 
@@ -87,6 +90,7 @@ _OBD_PROTOCOL_NAMES = {
     14: "iso11898_11bit_250k",
     15: "iso11898_29bit_250k",
 }
+_DTC_STATUS_NAMES = {0: "no_response", 1: "response", 2: "codes"}
 
 
 def _standard_definitions() -> dict[int, MetricDefinition]:
@@ -163,6 +167,12 @@ def _decode(definition: MetricDefinition, raw: str) -> Any:
         if isinstance(numeric, (int, float)):
             code = int(numeric)
             return {"code": code, "name": _OBD_STATE_NAMES.get(code, "unknown")}
+        return {"raw": raw, "name": "unknown"}
+    if definition.decoder == "dtc_status":
+        numeric = _number(raw)
+        if isinstance(numeric, (int, float)):
+            code = int(numeric)
+            return {"code": code, "name": _DTC_STATUS_NAMES.get(code, "unknown")}
         return {"raw": raw, "name": "unknown"}
     if definition.decoder == "vector3":
         parts = [part.strip() for part in raw.split(";")]

@@ -74,6 +74,9 @@ The firmware now emits these device fields with every active sample:
 | `0x08A` | Consecutive failed core OBD cycles |
 | `0x08B` | Filled telemetry readings waiting for upload |
 | `0x08C` | Encoded telemetry bytes waiting for upload |
+| `0x310` | Stored DTC read state: `0` no response, `1` response, `2` codes |
+| `0x330` | Pending DTC read state: `0` no response, `1` response, `2` codes |
+| `0x350` | Permanent DTC read state: `0` no response, `1` response, `2` codes |
 
 Use these fields to explain missing values. Do not treat a failed read as a
 zero measurement.

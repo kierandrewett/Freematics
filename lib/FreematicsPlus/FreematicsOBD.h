@@ -12,6 +12,9 @@
 
 #define OBD_TIMEOUT_SHORT 1000 /* ms */
 #define OBD_TIMEOUT_LONG 10000 /* ms */
+#define DTC_STATUS_NO_RESPONSE 0
+#define DTC_STATUS_RESPONSE 1
+#define DTC_STATUS_CODES 2
 
 int dumpLine(char* buffer, int len);
 uint16_t hex2uint16(const char *p);
@@ -45,6 +48,8 @@ public:
 	// read diagnostic trouble codes (return number of DTCs read)
 	int readDTC(uint16_t codes[], byte maxCodes = 1);
 	int readDTC(byte mode, uint16_t codes[], byte maxCodes = 1);
+	// status of the latest DTC read: no response, response, or codes
+	byte getDTCStatus() const { return m_dtcStatus; }
 	// clear diagnostic trouble code
 	void clearDTC();
 	// get battery voltage (works without ECU)
@@ -75,6 +80,7 @@ public:
 	byte errors = 0;
 	// bridge protocol number returned by ATDPN
 	byte m_protocol = 0;
+	byte m_dtcStatus = DTC_STATUS_NO_RESPONSE;
 	// bit map of supported PIDs
 	byte pidmap[4 * 8] = {0};
 	// link object pointer
