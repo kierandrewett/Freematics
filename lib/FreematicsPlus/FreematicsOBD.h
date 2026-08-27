@@ -51,6 +51,8 @@ public:
 	float getVoltage();
 	// get VIN as a string, buffer length should be >= OBD_RECV_BUF_SIZE
 	bool getVIN(char* buffer, byte bufsize);
+	// read one identity-gated UDS/GMLAN data identifier and retain raw response
+	bool readReadOnlyService(byte service, uint16_t identifier, char* buffer, byte bufsize);
 	// determine if the PID is supported
 	bool isValidPID(byte pid);
 	// specify custom CAN header ID

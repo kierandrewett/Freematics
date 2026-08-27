@@ -414,6 +414,28 @@ bool COBD::getVIN(char* buffer, byte bufsize)
     return false;
 }
 
+bool COBD::readReadOnlyService(byte service, uint16_t identifier, char* buffer, byte bufsize)
+{
+	if (!link || m_state != OBD_CONNECTED || !buffer || bufsize < 8) return false;
+	if (service != 0x1A && service != 0x22) return false;
+	if (service == 0x1A && identifier > 0xFF) return false;
+
+	char command[16];
+	char expected[16];
+	if (service == 0x22) {
+		snprintf(command, sizeof(command), "%02X%04X\r", service, identifier);
+		snprintf(expected, sizeof(expected), "%02X %02X %02X",
+			(byte)(service + 0x40), (byte)(identifier >> 8), (byte)identifier);
+	}
+	else {
+		snprintf(command, sizeof(command), "%02X%02X\r", service, (byte)identifier);
+		snprintf(expected, sizeof(expected), "%02X %02X",
+			(byte)(service + 0x40), (byte)identifier);
+	}
+	if (!link->sendCommand(command, buffer, bufsize, OBD_TIMEOUT_LONG)) return false;
+	return strstr(buffer, expected) != 0;
+}
+
 bool COBD::isValidPID(byte pid)
 {
 	if (pid == 0) return false;

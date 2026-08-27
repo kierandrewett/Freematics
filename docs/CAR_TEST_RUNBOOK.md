@@ -84,6 +84,12 @@ to decoding. Unknown identifiers and negative responses must be recorded and
 backed off. Do not send session-control, security-access, write, clear-fault,
 coding, or actuator requests.
 
+`COBD::readReadOnlyService` is a bounded firmware seam for a confirmed
+`0x1A` GMLAN or `0x22` UDS response. The TeleLogger does not call it by
+default. A caller must first apply the profile registry and then pass the raw
+response to `collector/vendor_diagnostics.py`; this keeps candidate discovery
+separate from standard polling.
+
 ## Optional laptop serial check
 
 Install PlatformIO and clone the focused fork:
