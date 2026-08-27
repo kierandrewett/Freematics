@@ -66,6 +66,8 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x88, "obd_last_latency", "OBD read latency", "Slowest OBD response in the latest collection cycle.", "millisecond", "freematics/obd", decoder="integer"),
     MetricDefinition(0x89, "obd_state", "OBD state", "OBD state: 0 disconnected, 1 ready, 2 degraded.", "enum", "freematics/obd", decoder="obd_state"),
     MetricDefinition(0x8A, "obd_fast_failures", "OBD core failures", "Consecutive failed core OBD cycles.", "count", "freematics/obd", decoder="integer"),
+    MetricDefinition(0x8B, "queue_readings", "Queued readings", "Number of filled telemetry readings waiting for upload.", "count", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x8C, "queue_bytes", "Queued bytes", "Encoded bytes waiting for upload.", "byte", "freematics/transport", decoder="integer"),
 )
 
 

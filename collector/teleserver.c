@@ -287,6 +287,10 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_data_age_seconds gauge\n"
 		"# HELP freematics_device_data_received_bytes_total Telemetry bytes accepted by the collector.\n"
 		"# TYPE freematics_device_data_received_bytes_total counter\n"
+		"# HELP freematics_device_queue_readings Filled telemetry readings waiting for upload.\n"
+		"# TYPE freematics_device_queue_readings gauge\n"
+		"# HELP freematics_device_queue_bytes Encoded telemetry bytes waiting for upload.\n"
+		"# TYPE freematics_device_queue_bytes gauge\n"
 		"# HELP freematics_device_sample_rate_per_minute Samples received per minute.\n"
 		"# TYPE freematics_device_sample_rate_per_minute gauge\n"
 		"# HELP freematics_device_rssi_dbm Cellular or Wi-Fi received signal strength.\n"
@@ -381,6 +385,8 @@ int uhMetrics(UrlHandlerParam* param)
 
 		l = appendScalarMetric(buf, bs, l, "freematics_device_temperature_celsius", pld->devid, pld->tripid, pld->data + PID_DEVICE_TEMP, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_network_transport", pld->devid, pld->tripid, pld->data + PID_NETWORK_TRANSPORT, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_queue_readings", pld->devid, pld->tripid, pld->data + PID_QUEUE_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_queue_bytes", pld->devid, pld->tripid, pld->data + PID_QUEUE_BYTES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_protocol", pld->devid, pld->tripid, pld->data + PID_OBD_PROTOCOL, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_supported_pids", pld->devid, pld->tripid, pld->data + PID_OBD_SUPPORTED_PIDS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_timeouts", pld->devid, pld->tripid, pld->data + PID_OBD_TIMEOUTS, 1);

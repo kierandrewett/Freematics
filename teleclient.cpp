@@ -212,6 +212,25 @@ void CBufferManager::printStats()
     Serial.println(" readings");
   }
 }
+uint16_t CBufferManager::pendingReadings() const
+{
+  if (!slots) return 0;
+  uint16_t count = 0;
+  for (uint32_t n = 0; n < total; n++) {
+    if (slots[n]->state == BUFFER_STATE_FILLED) count++;
+  }
+  return count;
+}
+
+uint32_t CBufferManager::pendingBytes() const
+{
+  if (!slots) return 0;
+  uint32_t bytes = 0;
+  for (uint32_t n = 0; n < total; n++) {
+    if (slots[n]->state == BUFFER_STATE_FILLED) bytes += slots[n]->offset;
+  }
+  return bytes;
+}
 
 bool TeleClientUDP::verifyChecksum(char* data)
 {

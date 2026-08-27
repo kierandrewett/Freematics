@@ -52,6 +52,8 @@ public:
     CBuffer* getOldest();
     CBuffer* getNewest();
     void printStats();
+    uint16_t pendingReadings() const;
+    uint32_t pendingBytes() const;
 private:
     CBuffer** slots = 0;
     CBuffer* last = 0;

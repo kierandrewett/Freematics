@@ -1136,6 +1136,25 @@ def build_dashboard(view: str = "combined") -> dict:
                 ],
             )
         )
+    if view in {"combined", "live"}:
+        panels.append(
+            timeseries(
+                46,
+                "Telemetry queue",
+                0,
+                71,
+                24,
+                5,
+                [
+                    target(fresh_device(f"freematics_device_queue_readings{{{DEVICE}}}"), "A", "Queued readings"),
+                    target(fresh_device(f"freematics_device_queue_bytes{{{DEVICE}}}"), "B", "Queued bytes"),
+                ],
+                unit="short",
+                description="Filled telemetry readings and encoded bytes waiting for upload. A growing queue indicates transport back-pressure; a stale device age hides the series.",
+                overrides=[by_name("Queued bytes", ("unit", "decbytes"))],
+            )
+        )
+
 
 
     # Trips uses the durable SQLite projection so historical samples retain
@@ -1462,7 +1481,7 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
     elif view == "trips":

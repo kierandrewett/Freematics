@@ -4247,6 +4247,126 @@
       ],
       "title": "OBD quality",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Filled telemetry readings and encoded bytes waiting for upload. A growing queue indicates transport back-pressure; a stale device age hides the series.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Queued bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      },
+      "id": 46,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_queue_readings{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Queued readings",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_queue_bytes{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Queued bytes",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Telemetry queue",
+      "type": "timeseries"
     }
   ],
   "refresh": "2s",

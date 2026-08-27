@@ -33,6 +33,9 @@ class DashboardViewsTest(unittest.TestCase):
         dashboard = build_dashboard("live")
         panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)
         expressions = {target["expr"] for target in panel["targets"]}
+        queue = next(panel for panel in dashboard["panels"] if panel["id"] == 46)
+        self.assertTrue(any("freematics_device_queue_readings" in target["expr"] for target in queue["targets"]))
+        self.assertTrue(any("freematics_device_queue_bytes" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_obd_state{" in expression for expression in expressions))
         self.assertTrue(any("freematics_obd_last_latency_milliseconds{" in expression for expression in expressions))
         self.assertEqual(panel["datasource"]["uid"], "freematics-prometheus")

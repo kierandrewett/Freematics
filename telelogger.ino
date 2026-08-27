@@ -1119,6 +1119,11 @@ void process()
     deviceTemp = readChipTemperature();
   }
   buffer->add(PID_DEVICE_TEMP, ELEMENT_INT32, &deviceTemp, sizeof(deviceTemp));
+  // Queue fields describe backlog before the current sample enters the queue.
+  uint16_t queuedReadings = bufman.pendingReadings();
+  uint32_t queuedBytes = bufman.pendingBytes();
+  buffer->add(PID_QUEUE_READINGS, ELEMENT_UINT16, &queuedReadings, sizeof(queuedReadings));
+  buffer->add(PID_QUEUE_BYTES, ELEMENT_UINT32, &queuedBytes, sizeof(queuedBytes));
 
   buffer->timestamp = millis();
   buffer->state = BUFFER_STATE_FILLED;
