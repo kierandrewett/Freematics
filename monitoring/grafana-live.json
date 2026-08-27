@@ -675,6 +675,73 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
+      "description": "Optional standard Mode 01 PID A6, converted from kilometres to miles. Many ECUs do not advertise it; no manufacturer-specific odometer value is inferred.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "Not exposed by ECU",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "lengthmi",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 9
+      },
+      "id": 43,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x1A6\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:]) * 0.621371",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "Odometer",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
       "description": "UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
       "fieldConfig": {
         "defaults": {
@@ -2706,7 +2773,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+      "description": "Useful ECU lifetime and service counters, including odometer when the ECU advertises optional Mode 01 PID A6. They are direct ECU reports, not values calculated from the short current trip.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -2788,7 +2855,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131|0x1A6\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
           "legendFormat": "Latest",
           "range": false,
           "refId": "A",

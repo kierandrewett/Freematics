@@ -19,6 +19,8 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual([item["name"] for item in dashboard["templating"]["list"]], ["device"])
         self.assertNotIn("Trip index", {panel["title"] for panel in dashboard["panels"]})
         self.assertNotIn("Trip route", {panel["title"] for panel in dashboard["panels"]})
+        odometer = next(panel for panel in dashboard["panels"] if panel["id"] == 43)
+        self.assertIn('pid="0x1A6"', odometer["targets"][0]["expr"])
         expressions = [target["expr"] for panel in dashboard["panels"] for target in panel.get("targets", [])]
         self.assertTrue(expressions)
         self.assertTrue(all("$trip" not in expression for expression in expressions))

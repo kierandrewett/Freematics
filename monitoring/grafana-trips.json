@@ -2344,7 +2344,7 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+      "description": "Useful ECU lifetime and service counters, including odometer when the ECU advertises optional Mode 01 PID A6. They are direct ECU reports, not values calculated from the short current trip.",
       "fieldConfig": {
         "defaults": {
           "custom": {

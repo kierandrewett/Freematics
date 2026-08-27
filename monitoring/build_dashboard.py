@@ -226,7 +226,7 @@ def build_dashboard(view: str = "combined") -> dict:
     fuel_rate = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x15E"}}')
     maf = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x110"}}')
     service_counters = fresh_obd(
-        f'freematics_obd_value{{{metric_labels},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}'
+        f'freematics_obd_value{{{metric_labels},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131|0x1A6"}}'
     )
     estimated_fuel_rate = (
         f"({maf} * 3600 / ({PETROL_STOICH_AFR} * {PETROL_DENSITY_G_PER_LITRE}))"
@@ -500,6 +500,25 @@ def build_dashboard(view: str = "combined") -> dict:
             ),
         ]
     )
+
+    # Mode 01 PID A6 is optional.  Keep this as an explicit live card so an
+    # ECU-provided odometer is immediately useful, while an unadvertised PID
+    # remains visibly unavailable rather than being rendered as zero.
+    if view == "live":
+        odometer_km = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x1A6"}}')
+        panels.append(
+            stat(
+                43,
+                "Odometer",
+                20,
+                9,
+                f"last_over_time({odometer_km}[$__range:]) * {KM_TO_MI}",
+                unit="lengthmi",
+                decimals=1,
+                description="Optional standard Mode 01 PID A6, converted from kilometres to miles. Many ECUs do not advertise it; no manufacturer-specific odometer value is inferred.",
+                no_value="Not exposed by ECU",
+            )
+        )
 
     trip_table_targets = [
         target(
@@ -1029,7 +1048,7 @@ def build_dashboard(view: str = "combined") -> dict:
     panels.append(
         {
             "datasource": DS,
-            "description": "Useful ECU lifetime and service counters. They are direct ECU reports, not values calculated from the short current trip.",
+            "description": "Useful ECU lifetime and service counters, including odometer when the ECU advertises optional Mode 01 PID A6. They are direct ECU reports, not values calculated from the short current trip.",
             "fieldConfig": {
                 "defaults": {
                     "custom": {"align": "auto", "cellOptions": {"type": "auto"}},
@@ -1330,7 +1349,7 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
     elif view == "trips":
