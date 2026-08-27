@@ -298,6 +298,15 @@ session:
   but returns unusable data on A13DTC. Confidence is medium: this is a direct
   community capture tied to named diesel engines, but it is not manufacturer
   documentation and does not apply to an unknown 2012 engine or a petrol ECU.
+* A [Corsa D forum diagnostic record](https://www.corsa-d.de/forum/thread/16850-fehlerspeichereintrag/)
+  gives decoded OP-COM output for a named 1.3 litre diesel Corsa D first
+  registered in 2007. It identifies `11 7E0 7E8` for the engine electronics,
+  `0x97` as `Z13DTJ`, `0x92` as supplier `MAREL0100`, `0x9A` as diagnostic
+  data, and `0xB0` as ECU diagnostic address `0x11`. It also lists hardware,
+  programming-date, software-module and model-part identifiers. This is
+  decoded tool output, not raw request/response bytes, so confidence is
+  medium-to-high for that named diesel example and zero for an unverified
+  2012 petrol ECU.
 * [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
   records passive Corsa D captures and identified ECUs. It does not publish a
   diagnostic service or data-identifier map.
