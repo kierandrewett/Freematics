@@ -11,10 +11,11 @@
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
+#include <errno.h>
 #include "logdata.h"
 #include "data2kml.h"
 
-uint16_t hex2uint16(const char *p);
+int hex2uint16(const char *p);
 int ishex(char c);
 
 void WriteKMLData(KML_DATA* kd, uint32_t timestamp, uint16_t pid, float value[])
@@ -286,31 +287,58 @@ int ConvertToKML(KML_DATA* kd, FILE* fp, const char* kmlfile, uint32_t startpos,
 
 	while (fscanf(fp, "%1023s\n", line) > 0) {
 		for (char* p = strtok(line, ","); p; p = strtok(NULL, ",")) {
-			if (!ishex(*p)) break;
-			pid = hex2uint16(p);
 			char* separator = strpbrk(p, ":=");
-			if (!separator) break;
+			if (!separator || separator == p || separator - p > 4) continue;
+			for (char* id = p; id < separator; id++) {
+				if (!ishex(*id)) {
+					separator = NULL;
+					break;
+				}
+			}
+			if (!separator) continue;
+			pid = hex2uint16(p);
+			if (pid < 0 || (unsigned int)pid >= sizeof(kd->pidMap)) continue;
 			char* valuePtr = separator + 1;
 			char* checksum = strchr(valuePtr, '*');
 			if (checksum) *checksum = 0;
-			float value[3] = { 0 };
+			float value[3] = {0};
+			int valueCount = 0;
+			int valid = 1;
 			for (int n = 0; n < 3; n++) {
-				value[n] = (float)atof(valuePtr);
-				valuePtr = strchr(valuePtr, ';');
-				if (!valuePtr) break;
-				valuePtr++;
+				char* tokenEnd = strchr(valuePtr, ';');
+				size_t tokenLength = tokenEnd ? (size_t)(tokenEnd - valuePtr) : strlen(valuePtr);
+				if (!tokenLength || tokenLength >= 64) {
+					valid = 0;
+					break;
+				}
+				char token[64];
+				memcpy(token, valuePtr, tokenLength);
+				token[tokenLength] = 0;
+				errno = 0;
+				char* parsedEnd = NULL;
+				float parsed = strtof(token, &parsedEnd);
+				if (parsedEnd == token || *parsedEnd || errno == ERANGE || !isfinite(parsed)) {
+					valid = 0;
+					break;
+				}
+				value[n] = parsed;
+				valueCount++;
+				if (!tokenEnd) break;
+				valuePtr = tokenEnd + 1;
 			}
-			if (pid == 0) ts = (uint32_t)value[0];
-			if (ts < startpos) {
-				continue;
+			if (!valid || !valueCount) continue;
+			if (pid == 0) {
+				if (value[0] < 0 || value[0] > UINT32_MAX || floorf(value[0]) != value[0]) continue;
+				ts = (uint32_t)value[0];
 			}
-			else if (endpos && ts > endpos) {
-				break;
-			}
-			if (pid) {
-				kd->pidMap[pid] = 1;
-				WriteKMLData(kd, ts, pid, value);
-			}
+			if (ts < startpos) continue;
+			if (endpos && ts > endpos) break;
+			if (!pid) continue;
+			if ((pid == PID_GPS_LATITUDE && (value[0] < -90 || value[0] > 90))
+				|| (pid == PID_GPS_LONGITUDE && (value[0] < -180 || value[0] > 180))
+				|| pid >= 0x200) continue;
+			kd->pidMap[pid] = 1;
+			WriteKMLData(kd, ts, pid, value);
 		}
 		if (endpos && ts > endpos)
 			break;

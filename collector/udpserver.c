@@ -288,11 +288,12 @@ int incomingUDPCallback(void* _hp)
 		return -1;
 	}
 
-	pld->dataReceived += recv;
-
+	int payloadResult = 0;
 	if (eventID == 0 || eventID == EVENT_PING) {
-		processPayload(data, pld, eventID);
+		payloadResult = processPayload(data, pld, eventID);
+		if (eventID == 0 && payloadResult < 0) return -1;
 	} else if (eventID == EVENT_ACK) {
+		pld->dataReceived += recv;
 		// pending command executed
 		for (int i = 0; i < MAX_PENDING_COMMANDS; i++) {
 			COMMAND_BLOCK *cmd = pld->cmd + i;
@@ -313,6 +314,7 @@ int incomingUDPCallback(void* _hp)
 		return 0;
 	}
 
+	if (eventID != EVENT_ACK) pld->dataReceived += recv;
 	if (eventID == 0) {
 		if (serverTick - pld->serverSyncTick >= SYNC_INTERVAL * 1000) {
 			// send sync event

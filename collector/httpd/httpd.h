@@ -149,8 +149,8 @@ typedef struct {
 } HttpStats;
 
 #ifndef ARDUINO
-#define HTTP_BUFFER_SIZE (1024*1024 /*bytes*/)
-#define MAX_POST_PAYLOAD_SIZE (1024*1024 /*bytes*/)
+#define HTTP_BUFFER_SIZE (128*1024 /*bytes*/)
+#define MAX_POST_PAYLOAD_SIZE (64*1024 /*bytes*/)
 #define HTTP_MAX_CLIENTS_DEFAULT 128
 #else
 #define HTTP_BUFFER_SIZE (16*1024 /*bytes*/)

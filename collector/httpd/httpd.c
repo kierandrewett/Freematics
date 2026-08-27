@@ -288,26 +288,61 @@ int mwServerShutdown(HttpParam* hp)
 	return 0;
 }
 
+static int mwIsHexDigit(char value)
+{
+	return (value >= '0' && value <= '9')
+		|| (value >= 'a' && value <= 'f')
+		|| (value >= 'A' && value <= 'F');
+}
+
+static int mwPathHasParentReference(const char* path)
+{
+	char component[2] = {0};
+	unsigned int length = 0;
+	const char* input = path;
+	for (;;) {
+		char decoded;
+		if (*input == 0 || *input == '?') {
+			return length == 2 && component[0] == '.' && component[1] == '.';
+		}
+		if (*input == '%') {
+			if (!input[1] || !input[2] || !mwIsHexDigit(input[1]) || !mwIsHexDigit(input[2])) return 1;
+			decoded = _mwDecodeCharacter((char*)input + 1);
+			input += 3;
+		} else {
+			decoded = *input++;
+		}
+		if (decoded == 0) return 1;
+		if (decoded == '/' || decoded == '\\') {
+			if (length == 2 && component[0] == '.' && component[1] == '.') return 1;
+			length = 0;
+			continue;
+		}
+		if (length < 2) component[length] = decoded;
+		if (length < 3) length++;
+	}
+}
+
 int mwGetLocalFileName(HttpFilePath* hfp)
 {
 	char ch;
+	if (!hfp || !hfp->pchHttpPath || mwPathHasParentReference(hfp->pchHttpPath)) return -1;
 	char *p = (char*)hfp->cFilePath;
 	char *s = (char*)hfp->pchHttpPath;
 	char *upLevel = NULL;
 
 	hfp->pchExt=NULL;
 	hfp->fTailSlash=0;
-	if (*s == '~') {
-		s++;
-	} else if (hfp->pchRootPath) {
+	if (hfp->pchRootPath) {
 		p+=_mwStrCopy(hfp->cFilePath,hfp->pchRootPath);
-		if (*(p-1)!=SLASH) {
+		if (p > hfp->cFilePath && *(p-1)!=SLASH) {
 			*p=SLASH;
 			*(++p)=0;
 		}
 	}
 	while ((ch=*s) && ch!='?' && (int)(p-hfp->cFilePath)<sizeof(hfp->cFilePath)-1) {
 		if (ch=='%') {
+			if (!s[1] || !s[2] || !mwIsHexDigit(s[1]) || !mwIsHexDigit(s[2])) return -1;
 			*(p++) = _mwDecodeCharacter(++s);
 			s += 2;
 		} else if (ch=='/') {
@@ -331,7 +366,8 @@ int mwGetLocalFileName(HttpFilePath* hfp)
 			*(p++)=*(s++);
 		}
 	}
-	if (*(p-1)==SLASH) {
+	if (ch && ch != '?') return -1;
+	if (p > hfp->cFilePath && *(p-1)==SLASH) {
 		p--;
 		hfp->fTailSlash=1;
 	}
@@ -1094,11 +1130,13 @@ int _mwProcessReadSocket(HttpParam* hp, HttpSocket* phsSocket)
 		// reach the end of the header
 		//check request type
 		if (!memcmp(phsSocket->buffer, "GET", 3)) {
+			if (phsSocket->pucData[3] != ' ' || phsSocket->pucData[4] != '/') return -1;
 			SETFLAG(phsSocket,FLAG_REQUEST_GET);
-			path = phsSocket->pucData + 5;
+			path = phsSocket->pucData + 4;
 		} else if (!memcmp(phsSocket->buffer, "POST", 4)) {
+			if (phsSocket->pucData[4] != ' ' || phsSocket->pucData[5] != '/') return -1;
 			SETFLAG(phsSocket,FLAG_REQUEST_POST);
-			path = phsSocket->pucData + 6;
+			path = phsSocket->pucData + 5;
 		} else {
 			SYSLOG(LOG_INFO,"[%d] Unsupported method\n",phsSocket->socket);
 			phsSocket->request.pucPath = 0;
@@ -1316,7 +1354,7 @@ int _mwStrHeadMatch(char** pbuf1, const char* buf2) {
 	char* buf1 = *pbuf1;
 	int x;
 	for(i=0;buf2[i];i++) {
-		if ((x=toupper((int)buf1[i])-toupper((int)buf2[i]))) return 0;
+		if (!buf1[i] || (x=toupper((unsigned char)buf1[i])-toupper((unsigned char)buf2[i]))) return 0;
 	}
 	*pbuf1 = buf1 + i;
 	return i;
@@ -1353,10 +1391,12 @@ int _mwStartSendFile2(HttpParam* hp, HttpSocket* phsSocket, const char* filePath
 	if (!ISFLAGSET(phsSocket, FLAG_ABSOLUTE_PATH)) {
 		hfp.pchRootPath = hp->pchWebPath;
 		hfp.pchHttpPath = filePath;
-		mwGetLocalFileName(&hfp);
+		if (mwGetLocalFileName(&hfp) < 0) return -1;
 	}
 	else {
-		strncpy(hfp.cFilePath, filePath, sizeof(hfp.cFilePath));
+		size_t pathLength = strlen(filePath);
+		if (pathLength >= sizeof(hfp.cFilePath)) return -1;
+		memcpy(hfp.cFilePath, filePath, pathLength + 1);
 	}
 
 	if (stat(hfp.cFilePath, &st) == 0) {
@@ -1619,25 +1659,26 @@ int _mwSendRawDataChunk(HttpParam *hp, HttpSocket* phsSocket)
 ////////////////////////////////////////////////////////////////////////////
 void _mwRedirect(HttpSocket* phsSocket, char* pchPath)
 {
-	/*
-	char* path;
-	// raw (not file) data send mode
-	SETFLAG(phsSocket,FLAG_DATA_RAW);
-	// messages is HTML
-	phsSocket->response.fileType=HTTPFILETYPE_HTML;
-
-	// build redirect message
-	SYSLOG(LOG_INFO,"[%d] Http redirection to %s\n",phsSocket->socket,pchPath);
-	path = (pchPath == (char*)phsSocket->pucData) ? strdup(pchPath) : (char*)pchPath;
-	phsSocket->contentLength=snprintf(phsSocket->pucData, 512, HTTPBODY_REDIRECT,path);
-	phsSocket->response.contentLength=phsSocket->contentLength;
-	if (path != pchPath) free(path);
-	*/
+	if (!phsSocket || !phsSocket->pucData || !pchPath || !phsSocket->bufferSize) return;
+	for (const unsigned char* p = (const unsigned char*)pchPath; *p; p++) {
+		if (*p < 0x20 || *p == 0x7f) {
+			SETFLAG(phsSocket, FLAG_CONN_CLOSE);
+			return;
+		}
+	}
 	char* url = strdup(pchPath);
-	int n = snprintf(phsSocket->pucData, phsSocket->contentLength, HTTP301_HEADER, HTTP_SERVER_NAME, url);
+	if (!url) {
+		SETFLAG(phsSocket, FLAG_CONN_CLOSE);
+		return;
+	}
+	int n = snprintf(phsSocket->pucData, phsSocket->bufferSize, HTTP301_HEADER, HTTP_SERVER_NAME, url);
 	free(url);
+	if (n < 0 || (uint32_t)n >= phsSocket->bufferSize) {
+		SETFLAG(phsSocket, FLAG_CONN_CLOSE);
+		return;
+	}
 	send(phsSocket->socket, phsSocket->pucData, n, 0);
-} // end of _mwRedirect
+}
 
 ////////////////////////////////////////////////////////////////////////////
 // _mwStrStrNoCase
@@ -1647,13 +1688,13 @@ char* _mwStrStrNoCase(char* pchHaystack, char* pchNeedle)
 {
   char* pchReturn=NULL;
 
-  while(*pchHaystack!='\0' && pchReturn==NULL) {
-    if (toupper((int)*pchHaystack)==toupper((int)pchNeedle[0])) {
+  while(pchHaystack && pchNeedle && *pchHaystack!='\0' && pchReturn==NULL) {
+    if (toupper((unsigned char)*pchHaystack)==toupper((unsigned char)pchNeedle[0])) {
       char* pchTempHay=pchHaystack;
       char* pchTempNeedle=pchNeedle;
       // start of match
       while(*pchTempHay!='\0') {
-        if(toupper((int)*pchTempHay)!=toupper((int)*pchTempNeedle)) {
+        if(toupper((unsigned char)*pchTempHay)!=toupper((unsigned char)*pchTempNeedle)) {
           // failed to match
           break;
         }
@@ -1851,12 +1892,6 @@ int _mwParseHttpHeader(HttpSocket* phsSocket)
 			phsSocket->request.pucTransport = p;
 		} else if (_mwStrHeadMatch(&p,"Authorization: ")) {
 			phsSocket->request.pucAuthInfo = p;
-		} else if (_mwStrHeadMatch(&p,"X-Forwarded-For: ")) {
-			int i;
-			for (i = 3; i >= 0 && *p; i--) {
-				phsSocket->ipAddr.caddr[i] = atoi(p);
-				while (*p && *p != '\r' && *(p++) != '.');
-			}
 		}
 	}
 	return 0;					//end of header

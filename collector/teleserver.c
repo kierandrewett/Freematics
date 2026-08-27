@@ -525,9 +525,11 @@ int ishex(char c)
 
 int isnum(const char* s)
 {
-	do {
-		if (!isdigit(*s)) return FALSE;;
-	} while (*(++s));
+	if (!s || !*s) return FALSE;
+	while (*s) {
+		if (!isdigit((unsigned char)*s)) return FALSE;
+		s++;
+	}
 	return TRUE;
 }
 
@@ -731,18 +733,57 @@ void deviceLogout(CHANNEL_DATA* pld)
 	fprintf(getLogFile(), " LOGOUT:%s\n", pld->devid);
 }
 
-static uint32_t payloadTimestamp(const char* payload)
+static int parsePayloadTimestamp(const char* value, size_t length, uint32_t* timestamp)
 {
-	const char* p = payload;
-	while (p && *p) {
-		int pid = hex2uint16(p);
-		const char* sep = p;
-		while (ishex(*sep)) sep++;
-		if ((*sep == ':' || *sep == '=') && pid == 0) return (uint32_t)atol(sep + 1);
-		p = strchr(p, ',');
-		if (p) p++;
+	if (!value || !length || length > 10) return 0;
+	uint64_t parsed = 0;
+	for (size_t i = 0; i < length; i++) {
+		if (value[i] < '0' || value[i] > '9') return 0;
+		parsed = parsed * 10 + (unsigned int)(value[i] - '0');
+		if (parsed > UINT32_MAX) return 0;
 	}
-	return 0;
+	if (timestamp) *timestamp = (uint32_t)parsed;
+	return 1;
+}
+
+static int validatePayload(const char* payload, uint32_t* timestamp)
+{
+	if (!payload) return 0;
+	size_t payloadLength = strnlen(payload, MAX_TELEMETRY_RECORD_SIZE + 1);
+	if (!payloadLength || payloadLength > MAX_TELEMETRY_RECORD_SIZE) return 0;
+	const char* field = payload;
+	const char* payloadEnd = payload + payloadLength;
+	int timestampFound = 0;
+	for (;;) {
+		const char* fieldEnd = strchr(field, ',');
+		if (!fieldEnd) fieldEnd = payloadEnd;
+		if (fieldEnd <= field) return 0;
+		for (const unsigned char* p = (const unsigned char*)field; p < (const unsigned char*)fieldEnd; p++) {
+			if (*p < 0x20 || *p == 0x7f) return 0;
+		}
+		const char* separator = field;
+		unsigned int digits = 0;
+		unsigned int pid = 0;
+		while (separator < fieldEnd && ishex(*separator)) {
+			if (digits >= 4) return 0;
+			unsigned int nibble = *separator <= '9' ? (unsigned int)(*separator - '0')
+				: (unsigned int)((*separator & 0xDF) - 'A' + 10);
+			pid = (pid << 4) | nibble;
+			digits++;
+			separator++;
+		}
+		if (!digits || separator >= fieldEnd || (*separator != ':' && *separator != '=')) return 0;
+		const char* value = separator + 1;
+		if (value >= fieldEnd) return 0;
+		if (pid == 0) {
+			if (timestampFound || !parsePayloadTimestamp(value, (size_t)(fieldEnd - value), timestamp)) return 0;
+			timestampFound = 1;
+		}
+		if (fieldEnd == payloadEnd) break;
+		field = fieldEnd + 1;
+		if (field >= payloadEnd) return 0;
+	}
+	return timestampFound;
 }
 
 void clearLiveData(CHANNEL_DATA* pld)
@@ -754,8 +795,10 @@ void clearLiveData(CHANNEL_DATA* pld)
 
 int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 {
+	if (!payload || !pld) return -1;
 	uint64_t tick = GetTickCount64();
-	uint32_t payloadTs = eventID == 0 ? payloadTimestamp(payload) : 0;
+	uint32_t payloadTs = 0;
+	if (eventID == 0 && !validatePayload(payload, &payloadTs)) return -1;
 	int newTrip = payloadTs && pld->deviceTick &&
 		((payloadTs < pld->deviceTick && pld->deviceTick - payloadTs > PROXY_MAX_TIME_BEHIND) ||
 		 (payloadTs > pld->deviceTick && payloadTs - pld->deviceTick > SESSION_GAP));
@@ -820,7 +863,8 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		int m = pid >> 8;
 		if (m < PID_MODES) {
 			pld->data[pid].ts = ts;
-			memcpy(pld->data[pid].value, value, len + 1);
+			memcpy(pld->data[pid].value, value, len);
+			pld->data[pid].value[len] = 0;
 			// collect some stats
 			switch (pid) {
 			case PID_RSSI: /* signal strength */
@@ -854,6 +898,11 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 			}
 		}
 	} while (p && *p);
+	double obdState;
+	if (pld->data[PID_OBD_STATE].ts && parseFiniteNumber(pld->data[PID_OBD_STATE].value, &obdState)
+		&& obdState == 0.0) {
+		for (int i = 0x100; i < 0x200; i++) pld->data[i].ts = 0;
+	}
 	if (ts == 0) ts = pld->deviceTick;
 	int64_t interval = (int64_t)ts - (int64_t)pld->deviceTick;
 	if (ts) pld->deviceTick = ts;
@@ -1129,6 +1178,73 @@ static int copyData(char* d, int bs, const char* s)
 	d[used] = 0;
 	return used;
 }
+
+static int appendCheckedFormat(char* buf, int capacity, int used, const char* format, ...)
+{
+	if (!buf || !format || capacity <= 0 || used < 0 || used >= capacity) return -1;
+	va_list args;
+	va_start(args, format);
+	int written = vsnprintf(buf + used, (size_t)(capacity - used), format, args);
+	va_end(args);
+	if (written < 0 || written >= capacity - used) return -1;
+	return used + written;
+}
+
+static int appendCheckedValue(char* buf, int capacity, int used, const char* value)
+{
+	char encoded[MAX_PID_DATA_LEN * 6 + 3];
+	int length = copyData(encoded, sizeof(encoded), value);
+	if (length < 0) return -1;
+	if (used < 0 || capacity <= 0 || length >= capacity - used) return -1;
+	memcpy(buf + used, encoded, (size_t)length);
+	used += length;
+	buf[used] = 0;
+	return used;
+}
+
+static int writeJSONError(UrlHandlerParam* param, int statusCode, const char* message)
+{
+	if (!param || !param->pucBuffer || param->bufSize == 0) return FLAG_DATA_RAW;
+	if (param->hs && statusCode) param->hs->response.statusCode = statusCode;
+	const char* text = message ? message : "{\"error\":\"response unavailable\"}";
+	int length = snprintf(param->pucBuffer, param->bufSize, "%s", text);
+	if (length < 0) length = 0;
+	else if ((unsigned int)length >= param->bufSize) length = (int)param->bufSize - 1;
+	param->pucBuffer[length] = 0;
+	param->contentLength = (unsigned int)length;
+	param->contentType = HTTPFILETYPE_JSON;
+	return FLAG_DATA_RAW;
+}
+
+static int appendLiveJSONItem(char* buf, int capacity, int used, unsigned int pid, const char* value, unsigned int age)
+{
+	char item[MAX_PID_DATA_LEN * 6 + 32];
+	int length = appendCheckedFormat(item, sizeof(item), 0, "[%u,", pid);
+	if (length < 0) return -1;
+	length = appendCheckedValue(item, sizeof(item), length, value);
+	if (length < 0) return -1;
+	length = appendCheckedFormat(item, sizeof(item), length, ",%u],", age);
+	if (length < 0 || length >= capacity - used) return -1;
+	memcpy(buf + used, item, (size_t)length);
+	used += length;
+	buf[used] = 0;
+	return used;
+}
+
+static int appendHistoryJSONItem(char* buf, int capacity, int used, uint32_t timestamp, int pid, const char* value)
+{
+	char item[MAX_PID_DATA_LEN * 6 + 40];
+	int length = appendCheckedFormat(item, sizeof(item), 0, "[%u,%d,", timestamp, pid);
+	if (length < 0) return -1;
+	length = appendCheckedValue(item, sizeof(item), length, value);
+	if (length < 0) return -1;
+	length = appendCheckedFormat(item, sizeof(item), length, "],");
+	if (length < 0 || length >= capacity - used) return -1;
+	memcpy(buf + used, item, (size_t)length);
+	used += length;
+	buf[used] = 0;
+	return used;
+}
 CHANNEL_DATA* locateChannel(UrlHandlerParam* param)
 {
 	const char* sid;
@@ -1198,7 +1314,6 @@ int uhChannels(UrlHandlerParam* param)
 	int bs = param->bufSize;
 	char* buf = param->pucBuffer;
 	int l = 0;
-	int n = 0;
 	const char *cmd = mwGetVarValue(param->pxVars, "cmd", 0);
 	int data = mwGetVarValueInt(param->pxVars, "data", 0);
 	int extend = mwGetVarValueInt(param->pxVars, "extend", 0);
@@ -1211,13 +1326,7 @@ int uhChannels(UrlHandlerParam* param)
 		data = 1;
 		req += 5;
 	}
-	if (req[0] == '/') {
-		devid = req + 1;
-	}
-	/*
-	fprintf(getLogFile(), "%u.%u.%u.%u request channels\n",
-		param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0]);
-	*/
+	if (req[0] == '/') devid = req + 1;
 
 	if (cmd && !strcmp(cmd, "clear")) {
 		CHANNEL_DATA *pld = findChannelByID(id);
@@ -1229,60 +1338,59 @@ int uhChannels(UrlHandlerParam* param)
 		}
 	}
 	if (!devid) {
-		l += snprintf(buf + l, bs - l, "{\"channels\":[");
+		l = appendCheckedFormat(buf, bs, l, "{\"channels\":[");
+		if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	}
-	for (n = 0; n < MAX_CHANNELS; n++) {
+	for (int n = 0; n < MAX_CHANNELS; n++) {
 		CHANNEL_DATA* pld = ld + n;
-		if (!pld->id) continue;
-		if (devid && strcmp(pld->devid, devid)) continue;
-		if (id == 0 || pld->id == id) {
-			unsigned int age = tickAgeMs(tick, pld->serverDataTick);
-			unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
-			if (refresh && (age > refresh && pingage > refresh)) {
-				removeChannel(pld);
-				continue;
-			}
-			l += snprintf(buf + l, bs - l, "\n{\"id\":\"%u\",\"devid\":\"%s\",\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u",
-				pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
-				age, pingage, (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
-
-			if (extend) {
-				if (*pld->vin) {
-					l += snprintf(buf + l, bs - l, ",\"vin\":\"%s\"", pld->vin);
-				}
-				if (pld->ip.laddr) {
-					l += snprintf(buf + l, bs - l, ",\"ip\":\"%u.%u.%u.%u\"", pld->ip.caddr[3], pld->ip.caddr[2], pld->ip.caddr[1], pld->ip.caddr[0]);
-				}
-				else {
-					l += snprintf(buf + l, bs - l, ",\"ip\":\"%s\"", inet_ntoa(pld->udpPeer.sin_addr));
-				}
-			}
-
-			if (data) {
-				l += snprintf(buf + l, bs - l, ",\"data\":[");
-				for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
-					if (pld->data[i].ts) {
-						l += snprintf(buf + l, bs - l, "[%u,", i);
-						if (l < bs) l += copyData(buf + l, bs - l, pld->data[i].value);
-						l += snprintf(buf + l, bs - l, ",%u],", age + (pld->deviceTick - pld->data[i].ts));
-					}
-				}
-				if (buf[l - 1] == ',') l--;
-				l += snprintf(buf + l, bs - l, "]");
-			}
-			l += snprintf(buf + l, bs - l, "},");
+		if (!pld->id || (devid && strcmp(pld->devid, devid)) || (id != 0 && pld->id != id)) continue;
+		unsigned int age = tickAgeMs(tick, pld->serverDataTick);
+		unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
+		if (refresh && (age > refresh && pingage > refresh)) {
+			removeChannel(pld);
+			continue;
 		}
+		l = appendCheckedFormat(buf, bs, l, "\n{\"id\":\"%u\",\"devid\":\"%s\",\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u",
+			pld->id, pld->devid, pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
+			age, pingage, (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
+		if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+
+		if (extend) {
+			if (*pld->vin) {
+				l = appendCheckedFormat(buf, bs, l, ",\"vin\":\"%s\"", pld->vin);
+				if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+			}
+			if (pld->ip.laddr) {
+				l = appendCheckedFormat(buf, bs, l, ",\"ip\":\"%u.%u.%u.%u\"", pld->ip.caddr[3], pld->ip.caddr[2], pld->ip.caddr[1], pld->ip.caddr[0]);
+			} else {
+				l = appendCheckedFormat(buf, bs, l, ",\"ip\":\"%s\"", inet_ntoa(pld->udpPeer.sin_addr));
+			}
+			if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+		}
+
+		if (data) {
+			l = appendCheckedFormat(buf, bs, l, ",\"data\":[");
+			if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+			for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
+				if (!pld->data[i].ts) continue;
+				l = appendLiveJSONItem(buf, bs, l, i, pld->data[i].value, age + (pld->deviceTick - pld->data[i].ts));
+				if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+			}
+			if (l > 0 && buf[l - 1] == ',') l--;
+			l = appendCheckedFormat(buf, bs, l, "]");
+			if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+		}
+		l = appendCheckedFormat(buf, bs, l, "},");
+		if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	}
 
 	if (l == 0) {
-		l += snprintf(buf + l, bs - l, "{}");
+		l = appendCheckedFormat(buf, bs, l, "{}");
+	} else {
+		if (buf[l - 1] == ',') l--;
+		if (!devid) l = appendCheckedFormat(buf, bs, l, "]}");
 	}
-	else if (buf[l - 1] == ',') {
-		buf[--l] = 0;
-	}
-	if (!devid) {
-		l += snprintf(buf + l, bs - l, "]}");
-	}
+	if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	param->contentLength = l;
 	param->contentType = HTTPFILETYPE_JSON;
 	return FLAG_DATA_RAW;
@@ -1290,7 +1398,8 @@ int uhChannels(UrlHandlerParam* param)
 
 char* findNextToken(char* s)
 {
-	while (*s && (isdigit(*s) || *s == '-' || *s == '.' || *s == ',' || *s == '/' || *s == ';')) s++;
+	if (!s) return 0;
+	while (*s && (isdigit((unsigned char)*s) || *s == '-' || *s == '.' || *s == ',' || *s == '/' || *s == ';')) s++;
 	return s + 1;
 }
 
@@ -1353,19 +1462,31 @@ int uhPost(UrlHandlerParam* param)
 	if (!param->payloadSize) {
 		printf("GET from %u.%u.%u.%u | LAT:%s LON:%s ALT:%sm\n",
 			param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0],
-			lat, lon, alt);
+			lat ? lat : "", lon ? lon : "", alt ? alt : "");
 		return FLAG_DATA_RAW;
 	}
 
 	printf("POST from %u.%u.%u.%u | ",
 		param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0]);
 
-	unsigned int count = processPayload(param->pucPayload, pld, 0);
+	int count = processPayload(param->pucPayload, pld, 0);
+	if (count < 0) {
+		param->hs->response.statusCode = 400;
+		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "Invalid telemetry payload");
+		if (param->contentLength >= param->bufSize) param->contentLength = 0;
+		param->contentType = HTTPFILETYPE_TEXT;
+		return FLAG_DATA_RAW;
+	}
 	pld->dataReceived += param->payloadSize;
 	pld->ip = param->hs->ipAddr;
 
-	param->contentLength = sprintf(param->pucBuffer, "OK %u", count);
-	param->contentType = HTTPFILETYPE_TEXT;
+	int responseLength = snprintf(param->pucBuffer, param->bufSize, "OK %u", (unsigned int)count);
+	if (responseLength < 0 || (unsigned int)responseLength >= param->bufSize) {
+		param->contentLength = 0;
+		param->hs->response.statusCode = 500;
+	} else {
+		param->contentLength = (unsigned int)responseLength;
+	}
 	return FLAG_DATA_RAW;
 }
 
@@ -1381,25 +1502,22 @@ int uhGet(UrlHandlerParam* param)
 	uint64_t tick = GetTickCount64();
 	int bs = param->bufSize;
 	char* buf = param->pucBuffer;
-	int l = 0;
-	unsigned int age = tickAgeMs(tick, pld->serverDataTick);
-	unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
-	l += snprintf(buf + l, bs - l, "{\"stats\":{\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u}",
+	int l = appendCheckedFormat(buf, bs, 0, "{\"stats\":{\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"rssi\":%d,\"flags\":%u,\"parked\":%u}",
 		(unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime,
-		age, pingage, (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
-
-	l += snprintf(buf + l, bs - l, ",\"data\":[");
+		tickAgeMs(tick, pld->serverDataTick), tickAgeMs(tick, pld->serverPingTick), (int)pld->rssi, pld->devflags, channelIsParked(pld, tick));
+	if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+	l = appendCheckedFormat(buf, bs, l, ",\"data\":[");
+	if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
-		if (pld->data[i].ts) {
-			l += snprintf(buf + l, bs - l, "[%u,", i);
-			if (l < bs) l += copyData(buf + l, bs - l, pld->data[i].value);
-			l += snprintf(buf + l, bs - l, ",%u],",
-				pld->deviceTick >= pld->data[i].ts ? (age + pld->deviceTick - pld->data[i].ts) : 0);
-		}
+		if (!pld->data[i].ts) continue;
+		unsigned int age = pld->deviceTick >= pld->data[i].ts
+			? tickAgeMs(tick, pld->serverDataTick) + pld->deviceTick - pld->data[i].ts : 0;
+		l = appendLiveJSONItem(buf, bs, l, i, pld->data[i].value, age);
+		if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	}
-	if (buf[l - 1] == ',') l--;
-	l += snprintf(buf + l, bs - l, "]}");
-
+	if (l > 0 && buf[l - 1] == ',') l--;
+	l = appendCheckedFormat(buf, bs, l, "]}");
+	if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	param->contentLength = l;
 	param->contentType = HTTPFILETYPE_JSON;
 	return FLAG_DATA_RAW;
@@ -1412,7 +1530,6 @@ int uhPull(UrlHandlerParam* param)
 	CHANNEL_DATA *pld = locateChannel(param);
 	if (!pld) {
 		param->hs->response.statusCode = 403;
-		param->contentLength = 0;
 		return FLAG_DATA_RAW;
 	}
 
@@ -1420,83 +1537,64 @@ int uhPull(UrlHandlerParam* param)
 	uint64_t endts = mwGetVarValueInt64(param->pxVars, "endts");
 	uint32_t rollback = mwGetVarValueInt(param->pxVars, "rollback", 0);
 	int pid = mwGetVarValueInt(param->pxVars, "pid", 0);
-
 	uint64_t tick = GetTickCount64();
 	unsigned int age = tickAgeMs(tick, pld->serverDataTick);
 	unsigned int pingage = tickAgeMs(tick, pld->serverPingTick);
-
-	int bytes = 0;
 	char* buf = param->pucBuffer;
-	int bufsize = param->bufSize;
-
-	bytes += sprintf(buf + bytes, "{");
-	bytes += snprintf(buf + bytes, bufsize - bytes, "\"stats\":{\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"parked\":%u}",
+	int capacity = param->bufSize;
+	int bytes = appendCheckedFormat(buf, capacity, 0, "{\"stats\":{\"recv\":%u,\"rate\":%u,\"tick\":%llu,\"devtick\":%u,\"elapsed\":%u,\"age\":{\"data\":%u,\"ping\":%u},\"parked\":%u}",
 		pld->dataReceived, (unsigned int)pld->sampleRate, (unsigned long long)pld->serverDataTick, pld->deviceTick, pld->elapsedTime, age, pingage, channelIsParked(pld, tick));
-
-	bytes += snprintf(buf + bytes, bufsize - bytes, ",\"live\":[");
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+	bytes = appendCheckedFormat(buf, capacity, bytes, ",\"live\":[");
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
-		if (pld->data[i].ts) {
-			bytes += snprintf(buf + bytes, bufsize - bytes, "[%u,", i);
-			if (bytes < bufsize) bytes += copyData(buf + bytes, bufsize - bytes, pld->data[i].value);
-			bytes += snprintf(buf + bytes, bufsize - bytes, "],");
-		}
+		if (!pld->data[i].ts) continue;
+		bytes = appendLiveJSONItem(buf, capacity, bytes, i, pld->data[i].value,
+			pld->deviceTick >= pld->data[i].ts ? age + pld->deviceTick - pld->data[i].ts : 0);
+		if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	}
-	if (buf[bytes - 1] == ',') bytes--;
-	bytes += snprintf(buf + bytes, bufsize - bytes, "]");
+	if (bytes > 0 && buf[bytes - 1] == ',') bytes--;
+	bytes = appendCheckedFormat(buf, capacity, bytes, "]");
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 
 	if (rollback) {
-		// calculate and override ts
-		uint64_t t = GetTickCount64() - pld->serverDataTick + pld->deviceTick;
-		startts = t > rollback ? (t - rollback) : 0;
+		uint64_t current = GetTickCount64() - pld->serverDataTick + pld->deviceTick;
+		startts = current > rollback ? current - rollback : 0;
 	}
-	// start of data array
-	bytes += sprintf(buf + bytes, ",\"data\":[");
+	bytes = appendCheckedFormat(buf, capacity, bytes, ",\"data\":[");
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	uint32_t readPos = pld->cacheReadPos;
 	uint64_t begin = 0;
 	int bytesMargin = bytes;
 	uint32_t lastts = 0;
 	for (; pld->cache && pld->cacheSize && readPos != pld->cacheWritePos; readPos = (readPos + 1) % pld->cacheSize) {
 		CACHE_DATA *d = pld->cache + readPos;
-		if (d->ts < lastts) {
-			// timestamp looping or device reset detected, wipe out all previous data
-			bytes = bytesMargin;
-		}
+		if (d->ts < lastts) bytes = bytesMargin;
 		lastts = d->ts;
 		if (d->ts >= startts) {
 			if (endts && d->ts >= endts) break;
-			if (bytes + d->len + 64 > bufsize) {
-				// buffer full
-				break;
-			}
 			if (d->data[0] && (pid == 0 || pid == d->pid)) {
-				bytes += sprintf(buf + bytes, "[%u,%d,", d->ts, d->pid);
-				if (bytes < bufsize) bytes += copyData(buf + bytes, bufsize - bytes, d->data);
-				bytes += sprintf(buf + bytes, "],");
+				int next = appendHistoryJSONItem(buf, capacity, bytes, d->ts, d->pid, d->data);
+				if (next < 0) break;
+				bytes = next;
 			}
-			// keep ts range
 			if (begin == 0) begin = d->ts;
 		}
 	}
-	if (buf[bytes - 1] == ',') bytes--;
-	// end of data array
-	buf[bytes++] = ']';
-	if (readPos == pld->cacheWritePos) {
-		// cache completely read
-		bytes += sprintf(buf + bytes, ",\"eos\":1");
-	}
-	else {
-		bytes += sprintf(buf + bytes, ",\"eos\":0");
-	}
-	buf[bytes++] = '}';
-	buf[bytes] = 0;
+	if (bytes > 0 && buf[bytes - 1] == ',') bytes--;
+	bytes = appendCheckedFormat(buf, capacity, bytes, "]");
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+	bytes = appendCheckedFormat(buf, capacity, bytes, ",\"eos\":%u}", readPos == pld->cacheWritePos ? 1 : 0);
+	if (bytes < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	param->contentLength = bytes;
 	return FLAG_DATA_RAW;
 }
 
 int isNum(const char* s)
 {
+	if (!s || !*s) return 0;
 	while (*s) {
-		if (!isdigit(*s)) return 0;
+		if (!isdigit((unsigned char)*s)) return 0;
 		s++;
 	}
 	return 1;
@@ -1570,8 +1668,13 @@ int uhCommand(UrlHandlerParam* param)
 			param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"pending\",\"elapsed\":%u}", (unsigned int)(cb->tick - pld->serverDataTick));
 		}
 		else {
-			param->contentLength = snprintf(param->pucBuffer, param->bufSize, "{\"result\":\"done\",\"idx\":%u,\"elapsed\":%u,\"data\":\"%s\"}",
-				i, (unsigned int)cb->elapsed, cb->message);
+			int responseLength = appendCheckedFormat(param->pucBuffer, param->bufSize, 0,
+				"{\"result\":\"done\",\"idx\":%u,\"elapsed\":%u,\"data\":",
+				i, (unsigned int)cb->elapsed);
+			if (responseLength >= 0) responseLength = appendCheckedValue(param->pucBuffer, param->bufSize, responseLength, cb->message);
+			if (responseLength >= 0) responseLength = appendCheckedFormat(param->pucBuffer, param->bufSize, responseLength, "}");
+			if (responseLength < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
+			param->contentLength = responseLength;
 			cb->flags |= CMD_FLAG_CHECKED;
 		}
 	}
@@ -1783,8 +1886,8 @@ int main(int argc,char* argv[])
 	char path[256];
 	GetFullPath(path, argv[0], "htdocs");
 	mwInitParam(&httpParam, 0, path, FLAG_DISABLE_RANGE, 0, 0);
-	httpParam.maxClients = 256;
-	httpParam.maxClientsPerIP = 16;
+	httpParam.maxClients = 64;
+	httpParam.maxClientsPerIP = 8;
 	httpParam.httpPort = 8080;
 	httpParam.udpPort = 8081;
 	httpParam.pxUrlHandler = urlHandlerList;
@@ -1863,9 +1966,15 @@ int main(int argc,char* argv[])
 		}
 	}
 
-	if (password[0]) {
-		httpParam.pxAuthHandler = authHandlerList;
+	if (!password[0]) {
+		fprintf(stderr, "HTTP authentication password required; use -w or place the collector behind an authenticated local service\n");
+		return -1;
 	}
+	if (httpParam.udpPort && !serverKey[0]) {
+		fprintf(stderr, "UDP server key required when UDP is enabled; use -k\n");
+		return -1;
+	}
+	httpParam.pxAuthHandler = authHandlerList;
 
 	printf("Server Host: %s:%u\n", GetLocalAddrString(), httpParam.httpPort);
 	if (httpParam.udpPort) {

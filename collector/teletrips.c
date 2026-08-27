@@ -477,6 +477,27 @@ int processTripData(const char* devid, const char* tripid, int force, char* file
 	return 0;
 }
 
+static int isSafeRedirectPath(const char* path)
+{
+	if (!path || path[0] != '/' || path[1] == '/') return 0;
+	char segment[2] = {0};
+	size_t length = 0;
+	for (const unsigned char* input = (const unsigned char*)path; *input; input++) {
+		if (*input < 0x20 || *input == 0x7f || *input == '\\') return 0;
+		if (*input == '?') {
+			return !(length == 2 && segment[0] == '.' && segment[1] == '.');
+		}
+		if (*input == '/') {
+			if (length == 2 && segment[0] == '.' && segment[1] == '.') return 0;
+			length = 0;
+		} else {
+			if (length < 2) segment[length] = (char)*input;
+			if (length < 3) length++;
+		}
+	}
+	return !(length == 2 && segment[0] == '.' && segment[1] == '.');
+}
+
 int uhTrip(UrlHandlerParam* param)
 {
 	const char* devid = mwGetVarValue(param->pxVars, "devid", 0);
@@ -516,13 +537,20 @@ int uhTrip(UrlHandlerParam* param)
 		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Response buffer unavailable");
 	int len;
 	if (redir) {
+		if (!isSafeRedirectPath(redir))
+			return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Invalid redirect path");
 		len = snprintf(param->pucBuffer, param->bufSize, "%s/%s.%s", redir, file, ext);
-		if (len < 0 || (unsigned int)len >= param->bufSize)
+		if (len < 0 || (unsigned int)len >= param->bufSize
+			|| (unsigned int)len >= sizeof(((HttpFilePath*)0)->cFilePath))
 			return writeArchiveError(param, 400, HTTPFILETYPE_TEXT, "Redirect path too long");
 		return FLAG_DATA_REDIRECT;
 	}
-	if (buildArchivePath(param->pucBuffer, param->bufSize, file, suffix) < 0)
+	char path[ARCHIVE_PATH_SIZE];
+	if (buildArchivePath(path, sizeof(path), file, suffix) < 0
+		|| strlen(path) >= sizeof(((HttpFilePath*)0)->cFilePath)
+		|| strlen(path) >= param->bufSize)
 		return writeArchiveError(param, 500, HTTPFILETYPE_TEXT, "Archive path too long");
+	memcpy(param->pucBuffer, path, strlen(path) + 1);
 	return FLAG_DATA_FILE | FLAG_ABSOLUTE_PATH;
 }
 
