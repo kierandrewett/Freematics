@@ -71,9 +71,12 @@ class ProductionConfigTests(unittest.TestCase):
                 validate_production_config(candidate)
 
     def test_line_continuations_are_rejected(self) -> None:
-        escaped = VALID_CONFIG.replace('"/api"', r'"/\x61pi"')
+        continued = VALID_CONFIG.replace(
+            '#define SERVER_PATH "/api"',
+            '#define SERVER_PATH \\\n"/api"',
+        )
         with self.assertRaisesRegex(ValueError, "line continuations"):
-            validate_production_config(escaped)
+            validate_production_config(continued)
 
 
 if __name__ == "__main__":
