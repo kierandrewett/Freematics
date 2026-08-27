@@ -32,18 +32,20 @@ CBuffer::CBuffer(uint8_t* mem)
   purge();
 }
 
-void CBuffer::add(uint16_t pid, uint8_t type, void* values, int bytes, uint8_t count)
+bool CBuffer::add(uint16_t pid, uint8_t type, void* values, int bytes, uint8_t count)
 {
-  if (offset < BUFFER_LENGTH - sizeof(ELEMENT_HEAD) - bytes) {
+    if (!m_data || !values || bytes < 0
+        || (uint32_t)offset + sizeof(ELEMENT_HEAD) + (uint32_t)bytes > BUFFER_LENGTH) {
+        Serial.println("FULL");
+        return false;
+    }
     ELEMENT_HEAD hdr = {pid, type, count};
     *(ELEMENT_HEAD*)(m_data + offset) = hdr;
     offset += sizeof(ELEMENT_HEAD);
-    memcpy(m_data + offset, values, bytes); 
+    memcpy(m_data + offset, values, bytes);
     offset += bytes;
     total++;
-  } else {
-    Serial.println("FULL");
-  }
+    return true;
 }
 
 void CBuffer::purge()
@@ -580,7 +582,17 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   } else {
     len = snprintf(url, sizeof(url), "%s/push?id=%s", SERVER_PATH, devid);
   }
-  success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, url);
+#if ENABLE_WIFI
+  if (wifi.connected()) {
+    Serial.println("[HTTP] GET via Wi-Fi");
+    success = wifi.send(METHOD_GET, url);
+  }
+  else
+#endif
+  {
+    Serial.println("[HTTP] GET via cellular");
+    success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, url);
+  }
 #else
   len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
 #if ENABLE_WIFI
@@ -659,6 +671,12 @@ bool TeleClientHTTP::connect(bool quick)
     Serial.println("[AUTH] Telemetry token missing");
     return false;
   }
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_GET || SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+  if (SERVER_PORT != 443) {
+    Serial.println("[AUTH] HTTPS telemetry requires port 443");
+    return false;
+  }
+#endif
 #if ENABLE_WIFI
   wifi.setBearerToken(SERVER_TOKEN);
 #endif

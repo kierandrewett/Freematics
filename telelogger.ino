@@ -30,6 +30,8 @@
 #include "driver/adc.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #if ENABLE_OLED
 #include "FreematicsOLED.h"
 #endif
@@ -99,6 +101,11 @@ char wifiPassword[32] = WIFI_PASSWORD;
 #endif
 nvs_handle_t nvs;
 
+bool persistConfigString(const char* key, const char* value)
+{
+  return nvs_set_str(nvs, key, value ? value : "") == ESP_OK && nvs_commit(nvs) == ESP_OK;
+}
+
 // live data
 String netop;
 String ip;
@@ -122,6 +129,9 @@ uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
 byte dtcBatchPending = 0;
 #if ENABLE_OBD
+byte dtcScanIndex = 0;
+byte fastOBDIndex = 0;
+uint32_t lastOBDFastPoll = 0;
 byte fastOBDFailureCycles = 0;
 uint16_t supportedOBDPIDs = 0;
 uint32_t lastOBDReadLatency = 0;
@@ -146,13 +156,30 @@ void serverProcess(int timeout);
 void processMEMS(CBuffer* buffer);
 bool processGPS(CBuffer* buffer);
 void processBLE(int timeout);
-
 class State {
 public:
-  bool check(uint16_t flags) { return (m_state & flags) == flags; }
-  void set(uint16_t flags) { m_state |= flags; }
-  void clear(uint16_t flags) { m_state &= ~flags; }
+  bool check(uint16_t flags)
+  {
+    portENTER_CRITICAL(&m_mux);
+    bool result = (m_state & flags) == flags;
+    portEXIT_CRITICAL(&m_mux);
+    return result;
+  }
+  void set(uint16_t flags)
+  {
+    portENTER_CRITICAL(&m_mux);
+    m_state |= flags;
+    portEXIT_CRITICAL(&m_mux);
+  }
+  void clear(uint16_t flags)
+  {
+    portENTER_CRITICAL(&m_mux);
+    m_state &= ~flags;
+    portEXIT_CRITICAL(&m_mux);
+  }
+private:
   volatile uint16_t m_state = 0;
+  portMUX_TYPE m_mux = portMUX_INITIALIZER_UNLOCKED;
 };
 
 FreematicsESP32 sys;
@@ -287,7 +314,12 @@ void clearOBDReadings()
   dtcData[2].statusPid = PID_DTC_PERMANENT_STATUS;
   dtcData[2].status = DTC_STATUS_NO_RESPONSE;
   dtcBatchPending = 0;
+  dtcScanIndex = 0;
+  fastOBDIndex = 0;
+  lastOBDFastPoll = 0;
   fastOBDFailureCycles = 0;
+  supportedOBDPIDs = 0;
+  lastOBDReadLatency = 0;
   lastOBDSpeed = 0;
   lastOBDDistanceTime = 0;
 }
@@ -465,44 +497,50 @@ int handlerLiveData(UrlHandlerParam* param)
 #if ENABLE_OBD
 void scanDiagnostics()
 {
-  static byte scanIndex = 0;
-  DTC_POLLING_INFO& item = dtcData[scanIndex];
+  DTC_POLLING_INFO& item = dtcData[dtcScanIndex];
   memset(item.codes, 0, sizeof(item.codes));
   item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
   item.status = obd.getDTCStatus();
   item.lastScan = millis();
-  dtcBatchPending = scanIndex + 1;
+  dtcBatchPending |= (byte)(1u << dtcScanIndex);
   Serial.print("DTC mode ");
   Serial.print(item.mode, HEX);
   Serial.print(':');
   Serial.println(item.count);
-  if (++scanIndex >= sizeof(dtcData) / sizeof(dtcData[0])) scanIndex = 0;
+  if (++dtcScanIndex >= sizeof(dtcData) / sizeof(dtcData[0])) dtcScanIndex = 0;
 }
 
 void processDiagnostics(CBuffer* buffer)
 {
+  const byte count = sizeof(dtcData) / sizeof(dtcData[0]);
   if (!dtcBatchPending) {
-    bool due = false;
-    for (byte i = 0; i < sizeof(dtcData) / sizeof(dtcData[0]); i++) {
-      if (!dtcData[i].lastScan || millis() - dtcData[i].lastScan >= DTC_SCAN_INTERVAL_MS) {
-        due = true;
+    const uint32_t now = millis();
+    for (byte offset = 0; offset < count; offset++) {
+      const byte index = (dtcScanIndex + offset) % count;
+      if (!dtcData[index].lastScan || now - dtcData[index].lastScan >= DTC_SCAN_INTERVAL_MS) {
+        dtcScanIndex = index;
+        scanDiagnostics();
         break;
       }
     }
-    if (due) scanDiagnostics();
   }
   if (!dtcBatchPending) return;
 
-  DTC_POLLING_INFO& item = dtcData[dtcBatchPending - 1];
-  buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
-  buffer->add(item.statusPid, ELEMENT_UINT8, &item.status, sizeof(item.status));
-  for (byte i = 0; i < DTC_CODE_SLOTS; i++) {
-    buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
-  }
-  if (++dtcBatchPending > sizeof(dtcData) / sizeof(dtcData[0])) {
+  byte pendingIndex = 0;
+  while (pendingIndex < count && !(dtcBatchPending & (byte)(1u << pendingIndex))) pendingIndex++;
+  if (pendingIndex >= count) {
     dtcBatchPending = 0;
+    return;
   }
+  DTC_POLLING_INFO& item = dtcData[pendingIndex];
+  bool complete = buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
+  if (complete) complete = buffer->add(item.statusPid, ELEMENT_UINT8, &item.status, sizeof(item.status));
+  for (byte i = 0; complete && i < DTC_CODE_SLOTS; i++) {
+    complete = buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
+  }
+  if (complete) dtcBatchPending &= (byte)~(1u << pendingIndex);
 }
+
 
 void updateOBDDistance(float speedKph)
 {
@@ -522,10 +560,11 @@ void processOBD(CBuffer* buffer)
   static uint32_t lastAuxPoll = 0;
   static bool cadenceReported = false;
   const byte count = sizeof(obdData) / sizeof(obdData[0]);
-  lastOBDReadLatency = 0;
 
   if (!cadenceReported) {
-    Serial.print("[OBD] Polling fast PIDs every ");
+    Serial.print("[OBD] Polling ");
+    Serial.print(OBD_FAST_PIDS_PER_CYCLE);
+    Serial.print(" fast PIDs every ");
     Serial.print(OBD_FAST_INTERVAL_MS);
     Serial.print(" ms; rotating auxiliary PIDs every ");
     Serial.print(OBD_AUX_INTERVAL_MS);
@@ -533,38 +572,46 @@ void processOBD(CBuffer* buffer)
     cadenceReported = true;
   }
 
-  // Core driving metrics are sampled every cycle for near-real-time panels.
-  // Try every core PID even if one request fails. A single PID fault must not
-  // suppress RPM, speed or other independent readings in the same sample.
+  const uint32_t now = millis();
+  const bool fastDue = !lastOBDFastPoll || now - lastOBDFastPoll >= OBD_FAST_INTERVAL_MS;
   bool fastReadFailed = false;
-  for (byte i = 0; i < count; i++) {
-    if (obdData[i].priority != 1 || !obd.isValidPID(obdData[i].pid)) continue;
-    float value;
-    const uint32_t readStarted = millis();
-    if (!obd.readPID(obdData[i].pid, value)) {
-      timeoutsOBD++;
-      reportOBDReadFailure(obdData[i].pid, "Fast");
-      fastReadFailed = true;
-      continue;
-    }
-    const uint32_t elapsed = millis() - readStarted;
-    if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
-    if (elapsed >= OBD_PID_READ_WARN_MS) {
-      reportSlowOBDRead(obdData[i].pid, "Fast", elapsed);
-    }
-    obdData[i].ts = millis();
-    obdData[i].value = value;
-    buffer->add((uint16_t)obdData[i].pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-    if (obdData[i].pid == PID_SPEED) {
-      updateOBDDistance(value);
-      if (value >= 2) lastMotionTime = millis();
-    } else if (obdData[i].pid == PID_RPM && value >= 100) {
-      // Keep the trip active while the engine idles in stationary traffic.
-      lastMotionTime = millis();
+  if (fastDue) {
+    lastOBDFastPoll = now;
+    lastOBDReadLatency = 0;
+    byte sampled = 0;
+    byte visited = 0;
+    while (sampled < OBD_FAST_PIDS_PER_CYCLE && visited < count) {
+      if (fastOBDIndex >= count) fastOBDIndex = 0;
+      PID_POLLING_INFO& item = obdData[fastOBDIndex++];
+      visited++;
+      if (item.priority != 1 || !obd.isValidPID(item.pid)) continue;
+      sampled++;
+      float value;
+      const uint32_t readStarted = millis();
+      const bool read = obd.readPID(item.pid, value);
+      const uint32_t elapsed = millis() - readStarted;
+      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
+      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Fast", elapsed);
+      if (!read) {
+        timeoutsOBD++;
+        reportOBDReadFailure(item.pid, "Fast");
+        fastReadFailed = true;
+        continue;
+      }
+      item.ts = millis();
+      item.value = value;
+      buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+      if (item.pid == PID_SPEED) {
+        updateOBDDistance(value);
+        if (value >= 2) lastMotionTime = millis();
+      } else if (item.pid == PID_RPM && value >= 100) {
+        // Keep the trip active while the engine idles in stationary traffic.
+        lastMotionTime = millis();
+      }
     }
   }
 
-  if (fastReadFailed) {
+  if (fastDue && fastReadFailed) {
     if (++fastOBDFailureCycles >= MAX_OBD_ERRORS) {
       Serial.println("[OBD] Fast PID failures persisted; clearing ECU session");
       clearOBDReadings();
@@ -573,14 +620,11 @@ void processOBD(CBuffer* buffer)
     // Do not add lower-priority traffic while the fast probe is unstable.
     return;
   }
-  fastOBDFailureCycles = 0;
+  if (fastDue) fastOBDFailureCycles = 0;
 
   // Rotate through every other ECU-advertised PID, but only once per five
   // seconds. This keeps the CAN/ELM bridge responsive while still discovering
-  // the full catalogue over time. Fast telemetry frames keep carrying the
-  // core values; auxiliary values are emitted when their rotation slot is
-  // sampled and remain available in the server history between polls.
-  const uint32_t now = millis();
+  // the full catalogue over time.
   if (!lastAuxPoll || now - lastAuxPoll >= OBD_AUX_INTERVAL_MS) {
     lastAuxPoll = now;
     byte sampled = 0;
@@ -592,15 +636,14 @@ void processOBD(CBuffer* buffer)
       if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
       float value;
       const uint32_t readStarted = millis();
-      if (!obd.readPID(item.pid, value)) {
+      const bool read = obd.readPID(item.pid, value);
+      const uint32_t elapsed = millis() - readStarted;
+      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
+      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Auxiliary", elapsed);
+      if (!read) {
         timeoutsOBD++;
         reportOBDReadFailure(item.pid, "Auxiliary");
         continue;
-      }
-      const uint32_t elapsed = millis() - readStarted;
-      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
-      if (elapsed >= OBD_PID_READ_WARN_MS) {
-        reportSlowOBDRead(item.pid, "Auxiliary", elapsed);
       }
       item.ts = millis();
       item.value = value;
@@ -913,7 +956,7 @@ void initialize()
     if (obd.init()) {
       Serial.println("[OBD] ECU connected");
       state.set(STATE_OBD_READY);
-      lastOBDInitAttempt = 0;
+      lastOBDInitAttempt = millis();
       reportOBDCapabilities();
 #if ENABLE_OLED
       oled.println("OBD OK");
@@ -935,6 +978,11 @@ void initialize()
   }
   if (state.check(STATE_STORAGE_READY)) {
     fileid = logger.begin();
+    if (!fileid) {
+      logger.end();
+      state.clear(STATE_STORAGE_READY);
+      Serial.println("[STORAGE] Local logging unavailable");
+    }
   }
 #if ENABLE_CAN_CAPTURE && ENABLE_OBD
   capturePassiveCAN();
@@ -1097,7 +1145,7 @@ void process()
     clearOBDReadings();
     if (obd.init(PROTO_AUTO, true)) {
       state.set(STATE_OBD_READY);
-      lastOBDInitAttempt = 0;
+      lastOBDInitAttempt = obdNow;
       Serial.println("[OBD] ECU ON");
       reportOBDCapabilities();
     }
@@ -1759,7 +1807,7 @@ void processBLE(int timeout)
   } else if (!strcmp(cmd, "APN?")) {
     n += snprintf(buf + n, bufsize - n, "%s", *apn ? apn : "DEFAULT");
   } else if (!strncmp(cmd, "APN=", 4)) {
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, persistConfigString("CELL_APN", strcmp(cmd + 4, "DEFAULT") ? cmd + 4 : "") ? "OK" : "ERR");
     loadConfig();
   } else if (!strcmp(cmd, "NET_OP")) {
     if (state.check(STATE_WIFI_CONNECTED)) {
@@ -1787,13 +1835,13 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, "%s", wifiSSID[0] ? wifiSSID : "-");
   } else if (!strncmp(cmd, "SSID=", 5)) {
     const char* p = cmd + 5;
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_SSID", strcmp(p, "-") ? p : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, persistConfigString("WIFI_SSID", strcmp(p, "-") ? p : "") ? "OK" : "ERR");
     loadConfig();
   } else if (!strcmp(cmd, "WPWD?")) {
     n += snprintf(buf + n, bufsize - n, "%s", wifiPassword[0] ? wifiPassword : "-");
   } else if (!strncmp(cmd, "WPWD=", 5)) {
     const char* p = cmd + 5;
-    n += snprintf(buf + n, bufsize - n, nvs_set_str(nvs, "WIFI_PWD", strcmp(p, "-") ? p : "") == ESP_OK ? "OK" : "ERR");
+    n += snprintf(buf + n, bufsize - n, persistConfigString("WIFI_PWD", strcmp(p, "-") ? p : "") ? "OK" : "ERR");
     loadConfig();
 #else
   } else if (!strcmp(cmd, "SSID?") || !strcmp(cmd, "WPWD?")) {

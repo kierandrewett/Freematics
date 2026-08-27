@@ -70,7 +70,7 @@
 **************************************/
 #if BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 384 /* bytes per slot */
+#define BUFFER_LENGTH 512 /* bytes per slot */
 #define SERIALIZE_BUFFER_SIZE 4096 /* bytes */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
@@ -88,6 +88,7 @@
 // maximum consecutive OBD access errors before entering standby
 #define MAX_OBD_ERRORS 3
 #define OBD_RETRY_INTERVAL_MS 5000UL
+#define OBD_FAST_PIDS_PER_CYCLE 2
 // Passive CAN capture is opt-in and bounded. It never transmits a CAN frame.
 #ifndef ENABLE_CAN_CAPTURE
 #define ENABLE_CAN_CAPTURE 0

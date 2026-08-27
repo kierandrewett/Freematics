@@ -31,7 +31,7 @@ class CBuffer
 {
 public:
     CBuffer(uint8_t* mem);
-    void add(uint16_t pid, uint8_t type, void* values, int bytes, uint8_t count = 1);
+    bool add(uint16_t pid, uint8_t type, void* values, int bytes, uint8_t count = 1);
     void purge();
     void serialize(CStorage& store);
     uint32_t timestamp;

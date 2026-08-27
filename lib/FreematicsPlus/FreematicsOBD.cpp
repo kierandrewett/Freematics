@@ -124,6 +124,48 @@ byte COBD::readPID(const byte pid[], byte count, int result[])
 	return results;
 }
 
+static bool readDTCByte(const char*& cursor, byte& value)
+{
+	while (*cursor) {
+		if ((*cursor >= '0' && *cursor <= '9')
+			|| (*cursor >= 'A' && *cursor <= 'F')
+			|| (*cursor >= 'a' && *cursor <= 'f')) {
+			const char* next = cursor + 1;
+			if ((*next >= '0' && *next <= '9')
+				|| (*next >= 'A' && *next <= 'F')
+				|| (*next >= 'a' && *next <= 'f')) {
+				if (next[1] == ':') {
+					cursor = next + 2;
+					continue;
+				}
+				value = hex2uint8(cursor);
+				cursor += 2;
+				return true;
+			}
+		}
+		cursor++;
+	}
+	return false;
+}
+
+static void appendDTCByte(byte value, uint16_t codes[], byte maxCodes, int& codesRead,
+	byte& highByte, bool& haveHighByte, bool& complete)
+{
+	if (complete || !codes || codesRead >= maxCodes) return;
+	if (!haveHighByte) {
+		highByte = value;
+		haveHighByte = true;
+		return;
+	}
+	uint16_t code = ((uint16_t)highByte << 8) | value;
+	haveHighByte = false;
+	if (code == 0) {
+		complete = true;
+	} else {
+		codes[codesRead++] = code;
+	}
+}
+
 int COBD::readDTC(uint16_t codes[], byte maxCodes)
 {
 	return readDTC(0x03, codes, maxCodes);
@@ -139,38 +181,40 @@ int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
 	m_dtcStatus = DTC_STATUS_NO_RESPONSE;
 	int codesRead = 0;
 	if (!link || !codes || maxCodes == 0 || (mode != 0x03 && mode != 0x07 && mode != 0x0A)) return 0;
-	char expected[3];
-	sprintf(expected, "%02X", 0x40 + mode);
-	for (int n = 0; n < 6; n++) {
-		char buffer[128];
-		if (n == 0) {
+	const byte expected = 0x40 + mode;
+	bool positive = false;
+	bool complete = false;
+	byte highByte = 0;
+	bool haveHighByte = false;
+	for (byte request = 0; request < OBD_DTC_MAX_RESPONSE_LINES && !complete && codesRead < maxCodes; request++) {
+		char buffer[128] = {0};
+		if (request == 0) {
 			sprintf(buffer, "%02X\r", mode);
 		} else {
-			sprintf(buffer, "%02X%02X\r", mode, n);
+			sprintf(buffer, "%02X%02X\r", mode, request);
 		}
-		link->send(buffer);
-		if (link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_LONG) > 0) {
-			if (!strstr(buffer, "NO DATA")) {
-				m_dtcStatus = DTC_STATUS_RESPONSE;
-				char* p = strstr(buffer, expected);
-				if (p) {
-					while (codesRead < maxCodes && *p) {
-						p += 6;
-						if (*p == '\r') {
-							p = strchr(p, ':');
-							if (!p) break;
-							p += 2;
-						}
-						uint16_t code = hex2uint16(p);
-						if (code == 0) break;
-						codes[codesRead++] = code;
-					}
-					if (codesRead) m_dtcStatus = DTC_STATUS_CODES;
-				}
-				break;
+		if (!link->send(buffer)) continue;
+		if (link->receive(buffer, sizeof(buffer), OBD_DTC_TIMEOUT) <= 0 || checkErrorMessage(buffer)) continue;
+
+		const char* cursor = buffer;
+		byte token = 0;
+		if (!positive) {
+			while (readDTCByte(cursor, token) && token != expected);
+			if (token != expected) continue;
+			positive = true;
+			m_dtcStatus = DTC_STATUS_RESPONSE;
+			byte responseLength = 0;
+			if (!readDTCByte(cursor, responseLength)) continue;
+			for (byte index = 0; index < responseLength && !complete && readDTCByte(cursor, token); index++) {
+				appendDTCByte(token, codes, maxCodes, codesRead, highByte, haveHighByte, complete);
+			}
+		} else {
+			while (!complete && codesRead < maxCodes && readDTCByte(cursor, token)) {
+				appendDTCByte(token, codes, maxCodes, codesRead, highByte, haveHighByte, complete);
 			}
 		}
 	}
+	if (codesRead) m_dtcStatus = DTC_STATUS_CODES;
 	return codesRead;
 }
 
@@ -489,7 +533,8 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 	success = false;
 	if (quick) {
 		int value;
-		if (!readPID(PID_SPEED, value)) return false;
+		success = readPID(PID_SPEED, value);
+		if (!success) return false;
 	} else {
 		for (byte n = 0; n < 2; n++) {
 			int value;
@@ -498,9 +543,7 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 				break;
 			}
 		}
-		if (!success) {
-			return false;
-		}
+		if (!success) return false;
 	}
 
 	/* ATDPN is read-only and records the bridge's auto-selected protocol. */
@@ -515,13 +558,12 @@ bool COBD::init(OBD_PROTOCOLS protocol, bool quick)
 		}
 	}
 
-	// load pid map; unqueried ranges remain unsupported
 	for (byte i = 0; i < 8; i++) {
 		byte pid = i * 0x20;
 		sprintf(buffer, "%02X%02X\r", dataMode, pid);
 		link->send(buffer);
-		if (!link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_LONG) || checkErrorMessage(buffer)) {
-			break;
+		if (!link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_SHORT) || checkErrorMessage(buffer)) {
+			continue;
 		}
 		for (char *p = buffer; (p = strstr(p, "41 ")); ) {
 			p += 3;

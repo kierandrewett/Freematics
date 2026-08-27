@@ -15,6 +15,8 @@
 #define DTC_STATUS_NO_RESPONSE 0
 #define DTC_STATUS_RESPONSE 1
 #define DTC_STATUS_CODES 2
+#define OBD_DTC_TIMEOUT 1000
+#define OBD_DTC_MAX_RESPONSE_LINES 6
 
 int dumpLine(char* buffer, int len);
 uint16_t hex2uint16(const char *p);

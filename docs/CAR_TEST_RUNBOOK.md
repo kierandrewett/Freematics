@@ -136,7 +136,7 @@ APN:simbase
 [HTTP] OK 10
 ```
 
-The batch count varies. `[DAT x1]` is normal when only one sample is ready; `[DAT x16]` is the maximum backlog batch. The number after `HTTP OK` is the count of decoded values, not the count of requests.
+The batch count varies. `[DAT x1]` is normal when only one sample is ready; `[DAT x24]` is the maximum HTTP backlog batch. The number after `HTTP OK` is the count of decoded values, not the count of requests.
 
 `OBD:NO` means the ECU is not awake, the unit is not seated in the OBD socket, or the vehicle/protocol has not responded. It does not indicate a SIM or server failure.
 

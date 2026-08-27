@@ -99,9 +99,8 @@ byte CStorage::checksum(const char* data, int len)
 void CStorageRAM::dispatch(const char* buf, byte len)
 {
     if (m_overflowed) return;
-    // reserve some space for checksum
-    int remain = m_cacheSize - m_cacheBytes - len - 3;
-    if (remain < 0) {
+    // reserve space for the delimiter, checksum marker, checksum and NUL
+    if (m_cacheBytes > m_cacheSize || (unsigned int)len + 4 > m_cacheSize - m_cacheBytes) {
         // Mark the transaction as failed so callers can roll back the whole
         // sample instead of sending a silently truncated record.
         m_overflowed = true;
@@ -161,7 +160,11 @@ void FileLogger::dispatch(const char* buf, byte len)
             return;
         }
     }
-    m_file.write('\n');
+    if (m_file.write('\n') != 1) {
+        Serial.println("Error writing newline. End file logging.");
+        end();
+        return;
+    }
     m_size += (len + 1);
 }
 

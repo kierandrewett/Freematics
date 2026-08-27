@@ -1,3 +1,5 @@
+#include "esp_heap_caps.h"
+
 #include <SPI.h>
 #include <FS.h>
 #include <SD.h>
@@ -38,7 +40,7 @@ public:
     void uninit()
     {
         if (m_cache) {
-            delete m_cache;
+            heap_caps_free(m_cache);
             m_cache = 0;
             m_cacheSize = 0;
         }
