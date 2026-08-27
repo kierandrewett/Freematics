@@ -31,18 +31,50 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("300", dtc_panel["targets"][0]["expr"])
     def test_live_view_surfaces_obd_quality_metrics(self) -> None:
         dashboard = build_dashboard("live")
-        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)
-        expressions = {target["expr"] for target in panel["targets"]}
+        quality_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)
+        expressions = {target["expr"] for target in quality_panel["targets"]}
         queue = next(panel for panel in dashboard["panels"] if panel["id"] == 46)
         self.assertTrue(any("freematics_device_queue_readings" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_device_queue_bytes" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_obd_state{" in expression for expression in expressions))
         self.assertTrue(any("freematics_obd_last_latency_milliseconds{" in expression for expression in expressions))
-        self.assertEqual(panel["datasource"]["uid"], "freematics-prometheus")
+        self.assertEqual(quality_panel["datasource"]["uid"], "freematics-prometheus")
         scan = next(panel for panel in dashboard["panels"] if panel["id"] == 47)
         self.assertIn("freematics_diagnostic_trouble_codes_state", scan["targets"][0]["expr"])
         queue = next(panel for panel in dashboard["panels"] if panel["id"] == 46)
         self.assertGreaterEqual(scan["gridPos"]["y"], queue["gridPos"]["y"] + queue["gridPos"]["h"])
+
+        expected_layout = {
+            21: {"h": 10, "w": 20, "x": 0, "y": 3},
+            43: {"h": 3, "w": 4, "x": 20, "y": 3},
+            45: {"h": 7, "w": 24, "x": 0, "y": 52},
+            46: {"h": 5, "w": 24, "x": 0, "y": 59},
+            47: {"h": 3, "w": 6, "x": 0, "y": 64},
+        }
+        layout = {panel["id"]: panel["gridPos"] for panel in dashboard["panels"]}
+        for panel_id, grid_pos in expected_layout.items():
+            self.assertEqual(layout[panel_id], grid_pos)
+
+        self.assertEqual(layout[47]["y"], layout[46]["y"] + layout[46]["h"])
+
+        operating = next(panel for panel in dashboard["panels"] if panel["id"] == 28)
+        self.assertTrue(
+            all("freematics_device_data_age_seconds" in target["expr"] for target in operating["targets"])
+        )
+        acceleration = next(panel for panel in dashboard["panels"] if panel["id"] == 22)
+        self.assertIn("freematics_device_data_age_seconds", acceleration["targets"][0]["expr"])
+        thermal = next(panel for panel in dashboard["panels"] if panel["id"] == 24)
+        self.assertIn("freematics_device_data_age_seconds", thermal["targets"][1]["expr"])
+        health = next(panel for panel in dashboard["panels"] if panel["id"] == 30)
+        self.assertTrue(all("freematics_device_data_age_seconds" in target["expr"] for target in health["targets"][:2]))
+        self.assertIn("Degraded", json.dumps(quality_panel))
+        self.assertIn("ISO 15765 11-bit 500 kbps", json.dumps(quality_panel))
+
+    def test_combined_view_keeps_historical_device_series(self) -> None:
+        dashboard = build_dashboard("combined")
+        for panel_id in (22, 24, 30):
+            panel = next(panel for panel in dashboard["panels"] if panel["id"] == panel_id)
+            self.assertTrue(all("freematics_device_data_age_seconds" not in target["expr"] for target in panel["targets"][:2]))
 
 
     def test_trips_view_has_historical_selector_and_route_evidence(self) -> None:
@@ -76,6 +108,37 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(route["targets"][0]["queryType"], "time series")
         self.assertEqual(route["targets"][0]["timeColumns"], ["time"])
         self.assertNotIn("transformations", route)
+
+        expected_layout = {
+            38: {"h": 5, "w": 24, "x": 0, "y": 39},
+            31: {"h": 10, "w": 24, "x": 0, "y": 44},
+            39: {"h": 7, "w": 12, "x": 0, "y": 54},
+            40: {"h": 7, "w": 12, "x": 12, "y": 54},
+            41: {"h": 7, "w": 24, "x": 0, "y": 61},
+            42: {"h": 8, "w": 24, "x": 0, "y": 68},
+            44: {"h": 8, "w": 24, "x": 0, "y": 76},
+        }
+        layout = {panel["id"]: panel["gridPos"] for panel in dashboard["panels"]}
+        for panel_id in (22, 24):
+            panel = next(panel for panel in dashboard["panels"] if panel["id"] == panel_id)
+            self.assertNotIn("freematics_device_data_age_seconds", panel["targets"][0]["queryText"])
+        for panel_id, grid_pos in expected_layout.items():
+            self.assertEqual(layout[panel_id], grid_pos)
+
+        self.assertEqual(
+            {panel["id"]: panel["title"] for panel in dashboard["panels"] if panel["id"] in {23, 24, 25, 26, 39}},
+            {
+                23: "Engine load and throttle",
+                24: "Engine temperatures",
+                25: "Fuel level and trim",
+                26: "Mass airflow",
+                39: "Timing and equivalence ratio",
+            },
+        )
+        gps_quality = next(panel for panel in dashboard["panels"] if panel["id"] == 27)
+        self.assertIn("GPS speed (mph)", json.dumps(gps_quality["fieldConfig"]["overrides"]))
+        fuel_rate = next(panel for panel in dashboard["panels"] if panel["id"] == 38)
+        self.assertIn("Mass airflow", json.dumps(fuel_rate["fieldConfig"]["overrides"]))
 
 
     def test_live_view_is_prometheus_only(self) -> None:
@@ -165,13 +228,20 @@ class DashboardViewsTest(unittest.TestCase):
             connection.close()
 
     def test_view_panel_ids_are_unique_and_generated_files_are_current(self) -> None:
-        for view, filename in (("live", "grafana-live.json"), ("trips", "grafana-trips.json")):
+        for view, filename in (
+            ("combined", "grafana-dashboard.json"),
+            ("live", "grafana-live.json"),
+            ("trips", "grafana-trips.json"),
+        ):
             dashboard = build_dashboard(view)
             panel_ids = [panel["id"] for panel in dashboard["panels"]]
             self.assertEqual(len(panel_ids), len(set(panel_ids)))
             with (MONITORING / filename).open(encoding="utf-8") as stream:
                 generated = json.load(stream)
             self.assertEqual(generated, dashboard)
+            if view == "combined":
+                diagnostic = next(panel for panel in dashboard["panels"] if panel["id"] == 29)
+                self.assertEqual(diagnostic["gridPos"], {"h": 5, "w": 6, "x": 6, "y": 39})
 
     def test_unknown_view_is_rejected(self) -> None:
         with self.assertRaises(ValueError):

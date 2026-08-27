@@ -1364,7 +1364,7 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "Only PIDs advertised by the ECU appear. Missing accelerator or torque series means unsupported, not zero.",
+      "description": "Stored engine load and throttle position in the selected range. Missing PID samples remain gaps.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1454,7 +1454,7 @@
           ]
         }
       ],
-      "title": "Engine load and driver demand",
+      "title": "Engine load and throttle",
       "type": "timeseries"
     },
     {
@@ -1552,7 +1552,7 @@
           ]
         }
       ],
-      "title": "Thermal system",
+      "title": "Engine temperatures",
       "type": "timeseries"
     },
     {
@@ -1667,7 +1667,7 @@
           ]
         }
       ],
-      "title": "Fuel level, trim and mixture",
+      "title": "Fuel level and trim",
       "type": "timeseries"
     },
     {
@@ -1782,7 +1782,7 @@
           ]
         }
       ],
-      "title": "Airflow and pressure",
+      "title": "Mass airflow",
       "type": "timeseries"
     },
     {
@@ -1865,6 +1865,18 @@
               {
                 "id": "custom.axisPlacement",
                 "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GPS speed (mph)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: mph"
               }
             ]
           }
@@ -1970,6 +1982,22 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "Mass airflow"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "gps"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "ECU economy (UK mpg)"
             },
             "properties": [
@@ -2013,8 +2041,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 6,
-        "x": 18,
+        "w": 24,
+        "x": 0,
         "y": 39
       },
       "id": 38,
@@ -2120,7 +2148,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 44
       },
       "id": 31,
       "options": {
@@ -2276,7 +2304,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 54
       },
       "id": 39,
       "options": {
@@ -2311,7 +2339,7 @@
           ]
         }
       ],
-      "title": "Combustion and exhaust",
+      "title": "Timing and equivalence ratio",
       "type": "timeseries"
     },
     {
@@ -2373,7 +2401,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 54
       },
       "id": 40,
       "options": {
@@ -2458,7 +2486,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 61
       },
       "id": 41,
       "options": {
@@ -2516,7 +2544,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 76
       },
       "id": 44,
       "options": {
@@ -2568,7 +2596,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 71
+        "y": 68
       },
       "id": 42,
       "options": {

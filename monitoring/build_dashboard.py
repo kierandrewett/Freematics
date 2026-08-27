@@ -220,6 +220,10 @@ def build_dashboard(view: str = "combined") -> dict:
 
     def fresh_device(value_expression: str) -> str:
         return f"({value_expression} unless on(device_id) ({device_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+
+    def fresh_live(value_expression: str) -> str:
+        """Apply current-data gating only to the live dashboard view."""
+        return fresh_device(value_expression) if view == "live" else value_expression
     diagnostic_counts = f"freematics_diagnostic_trouble_codes{selection}"
     diagnostic_ages = f"freematics_diagnostic_trouble_codes_age_seconds{selection}"
     fresh_diagnostic_counts = (
@@ -269,7 +273,7 @@ def build_dashboard(view: str = "combined") -> dict:
         f" or (({gps_speed_mph} * {IMPERIAL_GALLON_LITRES}) "
         f"/ on(device_id,trip_id) clamp_min({estimated_fuel_rate}, 0.01))"
     )
-    accel_x = f'freematics_acceleration_g{{{metric_labels},axis="x"}}'
+    accel_x = fresh_live(f'freematics_acceleration_g{{{metric_labels},axis="x"}}')
 
     panels.extend(
         [
@@ -316,10 +320,10 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"max(freematics_device_data_age_seconds{{{DEVICE}}})",
                 width=3,
                 unit="s",
-                description="Age of the newest packet at the collector. Parked standby deliberately creates long gaps.",
+                description=f"Age of the newest packet at the collector. Live telemetry cards and charts hide values after {OBD_FRESH_MAX_AGE_SECONDS} seconds; parked standby deliberately creates longer gaps.",
                 decimals=1,
                 no_value="No packets",
-                threshold_steps=((None, "green"), (15, "orange"), (60, "red")),
+                threshold_steps=((None, "green"), (10, "orange"), (OBD_FRESH_MAX_AGE_SECONDS, "red")),
             ),
             stat(
                 4,
@@ -700,7 +704,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 25,
                 8,
                 7,
-                [target(f"freematics_acceleration_g{selection}", "A", "{{axis}} axis")],
+                [target(fresh_live(f"freematics_acceleration_g{selection}"), "A", "{{axis}} axis")],
                 unit="accG",
                 description="Bias-corrected MEMS acceleration. Mount the unit consistently before interpreting X as acceleration/braking.",
             ),
@@ -732,7 +736,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 7,
                 [
                     target(fresh_obd(f'freematics_obd_value{{{metric_labels},name=~".*temperature.*"}}'), "A", "{{description}}"),
-                    target(f"freematics_device_temperature_celsius{selection}", "B", "TeleLogger enclosure"),
+                    target(fresh_live(f"freematics_device_temperature_celsius{selection}"), "B", "TeleLogger enclosure"),
                 ],
                 unit="celsius",
                 description="Coolant, intake, oil, catalyst and ambient temperatures, plus the logger enclosure, when exposed.",
@@ -784,6 +788,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 overrides=[
                     by_name("HDOP", ("unit", "none")),
                     by_name("Altitude", ("unit", "lengthm"), ("custom.axisPlacement", "right")),
+                    by_name("GPS speed (mph)", ("unit", "suffix: mph")),
                 ],
             ),
         ]
@@ -851,8 +856,8 @@ def build_dashboard(view: str = "combined") -> dict:
                 "tooltip": {"mode": "single", "sort": "none"},
             },
             "targets": [
-                target(f"freematics_device_connected{{{DEVICE}}}", "A", "Collector link"),
-                target(f"freematics_trip_active{{{DEVICE}}}", "B", "Trip active"),
+                target(fresh_device(f"freematics_device_connected{{{DEVICE}}}"), "A", "Collector link"),
+                target(fresh_device(f"freematics_trip_active{{{DEVICE}}}"), "B", "Trip active"),
                 target(network_transport, "C", "Uplink"),
             ],
             "title": "Operating state",
@@ -865,6 +870,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "datasource": DS,
             "description": "Read-only stored, pending and permanent diagnostic trouble codes. The firmware never clears codes.",
             "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
+            "gridPos": {"h": 5, "w": 6, "x": 6, "y": 39},
             "id": 29,
             "options": {"cellHeight": "sm", "showHeader": True, "sortBy": [{"displayName": "status", "desc": False}]},
             "targets": [
@@ -900,8 +906,8 @@ def build_dashboard(view: str = "combined") -> dict:
             6,
             5,
             [
-                target(f"freematics_device_rssi_dbm{{{DEVICE}}}", "A", "Signal"),
-                target(f"freematics_device_sample_rate_per_minute{{{DEVICE}}}", "B", "Samples/min"),
+                target(fresh_live(f"freematics_device_rssi_dbm{{{DEVICE}}}"), "A", "Signal"),
+                target(fresh_live(f"freematics_device_sample_rate_per_minute{{{DEVICE}}}"), "B", "Samples/min"),
                 target(f"freematics_device_data_age_seconds{{{DEVICE}}}", "C", "Age"),
             ],
             unit="dBm",
@@ -931,6 +937,7 @@ def build_dashboard(view: str = "combined") -> dict:
             unit="suffix: L/h",
             description="Fuel rate is shown directly when standard PID 0x5E is reported. The MAF estimate is a transparent petrol-only fallback (14.7:1 AFR, 745 g/L) and is not calibrated consumption; fuel percentage alone cannot produce efficiency.",
             overrides=[
+                by_name("Mass airflow", ("unit", "gps"), ("custom.axisPlacement", "right")),
                 by_name("ECU economy (UK mpg)", ("unit", "suffix: mpg UK"), ("custom.axisPlacement", "right")),
                 by_name("MAF economy estimate (UK mpg)", ("unit", "suffix: mpg UK"), ("custom.axisPlacement", "right"), ("custom.lineStyle", {"dash": [6, 5], "fill": "dash"})),
             ],
@@ -1135,6 +1142,41 @@ def build_dashboard(view: str = "combined") -> dict:
                 unit="short",
                 description="OBD state, bridge protocol, advertised PID count, timeout count, response latency and core-cycle failures. A disconnected or degraded state explains missing ECU values.",
                 overrides=[
+                    by_name(
+                        "State",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "0": {"color": "red", "index": 2, "text": "Disconnected"},
+                                    "1": {"color": "green", "index": 0, "text": "Ready"},
+                                    "2": {"color": "orange", "index": 1, "text": "Degraded"},
+                                }
+                            ),
+                        ),
+                    ),
+                    by_name(
+                        "Protocol",
+                        (
+                            "mappings",
+                            value_mapping(
+                                {
+                                    "3": {"text": "ISO 9141-2"},
+                                    "4": {"text": "KWP2000 5 kbps"},
+                                    "5": {"text": "KWP2000 fast"},
+                                    "6": {"text": "ISO 15765 11-bit 500 kbps"},
+                                    "7": {"text": "ISO 15765 29-bit 500 kbps"},
+                                    "8": {"text": "ISO 15765 29-bit 250 kbps"},
+                                    "9": {"text": "ISO 15765 11-bit 250 kbps"},
+                                    "11": {"text": "J1939"},
+                                    "12": {"text": "ISO 11898 11-bit 500 kbps"},
+                                    "13": {"text": "ISO 11898 29-bit 500 kbps"},
+                                    "14": {"text": "ISO 11898 11-bit 250 kbps"},
+                                    "15": {"text": "ISO 11898 29-bit 250 kbps"},
+                                }
+                            ),
+                        ),
+                    ),
                     by_name("Read latency (ms)", ("unit", "ms"), ("custom.axisPlacement", "right")),
                     by_name("Timeouts", ("custom.axisPlacement", "right")),
                     by_name("Core failures", ("custom.axisPlacement", "right")),
@@ -1450,6 +1492,7 @@ def build_dashboard(view: str = "combined") -> dict:
             16: "Largest stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable; no speed-derived value is inferred.",
             17: "Magnitude of the most negative stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable.",
             18: "Maximum stored coolant temperature in the selected range. Missing PID 0x105 remains unavailable.",
+            23: "Stored engine load and throttle position in the selected range. Missing PID samples remain gaps.",
             22: "Stored MEMS acceleration X, Y and Z components. Missing vectors remain gaps rather than zero.",
             24: "Stored coolant and intake-air temperatures in the selected range. Missing PID samples remain gaps.",
             25: "Stored fuel-tank percentage and fuel trims in the selected range. Fuel percentage is not a volume measurement.",
@@ -1464,6 +1507,14 @@ def build_dashboard(view: str = "combined") -> dict:
             panel["description"] = description
         next(item for item in panels if item["id"] == 40)["title"] = "Latest stored PID values"
         next(item for item in panels if item["id"] == 31)["title"] = "Historical metric inventory"
+        for panel_id, title in {
+            23: "Engine load and throttle",
+            24: "Engine temperatures",
+            25: "Fuel level and trim",
+            26: "Mass airflow",
+            39: "Timing and equivalence ratio",
+        }.items():
+            next(item for item in panels if item["id"] == panel_id)["title"] = title
 
         panels.append(
             {
@@ -1519,12 +1570,57 @@ def build_dashboard(view: str = "combined") -> dict:
             31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
+        live_layout = {
+            21: (0, 3, 20, 10),
+            43: (20, 3, 4, 3),
+            22: (0, 13, 8, 7),
+            23: (8, 13, 8, 7),
+            24: (16, 13, 8, 7),
+            25: (0, 20, 8, 7),
+            26: (8, 20, 8, 7),
+            27: (16, 20, 8, 7),
+            28: (0, 27, 8, 5),
+            30: (8, 27, 8, 5),
+            38: (16, 27, 8, 5),
+            32: (0, 32, 6, 3),
+            33: (6, 32, 6, 3),
+            34: (12, 32, 6, 3),
+            35: (18, 32, 6, 3),
+            31: (0, 35, 24, 10),
+            39: (0, 45, 12, 7),
+            40: (12, 45, 12, 7),
+            45: (0, 52, 24, 7),
+            46: (0, 59, 24, 5),
+            47: (0, 64, 6, 3),
+        }
+        for panel in panels:
+            layout = live_layout.get(panel["id"])
+            if layout is not None:
+                x, y, width, height = layout
+                panel["gridPos"] = {"h": height, "w": width, "x": x, "y": y}
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
             22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42, 44,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
+        trips_layout = {
+            38: (0, 39, 24, 5),
+            31: (0, 44, 24, 10),
+            39: (0, 54, 12, 7),
+            40: (12, 54, 12, 7),
+            41: (0, 61, 24, 7),
+            42: (0, 68, 24, 8),
+            44: (0, 76, 24, 8),
+        }
+        for panel in panels:
+            layout = trips_layout.get(panel["id"])
+            if layout is not None:
+                x, y, width, height = layout
+                panel["gridPos"] = {"h": height, "w": width, "x": x, "y": y}
+    else:
+        combined_scan = next(panel for panel in panels if panel["id"] == 47)
+        combined_scan["gridPos"] = {"h": 3, "w": 6, "x": 0, "y": 76}
 
     dashboard_title = "Vehicle · Freematics" if view == "combined" else f"Vehicle · {view.title()}"
     dashboard_uid = "freematics-vehicle" if view == "combined" else f"freematics-{view}"

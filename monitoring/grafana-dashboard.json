@@ -233,7 +233,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Age of the newest packet at the collector. Parked standby deliberately creates long gaps.",
+      "description": "Age of the newest packet at the collector. Live telemetry cards and charts hide values after 15 seconds; parked standby deliberately creates longer gaps.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -249,11 +249,11 @@
                 "color": "green"
               },
               {
-                "value": 15,
+                "value": 10,
                 "color": "orange"
               },
               {
-                "value": 60,
+                "value": 15,
                 "color": "red"
               }
             ]
@@ -2660,6 +2660,18 @@
                 "value": "right"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GPS speed (mph)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: mph"
+              }
+            ]
           }
         ]
       },
@@ -2881,7 +2893,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_device_connected{device_id=\"$device\"}",
+          "expr": "(freematics_device_connected{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Collector link",
           "range": true,
           "refId": "A"
@@ -2892,7 +2904,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_trip_active{device_id=\"$device\"}",
+          "expr": "(freematics_trip_active{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Trip active",
           "range": true,
           "refId": "B"
@@ -2928,6 +2940,12 @@
           }
         },
         "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 39
       },
       "id": 29,
       "options": {
@@ -3189,6 +3207,22 @@
           "unit": "suffix: L/h"
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mass airflow"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "gps"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -4114,6 +4148,93 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "State"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 2,
+                        "text": "Disconnected"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Ready"
+                      },
+                      "2": {
+                        "color": "orange",
+                        "index": 1,
+                        "text": "Degraded"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Protocol"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "3": {
+                        "text": "ISO 9141-2"
+                      },
+                      "4": {
+                        "text": "KWP2000 5 kbps"
+                      },
+                      "5": {
+                        "text": "KWP2000 fast"
+                      },
+                      "6": {
+                        "text": "ISO 15765 11-bit 500 kbps"
+                      },
+                      "7": {
+                        "text": "ISO 15765 29-bit 500 kbps"
+                      },
+                      "8": {
+                        "text": "ISO 15765 29-bit 250 kbps"
+                      },
+                      "9": {
+                        "text": "ISO 15765 11-bit 250 kbps"
+                      },
+                      "11": {
+                        "text": "J1939"
+                      },
+                      "12": {
+                        "text": "ISO 11898 11-bit 500 kbps"
+                      },
+                      "13": {
+                        "text": "ISO 11898 29-bit 500 kbps"
+                      },
+                      "14": {
+                        "text": "ISO 11898 11-bit 250 kbps"
+                      },
+                      "15": {
+                        "text": "ISO 11898 29-bit 250 kbps"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "Read latency (ms)"
             },
             "properties": [
@@ -4428,7 +4549,7 @@
         "h": 3,
         "w": 6,
         "x": 0,
-        "y": 96
+        "y": 76
       },
       "id": 47,
       "options": {
