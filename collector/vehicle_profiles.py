@@ -356,7 +356,7 @@ def _parse_candidates(data: object, activation: ActivationRequirements) -> tuple
         identity_gated = _boolean(candidate.get("identity_gated", True), f"{path}.identity_gated")
         if not identity_gated:
             raise _error(f"{path}.identity_gated", "must be true")
-        enabled = _boolean(candidate.get("enabled", True), f"{path}.enabled")
+        enabled = _boolean(candidate.get("enabled", False), f"{path}.enabled")
         candidate_unknown_action = _text(candidate.get("unknown_identifier_action"), f"{path}.unknown_identifier_action", required=False)
         if candidate_unknown_action is not None and candidate_unknown_action != activation.unknown_identifier_action:
             raise _error(f"{path}.unknown_identifier_action", "must match the profile stop policy")
@@ -478,7 +478,11 @@ def permitted_candidates(profile: VehicleProfile, identity: IdentityInput) -> tu
     return tuple(
         candidate
         for candidate in profile.manufacturer_candidates
-        if candidate.enabled and candidate.read_only and candidate.identity_gated
+        if candidate.enabled
+        and candidate.read_only
+        and candidate.identity_gated
+        and candidate.evidence
+        and candidate.provenance
     )
 
 

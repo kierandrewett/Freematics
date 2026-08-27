@@ -50,15 +50,27 @@ class VehicleProfileRegistryTests(unittest.TestCase):
         self.assertFalse(profile_matches(profile, identity))
         self.assertEqual(permitted_candidates(profile, identity), ())
 
-    def test_complete_identity_releases_only_read_only_identity_gated_metadata(self) -> None:
+    def test_complete_identity_keeps_unverified_candidates_disabled(self) -> None:
         profile = load_profile(PROFILE_PATH)
 
         candidates = permitted_candidates(profile, current_identity())
 
+        self.assertEqual(candidates, ())
+
+    def test_evidenced_enabled_candidates_release_after_identity_match(self) -> None:
+        source = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        for candidate in source["gmlan_candidates"]:
+            candidate["enabled"] = True
+            candidate["evidence"] = "captured positive read-only response"
+            candidate["provenance"] = "vehicle evidence run"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidenced.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            profile = load_profile(path)
+
+        candidates = permitted_candidates(profile, current_identity())
         self.assertEqual([candidate.name for candidate in candidates], ["vin", "ecu_odometer", "read_data_by_identifier_family"])
-        self.assertTrue(all(candidate.read_only for candidate in candidates))
-        self.assertTrue(all(candidate.identity_gated for candidate in candidates))
-        self.assertFalse(any(callable(value) for candidate in candidates for value in vars(candidate).values()))
+        self.assertTrue(all(candidate.evidence and candidate.provenance for candidate in candidates))
 
     def test_year_mismatch_rejects_profile(self) -> None:
         profile = load_profile(PROFILE_PATH)
@@ -100,10 +112,12 @@ class VehicleProfileRegistryTests(unittest.TestCase):
     def test_unknown_identifier_policy_is_record_and_stop(self) -> None:
         profile = load_profile(PROFILE_PATH)
         candidates = permitted_candidates(profile, current_identity())
+        unknown_candidate = profile.manufacturer_candidates[2]
 
         self.assertEqual(profile.activation.unknown_identifier_action, "record_and_stop")
-        self.assertEqual(candidates[2].identifier, None)
-        self.assertEqual(candidates[2].unknown_identifier_action, "record_and_stop")
+        self.assertEqual(candidates, ())
+        self.assertEqual(unknown_candidate.identifier, None)
+        self.assertEqual(unknown_candidate.unknown_identifier_action, "record_and_stop")
 
     def test_malformed_service_syntax_is_rejected(self) -> None:
         source = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))

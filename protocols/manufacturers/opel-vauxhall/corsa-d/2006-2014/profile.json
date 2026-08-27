@@ -40,9 +40,9 @@
     {"service": "0x01", "pid": "0xA6", "name": "vehicle_odometer", "optional": true, "enabled": true}
   ],
   "gmlan_candidates": [
-    {"service": "0x1A", "identifier": "0x90", "name": "vin", "status": "experimental"},
-    {"service": "0x1A", "identifier": "0xDF", "name": "ecu_odometer", "status": "experimental"},
-    {"service": "0x22", "name": "read_data_by_identifier_family", "status": "experimental"}
+    {"service": "0x1A", "identifier": "0x90", "name": "vin", "status": "experimental", "enabled": false},
+    {"service": "0x1A", "identifier": "0xDF", "name": "ecu_odometer", "status": "experimental", "enabled": false},
+    {"service": "0x22", "name": "read_data_by_identifier_family", "status": "experimental", "enabled": false}
   ],
   "activation": {
     "requires_positive_supported_response": true,
