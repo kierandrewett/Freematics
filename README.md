@@ -93,7 +93,9 @@ pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
 `FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. Do not store it in the repository or a shared shell script.
-The boot log prints `[BOOT] Build:` with the short Git revision (or `-dirty` when the source tree was modified), which should be recorded after every production flash.
+The boot log prints `[BOOT] Release: 1.0.0` and `[BOOT] Build:` with the
+short Git revision (or `-dirty` when the source tree was modified). Record
+both values after every production flash.
 
 Repository layout
 -----------------

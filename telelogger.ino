@@ -1660,6 +1660,8 @@ void showSysInfo()
   Serial.println("[BOOT] Freematics TeleLogger starting");
   Serial.print("[BOOT] Build: ");
   Serial.println(FREEMATICS_BUILD_ID);
+  Serial.print("[BOOT] Release: ");
+  Serial.println(FREEMATICS_RELEASE);
   Serial.print("[BOOT] CPU: ");
   Serial.print(ESP.getCpuFreqMHz());
   Serial.print(" MHz | flash: ");
