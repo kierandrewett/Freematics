@@ -1564,6 +1564,62 @@ def build_dashboard(view: str = "combined") -> dict:
             }
         )
 
+        panels.append(
+            {
+                "datasource": HISTORY_DS,
+                "description": "Integrity metadata for the selected raw archive. The raw .txt file remains canonical; a mutation flag means the sealed archive changed after indexing, while differing byte counts mean the projection is incomplete.",
+                "fieldConfig": {
+                    "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
+                    "overrides": [
+                        by_name("Raw bytes", ("unit", "decbytes")),
+                        by_name("Indexed bytes", ("unit", "decbytes")),
+                        by_name(
+                            "Sealed",
+                            (
+                                "mappings",
+                                value_mapping(
+                                    {
+                                        "0": {"color": "orange", "index": 1, "text": "Open"},
+                                        "1": {"color": "green", "index": 0, "text": "Sealed"},
+                                    }
+                                ),
+                            ),
+                        ),
+                        by_name(
+                            "Mutation detected",
+                            (
+                                "mappings",
+                                value_mapping(
+                                    {
+                                        "0": {"color": "green", "index": 0, "text": "No"},
+                                        "1": {"color": "red", "index": 1, "text": "Yes"},
+                                    }
+                                ),
+                            ),
+                        ),
+                        by_name("Indexed at", ("unit", "dateTimeAsIso")),
+                    ],
+                },
+                "gridPos": {"h": 8, "w": 24, "x": 0, "y": 84},
+                "id": 48,
+                "options": {
+                    "cellHeight": "sm",
+                    "footer": {"countRows": True, "fields": "", "reducer": ["count"], "show": True},
+                    "showHeader": True,
+                },
+                "targets": [history_target(
+                    "SELECT i.archive_path AS \"Archive\", i.content_sha256 AS \"SHA-256\", "
+                    "i.byte_size AS \"Raw bytes\", i.processed_bytes AS \"Indexed bytes\", "
+                    "i.sealed AS \"Sealed\", i.mutation_detected AS \"Mutation detected\", "
+                    "datetime(i.indexed_at_ms / 1000, 'unixepoch') AS \"Indexed at\" "
+                    "FROM ingest_file AS i JOIN trip AS t ON t.archive_path = i.archive_path "
+                    "WHERE t.device_id = '$device' AND t.trip_id = '$trip'",
+                )],
+                "title": "Archive integrity",
+                "type": "table",
+            }
+        )
+
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
@@ -1601,7 +1657,7 @@ def build_dashboard(view: str = "combined") -> dict:
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42, 44,
+            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42, 44, 48,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
         trips_layout = {
@@ -1612,6 +1668,7 @@ def build_dashboard(view: str = "combined") -> dict:
             41: (0, 61, 24, 7),
             42: (0, 68, 24, 8),
             44: (0, 76, 24, 8),
+            48: (0, 84, 24, 8),
         }
         for panel in panels:
             layout = trips_layout.get(panel["id"])

@@ -2626,6 +2626,151 @@
       ],
       "title": "Capture evidence, timestamp quality and gaps",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Integrity metadata for the selected raw archive. The raw .txt file remains canonical; a mutation flag means the sealed archive changed after indexing, while differing byte counts mean the projection is incomplete.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Raw bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Indexed bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Sealed"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "orange",
+                        "index": 1,
+                        "text": "Open"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "Sealed"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mutation detected"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "No"
+                      },
+                      "1": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "Yes"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Indexed at"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "id": 48,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": true,
+          "fields": "",
+          "reducer": [
+            "count"
+          ],
+          "show": true
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "SELECT i.archive_path AS \"Archive\", i.content_sha256 AS \"SHA-256\", i.byte_size AS \"Raw bytes\", i.processed_bytes AS \"Indexed bytes\", i.sealed AS \"Sealed\", i.mutation_detected AS \"Mutation detected\", datetime(i.indexed_at_ms / 1000, 'unixepoch') AS \"Indexed at\" FROM ingest_file AS i JOIN trip AS t ON t.archive_path = i.archive_path WHERE t.device_id = ${device:sqlstring} AND t.trip_id = ${trip:sqlstring}",
+          "rawQueryText": "SELECT i.archive_path AS \"Archive\", i.content_sha256 AS \"SHA-256\", i.byte_size AS \"Raw bytes\", i.processed_bytes AS \"Indexed bytes\", i.sealed AS \"Sealed\", i.mutation_detected AS \"Mutation detected\", datetime(i.indexed_at_ms / 1000, 'unixepoch') AS \"Indexed at\" FROM ingest_file AS i JOIN trip AS t ON t.archive_path = i.archive_path WHERE t.device_id = ${device:sqlstring} AND t.trip_id = ${trip:sqlstring}",
+          "queryType": "table",
+          "refId": "A",
+          "timeColumns": []
+        }
+      ],
+      "title": "Archive integrity",
+      "type": "table"
     }
   ],
   "refresh": "1m",

@@ -101,6 +101,11 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("${device:sqlstring}", archive_sql)
         for quality_field in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
             self.assertIn(quality_field, archive_sql)
+        integrity = next(panel for panel in dashboard["panels"] if panel["id"] == 48)
+        self.assertEqual(integrity["datasource"]["uid"], "freematics-history")
+        integrity_sql = integrity["targets"][0]["queryText"]
+        for column in ("content_sha256", "byte_size", "processed_bytes", "sealed", "mutation_detected"):
+            self.assertIn(column, integrity_sql)
         trip_index = next(panel for panel in dashboard["panels"] if panel["id"] == 19)
         trip_index_sql = trip_index["targets"][0]["queryText"]
         self.assertIn("timeline_start_ms IS NULL OR", trip_index_sql)
@@ -169,6 +174,27 @@ class DashboardViewsTest(unittest.TestCase):
             rows = connection.execute(sql).fetchall()
             self.assertEqual(rows[0][0], "UNKNOWN")
             self.assertIsNone(rows[0][2])
+        finally:
+            connection.close()
+
+    def test_archive_integrity_query_returns_index_record(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            schema_path = MONITORING.parent / "collector" / "history_schema.sql"
+            connection.executescript(schema_path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timestamp_quality, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 'partial', 1000, 1000)"
+            )
+            connection.execute(
+                "INSERT INTO ingest_file(archive_path, content_sha256, byte_size, processed_bytes, sealed, mutation_detected, indexed_at_ms) "
+                "VALUES ('/data/CAR/TRIP.txt', 'abc123', 100, 100, 1, 0, 1000)"
+            )
+            panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 48)
+            sql = panel["targets"][0]["queryText"]
+            sql = sql.replace("${device:sqlstring}", "'CAR'").replace("${trip:sqlstring}", "'TRIP'")
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual(rows, [("/data/CAR/TRIP.txt", "abc123", 100, 100, 1, 0, "1970-01-01 00:00:01")])
         finally:
             connection.close()
 
