@@ -46,6 +46,8 @@ listener behind the authenticated Caddy service; do not expose its HTTP or
 UDP ports directly.
 The web portal returns device IDs only. Manage Traccar credentials through its
 separate authenticated service.
+Device notification state changes use POST. Legacy GET notifications require
+the same 64-character bearer format and are not accepted from browsers.
 
 The onboard LED shows network state and pulses only during an active telemetry
 upload when the network is online. The production profile keeps the buzzer
