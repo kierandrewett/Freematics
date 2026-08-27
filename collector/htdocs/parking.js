@@ -68,6 +68,7 @@ var DASH = {
             return;
         }
         var select = document.createElement("select");
+        select.setAttribute("aria-label", "Device");
         select.onchange = function () { USER.goDash(select.value); };
         var found = false;
         for (var i = 0; i < info.devid.length; i++) {

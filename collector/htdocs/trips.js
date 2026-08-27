@@ -123,6 +123,7 @@ function updateUI()
 		return;
 	}
 	var select = document.createElement("select");
+	select.setAttribute("aria-label", "Device");
 	select.onchange = function () { goDash(select.value); };
 	var found = false;
 	for (var i = 0; i < USER.info.devid.length; i++) {

@@ -126,12 +126,14 @@ var DASH = {
       input.type = 'text';
       input.size = 7;
       input.readOnly = true;
+      input.setAttribute('aria-label', 'Device ID');
       input.value = devid;
       container.appendChild(input);
       return;
     }
 
     var select = document.createElement('select');
+    select.setAttribute('aria-label', 'Device');
     select.onchange = function () {
       USER.goDash(select.value);
     };
@@ -263,7 +265,7 @@ var DASH = {
 
     if (this.lastDataCount != this.data.length) {
       s =
-        "<hr/>Chart Data<br/><select id='chartPIDselect' onchange='DASH.selectPID(parseInt(this.value, 10))'>";
+        "<hr/>Chart Data<br/><select id='chartPIDselect' aria-label='Chart data PID' onchange='DASH.selectPID(parseInt(this.value, 10))'>";
       for (var n = 0; n < this.data.length; n++) {
         var pid = this.data[n][0];
         if (!PID.illustratable(pid)) continue;
