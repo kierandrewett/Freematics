@@ -278,6 +278,13 @@ session:
   vehicle values such as speed, RPM, coolant temperature and battery voltage.
   Its CAN source includes body-network examples, but it does not establish the
   engine ECU's diagnostic address or proprietary DID map.
+* A [public openHASP discussion](https://github.com/HASwitchPlate/openHASP/discussions/442)
+  contains a direct enhanced-diagnostic example for a Corsa Z13DTJ 1.3 CDTI:
+  CAN at 500 kbit/s, request ID `0x7E0`, response ID `0x5E8`, service `0xAA`,
+  and packet identifiers `0x0129` and `0x012A` for DPF data. A second report
+  says the same query works on Z13DTC but returns unusable data on A13DTC.
+  This is valuable engine-specific evidence, but it is not safe to apply to
+  an unknown 2012 engine or to a petrol ECU.
 * [ECUPrint](https://raw.githubusercontent.com/LucianPopaLP/ECUPrint/master/README.md)
   records passive Corsa D captures and identified ECUs. It does not publish a
   diagnostic service or data-identifier map.
