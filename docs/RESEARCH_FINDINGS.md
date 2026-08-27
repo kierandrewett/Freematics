@@ -322,10 +322,13 @@ session:
   functions, so it is tool capability evidence, not permission to execute
   those operations.
 * The [A12XER telemetry dataset card](https://huggingface.co/datasets/PedroCuisinier2025/OBD2_panel_opel_2012/raw/main/README.md)
-  describes 394,406 decoded rows from a 2012 Opel Corsa with an A12XER 1.2
-  petrol engine, collected with an ELM327 adapter and python-OBD. It is useful
-  as a standard PID and latency benchmark, but it contains no VIN, CAN frames,
-  ECU route, positive/negative response envelope or proprietary DID evidence.
+  describes 394,406 decoded rows and 28 columns from a 2012 Opel Corsa with
+  an A12XER 1.2 petrol engine, collected with an ELM327 adapter and
+  python-OBD. Its samples run from 2025-04-30 to 2025-12-02 at roughly 3 to
+  12 Hz and include RPM, speed, throttle, pedal, load, MAF, trims, coolant,
+  intake temperature, oxygen sensors, fuel level and voltage. It is useful as
+  a standard PID and latency benchmark, but contains no VIN, CAN frames, ECU
+  route, positive/negative response envelope or proprietary DID evidence.
 * A [Comunidad Corsa D protocol discussion](https://www.comunidadcorsa.com/foros/forum/modelos-especificos/corsa-d-2006-2014/456683-protocolo-conexion-obd)
   reports ISO 15765-4 CAN 11/500 for the model range, but provides no year,
   engine, ECU address or raw frame. Treat it as low-confidence corroboration
