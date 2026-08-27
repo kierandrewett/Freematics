@@ -276,7 +276,10 @@ session:
 * The [EHU32 Corsa D integration](https://github.com/PNKP237/EHU32/blob/main/README.md)
   confirms that MSCAN is available through OBD pins 3 and 11, and reports live
   vehicle values such as speed, RPM, coolant temperature and battery voltage.
-  Its CAN source includes body-network examples, but it does not establish the
+  Its [CAN source](https://github.com/PNKP237/EHU32/blob/main/src/CAN.ino)
+  defines display and climate-module requests on CAN IDs `0x246` and `0x248`
+  using service `0xAA`, with response IDs `0x546` and `0x548`. The source
+  decodes coolant, speed, RPM and voltage blocks, but it does not establish the
   engine ECU's diagnostic address or proprietary DID map.
 * [Adam Wilson's Corsa D CAN article](https://blog.ajwilson.me/posts/2021-05-06-reading-corsa-d-canbus/)
   lists three buses: high speed at 500 kbit/s, medium speed at 95 kbit/s and
