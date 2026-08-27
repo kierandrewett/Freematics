@@ -236,7 +236,7 @@ static void formatDTC(uint16_t raw, char code[6], const char** system)
 }
 
 static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
-	uint16_t countPid, uint16_t basePid, const char* status)
+	uint16_t countPid, uint16_t basePid, const char* status, unsigned int packetAge)
 {
 	if (!pld || !status || countPid >= 256 * PID_MODES || basePid >= 256 * PID_MODES) return l;
 	const PID_DATA* countData = pld->data + countPid;
@@ -245,9 +245,14 @@ static int appendDTCMetrics(char* buf, int bs, int l, const CHANNEL_DATA* pld,
 	if (!parseFiniteNumber(countData->value, &countValue) || countValue < 0.0
 		|| countValue > DTC_CODE_SLOTS || floor(countValue) != countValue) return l;
 	unsigned int count = (unsigned int)countValue;
+	uint64_t valueAge = packetAge;
+	if (pld->deviceTick >= countData->ts) valueAge += pld->deviceTick - countData->ts;
+	if (valueAge > UINT_MAX) valueAge = UINT_MAX;
 	l = appendFormat(buf, bs, l,
-		"freematics_diagnostic_trouble_codes{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %u\n",
-		pld->devid, pld->tripid, status, count);
+		"freematics_diagnostic_trouble_codes{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %u\n"
+		"freematics_diagnostic_trouble_codes_age_seconds{device_id=\"%s\",trip_id=\"%s\",status=\"%s\"} %.3f\n",
+		pld->devid, pld->tripid, status, count,
+		pld->devid, pld->tripid, status, valueAge / 1000.0);
 	for (unsigned int i = 0; i < count && basePid + i < 256 * PID_MODES; i++) {
 		double rawValue;
 		if (!pld->data[basePid + i].ts
@@ -332,6 +337,8 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_vehicle_engine_power_kilowatts gauge\n"
 		"# HELP freematics_diagnostic_trouble_codes Diagnostic trouble-code count by OBD status.\n"
 		"# TYPE freematics_diagnostic_trouble_codes gauge\n"
+		"# HELP freematics_diagnostic_trouble_codes_age_seconds Age of the latest diagnostic scan by status.\n"
+		"# TYPE freematics_diagnostic_trouble_codes_age_seconds gauge\n"
 		"# HELP freematics_diagnostic_trouble_code_info Diagnostic trouble codes reported by the ECU.\n"
 		"# TYPE freematics_diagnostic_trouble_code_info gauge\n");
 
@@ -430,9 +437,9 @@ int uhMetrics(UrlHandlerParam* param)
 		}
 
 		l = appendDerivedVehicleMetrics(buf, bs, l, pld);
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored");
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending");
-		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, "permanent");
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_STORED_COUNT, PID_DTC_STORED_BASE, "stored", age);
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PENDING_COUNT, PID_DTC_PENDING_BASE, "pending", age);
+		l = appendDTCMetrics(buf, bs, l, pld, PID_DTC_PERMANENT_COUNT, PID_DTC_PERMANENT_BASE, "permanent", age);
 	}
 
 	param->contentLength = (unsigned int)(l < 0 ? 0 : l);

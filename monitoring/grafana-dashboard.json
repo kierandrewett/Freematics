@@ -597,7 +597,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(freematics_diagnostic_trouble_codes{device_id=\"$device\"})",
+          "expr": "sum((freematics_diagnostic_trouble_codes{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 300)))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -2929,12 +2929,6 @@
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 39
-      },
       "id": 29,
       "options": {
         "cellHeight": "sm",
@@ -2953,7 +2947,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time(freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "max_over_time((freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 300))[$__range])",
           "legendFormat": "Fault",
           "range": false,
           "refId": "A",

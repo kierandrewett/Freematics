@@ -26,6 +26,9 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertTrue(all("$trip" not in expression for expression in expressions))
         historical_link = next(link for link in dashboard["links"] if link["title"] == "Historical trips view")
         self.assertNotIn("var-trip", historical_link["url"])
+        dtc_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 6)
+        self.assertIn("freematics_diagnostic_trouble_codes_age_seconds", dtc_panel["targets"][0]["expr"])
+        self.assertIn("300", dtc_panel["targets"][0]["expr"])
     def test_live_view_surfaces_obd_quality_metrics(self) -> None:
         dashboard = build_dashboard("live")
         panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)

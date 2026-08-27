@@ -24,6 +24,7 @@ PETROL_DENSITY_G_PER_LITRE = 745.0
 # an old ECU reading out of live summaries and charts instead of making a
 # stopped engine look as though it is still running.
 OBD_FRESH_MAX_AGE_SECONDS = 15
+DTC_FRESH_MAX_AGE_SECONDS = 300
 
 
 def target(
@@ -219,6 +220,17 @@ def build_dashboard(view: str = "combined") -> dict:
 
     def fresh_device(value_expression: str) -> str:
         return f"({value_expression} unless on(device_id) ({device_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+    diagnostic_counts = f"freematics_diagnostic_trouble_codes{selection}"
+    diagnostic_ages = f"freematics_diagnostic_trouble_codes_age_seconds{selection}"
+    fresh_diagnostic_counts = (
+        f"({diagnostic_counts} unless on(device_id,trip_id,status) "
+        f"({diagnostic_ages} > {DTC_FRESH_MAX_AGE_SECONDS}))"
+    )
+    diagnostic_info = f"freematics_diagnostic_trouble_code_info{selection}"
+    fresh_diagnostic_info = (
+        f"({diagnostic_info} unless on(device_id,trip_id,status) "
+        f"({diagnostic_ages} > {DTC_FRESH_MAX_AGE_SECONDS}))"
+    )
 
     network_transport = fresh_device(f"freematics_network_transport{{{DEVICE}}}")
     vehicle_voltage = fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}")
@@ -348,7 +360,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Diagnostic faults",
                 18,
                 0,
-                f"sum(freematics_diagnostic_trouble_codes{{{DEVICE}}})",
+                f"sum({fresh_diagnostic_counts})",
                 width=3,
                 unit="short",
                 decimals=0,
@@ -848,12 +860,11 @@ def build_dashboard(view: str = "combined") -> dict:
             "datasource": DS,
             "description": "Read-only stored, pending and permanent diagnostic trouble codes. The firmware never clears codes.",
             "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
-            "gridPos": {"h": 5, "w": 6, "x": 6, "y": 39},
             "id": 29,
             "options": {"cellHeight": "sm", "showHeader": True, "sortBy": [{"displayName": "status", "desc": False}]},
             "targets": [
                 target(
-                    f"max_over_time(freematics_diagnostic_trouble_code_info{selection}[$__range])",
+                    f"max_over_time({fresh_diagnostic_info}[$__range])",
                     "A",
                     "Fault",
                     instant=True,

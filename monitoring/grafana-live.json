@@ -585,7 +585,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(freematics_diagnostic_trouble_codes{device_id=\"$device\"})",
+          "expr": "sum((freematics_diagnostic_trouble_codes{device_id=\"$device\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\"} > 300)))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
