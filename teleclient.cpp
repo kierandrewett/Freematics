@@ -582,6 +582,10 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   } else {
     len = snprintf(path, sizeof(path), "%s/push?id=%s", SERVER_PATH, devid);
   }
+  if (len < 0 || (size_t)len >= sizeof(path)) {
+    Serial.println("[HTTP] GET path too long");
+    return false;
+  }
 #if ENABLE_WIFI
   if (wifi.connected()) {
     Serial.println("[HTTP] GET via Wi-Fi");
