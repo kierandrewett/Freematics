@@ -285,6 +285,12 @@ session:
   lists three buses: high speed at 500 kbit/s, medium speed at 95 kbit/s and
   low speed at 33.3 kbit/s. It describes MSCAN access through the OBD port and
   radio, but covers steering-wheel messages rather than engine diagnostics.
+* The [ReCAN academic dataset](https://pmc.ncbi.nlm.nih.gov/articles/PMC7015990/)
+  includes an Opel Corsa experiment captured from the OBD-II connector at
+  500 kbit/s. It preserves raw timestamps, CAN identifiers and ECU identifiers,
+  but does not state the Corsa's year or engine and does not publish an engine
+  diagnostic service or DID map. Its heuristic decoder can omit constant
+  identifiers, so raw frames remain the authoritative evidence.
 * A [public openHASP discussion](https://github.com/HASwitchPlate/openHASP/discussions/442)
   provides a direct but narrow capture for a Corsa Z13DTJ 1.3 CDTI. The
   reported bus is 500 kbit/s, the request CAN ID is `0x7E0`, and the response
