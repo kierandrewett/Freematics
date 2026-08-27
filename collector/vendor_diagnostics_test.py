@@ -39,6 +39,23 @@ class VendorDiagnosticResponseTests(unittest.TestCase):
         self.assertEqual(observation.data_hex, "56494E313233")
         self.assertEqual(decode_ascii(observation), "VIN123")
 
+    def test_gmlan_identifier_candidates_match_read_only_positive_envelopes(self) -> None:
+        expected_names = [
+            "vin",
+            "system_supplier_id",
+            "system_name_or_engine_type",
+            "diagnostic_data_identifier",
+            "ecu_address",
+            "gmlan_identification_data",
+            "ecu_odometer",
+        ]
+        self.assertEqual([candidate.name for candidate in self.candidates[:-1]], expected_names)
+        for candidate in self.candidates[:-1]:
+            identifier = int(candidate.identifier, 16)
+            observation = parse_response(candidate, f"5A {identifier:02X} 01 02")
+            self.assertEqual(observation.status, "positive")
+            self.assertEqual(observation.data_hex, "0102")
+
     def test_uds_positive_response_requires_identifier_echo(self) -> None:
         candidate = replace(self.candidates[-1], service="0x22", identifier="0xF190")
         observation = parse_response(candidate, "62 F1 90 56 49 4E")
