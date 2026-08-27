@@ -40,9 +40,14 @@
     {"service": "0x01", "pid": "0xA6", "name": "vehicle_odometer", "optional": true, "enabled": true}
   ],
   "gmlan_candidates": [
-    {"service": "0x1A", "identifier": "0x90", "name": "vin", "status": "experimental", "enabled": false},
-    {"service": "0x1A", "identifier": "0xDF", "name": "ecu_odometer", "status": "experimental", "enabled": false},
-    {"service": "0x22", "name": "read_data_by_identifier_family", "status": "experimental", "enabled": false}
+    {"service": "0x1A", "identifier": "0x90", "name": "vin", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0x92", "name": "system_supplier_id", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0x97", "name": "system_name_or_engine_type", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0x9A", "name": "diagnostic_data_identifier", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0xB0", "name": "ecu_address", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0xDE", "name": "gmlan_identification_data", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x1A", "identifier": "0xDF", "name": "ecu_odometer", "status": "experimental", "enabled": false, "evidence": "Generic GMLAN identifier registry; verify on the Corsa ECU", "provenance": "https://github.com/secdev/scapy/blob/master/scapy/contrib/automotive/gm/gmlan.py"},
+    {"service": "0x22", "name": "read_data_by_identifier_family", "status": "experimental", "enabled": false, "evidence": "UDS/GMLAN identifier family requires vehicle evidence", "provenance": "https://www.iso.org/standard/87962.html?browse=tc"}
   ],
   "activation": {
     "requires_positive_supported_response": true,

@@ -37,8 +37,8 @@ class VehicleProfileRegistryTests(unittest.TestCase):
         self.assertEqual(profile.identity.manufacturer, "Opel/Vauxhall")
         self.assertEqual(profile.identity.model_years, (2006, 2014))
         self.assertEqual(len(profile.standard_services), 5)
-        self.assertEqual(len(profile.manufacturer_candidates), 3)
-        self.assertEqual(profile.manufacturer_candidates[0].evidence, None)
+        self.assertEqual(len(profile.manufacturer_candidates), 8)
+        self.assertIn("Generic GMLAN identifier registry", profile.manufacturer_candidates[0].evidence)
         self.assertIn("OBD wiring diagram", profile.connector_buses[0].evidence)
         self.assertTrue(profile.activation.requires_capture_of_raw_response)
 
@@ -69,7 +69,16 @@ class VehicleProfileRegistryTests(unittest.TestCase):
             profile = load_profile(path)
 
         candidates = permitted_candidates(profile, current_identity())
-        self.assertEqual([candidate.name for candidate in candidates], ["vin", "ecu_odometer", "read_data_by_identifier_family"])
+        self.assertEqual([candidate.name for candidate in candidates], [
+            "vin",
+            "system_supplier_id",
+            "system_name_or_engine_type",
+            "diagnostic_data_identifier",
+            "ecu_address",
+            "gmlan_identification_data",
+            "ecu_odometer",
+            "read_data_by_identifier_family",
+        ])
         self.assertTrue(all(candidate.evidence and candidate.provenance for candidate in candidates))
 
     def test_year_mismatch_rejects_profile(self) -> None:
@@ -112,7 +121,7 @@ class VehicleProfileRegistryTests(unittest.TestCase):
     def test_unknown_identifier_policy_is_record_and_stop(self) -> None:
         profile = load_profile(PROFILE_PATH)
         candidates = permitted_candidates(profile, current_identity())
-        unknown_candidate = profile.manufacturer_candidates[2]
+        unknown_candidate = profile.manufacturer_candidates[-1]
 
         self.assertEqual(profile.activation.unknown_identifier_action, "record_and_stop")
         self.assertEqual(candidates, ())

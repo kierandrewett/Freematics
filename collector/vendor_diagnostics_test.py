@@ -40,7 +40,7 @@ class VendorDiagnosticResponseTests(unittest.TestCase):
         self.assertEqual(decode_ascii(observation), "VIN123")
 
     def test_uds_positive_response_requires_identifier_echo(self) -> None:
-        candidate = replace(self.candidates[2], service="0x22", identifier="0xF190")
+        candidate = replace(self.candidates[-1], service="0x22", identifier="0xF190")
         observation = parse_response(candidate, "62 F1 90 56 49 4E")
         self.assertEqual(observation.status, "positive")
         self.assertEqual(observation.data_hex, "56494E")
@@ -55,7 +55,7 @@ class VendorDiagnosticResponseTests(unittest.TestCase):
         self.assertEqual(observation.reason, "record_capability_and_backoff")
 
     def test_identifier_family_candidate_stops_without_guessing(self) -> None:
-        observation = parse_response(self.candidates[2], "62 F1 90 01")
+        observation = parse_response(self.candidates[-1], "62 F1 90 01")
         self.assertEqual(observation.status, "unsupported_identifier")
         self.assertEqual(observation.reason, "record_and_stop")
 
