@@ -172,11 +172,22 @@ def by_name(name: str, *properties: tuple[str, object]) -> dict:
     }
 
 
-def build_dashboard() -> dict:
+def build_dashboard(view: str = "combined") -> dict:
+    """Build one of the provisioned dashboard views.
+
+    ``combined`` is kept for backwards compatibility with existing imports
+    and produces the original dashboard shape. The provisioned ``live`` and
+    ``trips`` views use the same panel definitions, with separate time ranges
+    and variable sets so a live screen does not depend on a selected trip.
+    """
+    if view not in {"combined", "live", "trips"}:
+        raise ValueError(f"unknown dashboard view: {view}")
+
     value_mapping = lambda options: [{"type": "value", "options": options}]
     panels: list[dict] = []
 
-    selection = f"{{{DEVICE},{TRIP}}}"
+    metric_labels = f"{DEVICE}" if view == "live" else f"{DEVICE},{TRIP}"
+    selection = f"{{{metric_labels}}}"
     obd_age = f"freematics_obd_value_age_seconds{selection}"
 
     def fresh_obd(value_expression: str) -> str:
@@ -185,17 +196,17 @@ def build_dashboard() -> dict:
             f"({obd_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
         )
 
-    speed_kph = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10D"}}')
+    speed_kph = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10D"}}')
     speed_mph = f"({speed_kph} * {KM_TO_MI})"
     gps_speed_kph = f"freematics_gps_speed_kilometres_per_hour{selection}"
     gps_speed_mph = f"({gps_speed_kph} * {KM_TO_MI})"
-    rpm = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10C"}}')
-    fuel_level = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x12F"}}')
-    coolant = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x105"}}')
-    fuel_rate = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x15E"}}')
-    maf = fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x110"}}')
+    rpm = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10C"}}')
+    fuel_level = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x12F"}}')
+    coolant = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x105"}}')
+    fuel_rate = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x15E"}}')
+    maf = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x110"}}')
     service_counters = fresh_obd(
-        f'freematics_obd_value{{{DEVICE},{TRIP},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}'
+        f'freematics_obd_value{{{metric_labels},pid=~"0x101|0x11C|0x11F|0x121|0x130|0x131"}}'
     )
     estimated_fuel_rate = (
         f"({maf} * 3600 / ({PETROL_STOICH_AFR} * {PETROL_DENSITY_G_PER_LITRE}))"
@@ -213,7 +224,7 @@ def build_dashboard() -> dict:
         f" or (({gps_speed_mph} * {IMPERIAL_GALLON_LITRES}) "
         f"/ on(device_id,trip_id) clamp_min({estimated_fuel_rate}, 0.01))"
     )
-    accel_x = f'freematics_acceleration_g{{{DEVICE},{TRIP},axis="x"}}'
+    accel_x = f'freematics_acceleration_g{{{metric_labels},axis="x"}}'
 
     panels.extend(
         [
@@ -637,10 +648,10 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x104"}}'), "A", "Engine load"),
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x111"}}'), "B", "Throttle"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x104"}}'), "A", "Engine load"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x111"}}'), "B", "Throttle"),
                     target(
-                        fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque"}}'),
+                        fresh_obd(f'freematics_obd_value{{{metric_labels},name=~"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque"}}'),
                         "C",
                         "{{description}}",
                     ),
@@ -656,7 +667,7 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*temperature.*"}}'), "A", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},name=~".*temperature.*"}}'), "A", "{{description}}"),
                     target(f"freematics_device_temperature_celsius{selection}", "B", "TeleLogger enclosure"),
                 ],
                 unit="celsius",
@@ -670,8 +681,8 @@ def build_dashboard() -> dict:
                 8,
                 7,
                 [
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"fuel_level|.*fuel_trim.*"}}'), "A", "{{description}}"),
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name="commanded_equivalence_ratio"}}'), "B", "Equivalence ratio"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},name=~"fuel_level|.*fuel_trim.*"}}'), "A", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},name="commanded_equivalence_ratio"}}'), "B", "Equivalence ratio"),
                 ],
                 unit="percent",
                 description="Fuel gauge percentage and closed-loop trims stay on the primary axis. Equivalence ratio uses the right axis; fuel percentage is not a volume measurement.",
@@ -686,7 +697,7 @@ def build_dashboard() -> dict:
                 7,
                 [
                     target(maf, "A", "Mass airflow"),
-                    target(fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~".*pressure.*"}}'), "B", "{{description}}"),
+                    target(fresh_obd(f'freematics_obd_value{{{metric_labels},name=~".*pressure.*"}}'), "B", "{{description}}"),
                 ],
                 unit="kpascal",
                 description="Intake, fuel-rail, barometric and evaporative pressures with mass airflow on its own axis.",
@@ -969,17 +980,17 @@ def build_dashboard() -> dict:
             7,
             [
                 target(
-                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x10E"}}'),
+                    fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10E"}}'),
                     "A",
                     "Timing advance",
                 ),
                 target(
-                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},name=~"oxygen_sensor_.*_voltage"}}'),
+                    fresh_obd(f'freematics_obd_value{{{metric_labels},name=~"oxygen_sensor_.*_voltage"}}'),
                     "B",
                     "{{description}}",
                 ),
                 target(
-                    fresh_obd(f'freematics_obd_value{{{DEVICE},{TRIP},pid="0x144"}}'),
+                    fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x144"}}'),
                     "C",
                     "Equivalence ratio",
                 ),
@@ -1042,14 +1053,54 @@ def build_dashboard() -> dict:
         }
     )
 
-    return {
-        "annotations": {"list": []},
-        "description": "History-first vehicle telemetry: trip index, route, OBD, GNSS, motion, diagnostics and every ECU-advertised standard PID.",
-        "editable": True,
-        "fiscalYearStartMonth": 0,
-        "graphTooltip": 1,
-        "id": None,
-        "links": [
+    if view == "live":
+        live_panel_ids = {
+            1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+        }
+        panels = [panel for panel in panels if panel["id"] in live_panel_ids]
+    elif view == "trips":
+        trips_panel_ids = {
+            7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+            22, 23, 24, 25, 26, 27, 28, 29, 31, 38, 39, 40,
+        }
+        panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
+
+    dashboard_title = "Vehicle · Freematics" if view == "combined" else f"Vehicle · {view.title()}"
+    dashboard_uid = "freematics-vehicle" if view == "combined" else f"freematics-{view}"
+    dashboard_description = {
+        "combined": "History-first vehicle telemetry: trip index, route, OBD, GNSS, motion, diagnostics and every ECU-advertised standard PID.",
+        "live": "Current Freematics link, transport, packet age, fresh ECU values and vehicle telemetry. Historical trip selection belongs in the Trips view.",
+        "trips": "Historical Freematics trip index, route, replay telemetry, diagnostics and every ECU-advertised standard PID for the selected trip.",
+    }[view]
+    dashboard_links = [
+        {
+            "asDropdown": False,
+            "icon": "external link",
+            "includeVars": True,
+            "keepTime": False,
+            "tags": [],
+            "targetBlank": False,
+            "title": "Live vehicle view",
+            "tooltip": "Open current link and fresh telemetry",
+            "type": "link",
+            "url": "/d/freematics-live?var-device=$device",
+        },
+        {
+            "asDropdown": False,
+            "icon": "external link",
+            "includeVars": True,
+            "keepTime": False,
+            "tags": [],
+            "targetBlank": False,
+            "title": "Historical trips view",
+            "tooltip": "Open the trip index and route evidence",
+            "type": "link",
+            "url": "/d/freematics-trips?var-device=$device&var-trip=$trip",
+        },
+    ]
+    if view in {"combined", "trips"}:
+        dashboard_links.append(
             {
                 "asDropdown": False,
                 "icon": "external link",
@@ -1062,70 +1113,85 @@ def build_dashboard() -> dict:
                 "type": "link",
                 "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device",
             }
-        ],
+        )
+
+    templating = [
+        {
+            "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
+            "datasource": DS,
+            "definition": "label_values(freematics_device_connected, device_id)",
+            "hide": 0,
+            "includeAll": False,
+            "label": "Vehicle",
+            "multi": False,
+            "name": "device",
+            "options": [],
+            "query": {"query": "label_values(freematics_device_connected, device_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "refresh": 1,
+            "regex": "",
+            "skipUrlSync": False,
+            "sort": 1,
+            "type": "query",
+        }
+    ]
+    if view in {"combined", "trips"}:
+        templating.append(
+            {
+                "allValue": ".*",
+                "current": {"selected": True, "text": "All trips", "value": "$__all"},
+                "datasource": DS,
+                "definition": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
+                "hide": 0,
+                "includeAll": True,
+                "label": "Trip",
+                "multi": False,
+                "name": "trip",
+                "options": [],
+                "query": {"query": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+                "refresh": 2,
+                "regex": "",
+                "skipUrlSync": False,
+                "sort": 2,
+                "type": "query",
+            }
+        )
+
+    return {
+        "annotations": {"list": []},
+        "description": dashboard_description,
+        "editable": True,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 1,
+        "id": None,
+        "links": dashboard_links,
         "liveNow": True,
         "panels": panels,
-        "refresh": "2s",
+        "refresh": "2s" if view in {"combined", "live"} else "1m",
         "schemaVersion": 41,
         "tags": ["vehicle", "obd", "freematics", "trips", "gps", "diagnostics"],
-        "templating": {
-            "list": [
-                {
-                    "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
-                    "datasource": DS,
-                    "definition": "label_values(freematics_device_connected, device_id)",
-                    "hide": 0,
-                    "includeAll": False,
-                    "label": "Vehicle",
-                    "multi": False,
-                    "name": "device",
-                    "options": [],
-                    "query": {"query": "label_values(freematics_device_connected, device_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
-                    "refresh": 1,
-                    "regex": "",
-                    "skipUrlSync": False,
-                    "sort": 1,
-                    "type": "query",
-                },
-                {
-                    "allValue": ".*",
-                    "current": {"selected": True, "text": "All trips", "value": "$__all"},
-                    "datasource": DS,
-                    "definition": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
-                    "hide": 0,
-                    "includeAll": True,
-                    "label": "Trip",
-                    "multi": False,
-                    "name": "trip",
-                    "options": [],
-                    "query": {
-                        "query": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
-                        "refId": "PrometheusVariableQueryEditor-VariableQuery",
-                    },
-                    "refresh": 2,
-                    "regex": "",
-                    "skipUrlSync": False,
-                    "sort": 2,
-                    "type": "query",
-                },
-            ]
-        },
-        "time": {"from": "now-5m", "to": "now"},
+        "templating": {"list": templating},
+        "time": {"from": "now-5m" if view in {"combined", "live"} else "now-90d", "to": "now"},
         "timepicker": {
             "refresh_intervals": ["2s", "5s", "10s", "30s", "1m", "5m"],
             "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d", "90d", "1y"],
         },
         "timezone": "browser",
-        "title": "Vehicle · Freematics",
-        "uid": "freematics-vehicle",
+        "title": dashboard_title,
+        "uid": dashboard_uid,
         "version": 1,
         "weekStart": "monday",
     }
 
 
 def main() -> None:
-    output = Path(__file__).with_name("grafana-dashboard.json")
-    output.write_text(json.dumps(build_dashboard(), indent=2, ensure_ascii=False) + "\n")
+    output_directory = Path(__file__).parent
+    outputs = {
+        "grafana-dashboard.json": build_dashboard(),
+        "grafana-live.json": build_dashboard("live"),
+        "grafana-trips.json": build_dashboard("trips"),
+    }
+    for filename, dashboard in outputs.items():
+        (output_directory / filename).write_text(json.dumps(dashboard, indent=2, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":

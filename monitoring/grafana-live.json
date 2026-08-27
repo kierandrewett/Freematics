@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "History-first vehicle telemetry: trip index, route, OBD, GNSS, motion, diagnostics and every ECU-advertised standard PID.",
+  "description": "Current Freematics link, transport, packet age, fresh ECU values and vehicle telemetry. Historical trip selection belongs in the Trips view.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -31,18 +31,6 @@
       "tooltip": "Open the trip index and route evidence",
       "type": "link",
       "url": "/d/freematics-trips?var-device=$device&var-trip=$trip"
-    },
-    {
-      "asDropdown": false,
-      "icon": "external link",
-      "includeVars": true,
-      "keepTime": true,
-      "tags": [],
-      "targetBlank": true,
-      "title": "Raw Freematics trip archive",
-      "tooltip": "Open the collector's archived trip files",
-      "type": "link",
-      "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device"
     }
   ],
   "liveNow": true,
@@ -451,7 +439,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[5m:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[5m:])",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -672,7 +660,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max(freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"})",
+          "expr": "max(freematics_obd_value_age_seconds{device_id=\"$device\"})",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -681,1151 +669,6 @@
       ],
       "title": "ECU data age",
       "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Collector login time for the selected trip. Choose a trip above the dashboard.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "Select trip",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 0,
-        "y": 3
-      },
-      "id": 7,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 1000",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Trip start",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Collector-observed duration of the selected trip.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No trip",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "s",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 4,
-        "y": 3
-      },
-      "id": 8,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_trip_elapsed_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Duration",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Distance integrated by the device from OBD speed, with GPS fallback, displayed in statute miles for UK driving.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No distance",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "suffix: mi",
-          "decimals": 2
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 8,
-        "y": 3
-      },
-      "id": 9,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Distance",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD values older than 15 seconds are excluded.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No speed",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "suffix: mph",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 12,
-        "y": 3
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(avg(avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (avg(avg_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Average speed",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD values older than 15 seconds are excluded.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No speed",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "suffix: mph",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 16,
-        "y": 3
-      },
-      "id": 11,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "(max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (max(max_over_time(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])) * 0.621371)",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Maximum speed",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Highest engine RPM in the selected trip and time range.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No fresh ECU data",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "rpm",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 20,
-        "y": 3
-      },
-      "id": 12,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Peak engine speed",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Estimated first fuel-level value from the final sample and gauge delta over the selected range.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "Not reported or stale",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "percent",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 0,
-        "y": 6
-      },
-      "id": 13,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) - delta((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Fuel at start",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Latest fuel-level sample in the selected time range.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "Not reported or stale",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "percent",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 4,
-        "y": 6
-      },
-      "id": 14,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Fuel at end",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Start minus end fuel-tank percentage. Sensor quantisation means short trips may show zero or noise.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "Not reported or stale",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "percent",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 8,
-        "y": 6
-      },
-      "id": 15,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(-delta((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Fuel level change",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Peak positive acceleration on device X. Confirm mounting orientation in the car before treating it as longitudinal.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No motion data",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "accG",
-          "decimals": 2
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 12,
-        "y": 6
-      },
-      "id": 16,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(max_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Peak acceleration",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Magnitude of peak negative acceleration on device X; mounting orientation must be confirmed.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "No motion data",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          },
-          "unit": "accG",
-          "decimals": 2
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 16,
-        "y": 6
-      },
-      "id": 17,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "abs(min(min_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range])))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Peak braking",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Maximum fresh engine coolant temperature exposed by the ECU. Values older than 15 seconds are excluded.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "Unsupported or stale",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "blue"
-              },
-              {
-                "value": 75,
-                "color": "green"
-              },
-              {
-                "value": 105,
-                "color": "orange"
-              },
-              {
-                "value": 115,
-                "color": "red"
-              }
-            ]
-          },
-          "unit": "celsius",
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 4,
-        "x": 20,
-        "y": 6
-      },
-      "id": 18,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x105\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]))",
-          "legendFormat": "",
-          "range": false,
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "title": "Maximum coolant",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "One row per collector trip in the dashboard time range. Use the Trip selector for a detailed route and metric investigation.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Start"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsIso"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Duration"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Distance"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "suffix: mi"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Average speed"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Maximum speed"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 9
-      },
-      "id": 19,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Start",
-            "desc": true
-          }
-        ]
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 1000",
-          "legendFormat": "Start",
-          "range": false,
-          "refId": "A",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_elapsed_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Duration",
-          "range": false,
-          "refId": "B",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 0.621371",
-          "legendFormat": "Distance",
-          "range": false,
-          "refId": "C",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Average speed",
-          "range": false,
-          "refId": "D",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Maximum speed",
-          "range": false,
-          "refId": "E",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "title": "Trip index",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "trip_id",
-            "mode": "outer"
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "GPS route for the selected trip and time range. No line is shown until a valid outdoor fix is received.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 10,
-        "x": 0,
-        "y": 15
-      },
-      "id": 20,
-      "options": {
-        "basemap": {
-          "config": {},
-          "name": "Basemap",
-          "type": "default"
-        },
-        "controls": {
-          "mouseWheelZoom": true,
-          "showAttribution": true,
-          "showDebug": false,
-          "showMeasure": true,
-          "showScale": true,
-          "showZoom": true
-        },
-        "layers": [
-          {
-            "config": {
-              "arrow": 0,
-              "style": {
-                "color": {
-                  "fixed": "super-light-blue"
-                },
-                "lineWidth": 4,
-                "opacity": 0.9,
-                "rotation": {
-                  "fixed": 0,
-                  "max": 360,
-                  "min": -360,
-                  "mode": "mod"
-                },
-                "size": {
-                  "fixed": 5,
-                  "max": 15,
-                  "min": 2
-                },
-                "symbol": {
-                  "fixed": "img/icons/marker/circle.svg",
-                  "mode": "fixed"
-                }
-              }
-            },
-            "location": {
-              "latitude": "Latitude",
-              "longitude": "Longitude",
-              "mode": "coords"
-            },
-            "name": "Vehicle route",
-            "tooltip": true,
-            "type": "route"
-          }
-        ],
-        "tooltip": {
-          "mode": "details"
-        },
-        "view": {
-          "allLayers": true,
-          "id": "fit",
-          "lat": 54.5,
-          "lon": -3.0,
-          "zoom": 5
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_gps_latitude_degrees{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Latitude",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "freematics_gps_longitude_degrees{device_id=\"$device\",trip_id=~\"$trip\"}",
-          "legendFormat": "Longitude",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Trip route",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "Time",
-            "mode": "outer"
-          }
-        }
-      ],
-      "type": "geomap"
     },
     {
       "datasource": {
@@ -1978,7 +821,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 0.621371)",
+          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 0.621371)",
           "legendFormat": "OBD speed (mph)",
           "range": true,
           "refId": "A"
@@ -1989,7 +832,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371)",
+          "expr": "(freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} * 0.621371)",
           "legendFormat": "GPS speed (mph)",
           "range": true,
           "refId": "B"
@@ -2000,7 +843,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Engine RPM",
           "range": true,
           "refId": "C"
@@ -2096,7 +939,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\"}",
+          "expr": "freematics_acceleration_g{device_id=\"$device\"}",
           "legendFormat": "{{axis}} axis",
           "range": true,
           "refId": "A"
@@ -2192,7 +1035,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x104\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x104\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Engine load",
           "range": true,
           "refId": "A"
@@ -2203,7 +1046,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x111\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x111\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Throttle",
           "range": true,
           "refId": "B"
@@ -2214,7 +1057,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "C"
@@ -2310,7 +1153,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\".*temperature.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*temperature.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "A"
@@ -2321,7 +1164,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_device_temperature_celsius{device_id=\"$device\",trip_id=~\"$trip\"}",
+          "expr": "freematics_device_temperature_celsius{device_id=\"$device\"}",
           "legendFormat": "TeleLogger enclosure",
           "range": true,
           "refId": "B"
@@ -2434,7 +1277,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"fuel_level|.*fuel_trim.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"fuel_level|.*fuel_trim.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "A"
@@ -2445,7 +1288,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=\"commanded_equivalence_ratio\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=\"commanded_equivalence_ratio\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Equivalence ratio",
           "range": true,
           "refId": "B"
@@ -2558,7 +1401,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Mass airflow",
           "range": true,
           "refId": "A"
@@ -2569,7 +1412,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\".*pressure.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*pressure.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "B"
@@ -2694,7 +1537,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_gps_satellites{device_id=\"$device\",trip_id=~\"$trip\"}",
+          "expr": "freematics_gps_satellites{device_id=\"$device\"}",
           "legendFormat": "Satellites",
           "range": true,
           "refId": "A"
@@ -2705,7 +1548,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_gps_hdop{device_id=\"$device\",trip_id=~\"$trip\"}",
+          "expr": "freematics_gps_hdop{device_id=\"$device\"}",
           "legendFormat": "HDOP",
           "range": true,
           "refId": "B"
@@ -2716,7 +1559,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "freematics_gps_altitude_metres{device_id=\"$device\",trip_id=~\"$trip\"}",
+          "expr": "freematics_gps_altitude_metres{device_id=\"$device\"}",
           "legendFormat": "Altitude",
           "range": true,
           "refId": "C"
@@ -2911,85 +1754,6 @@
       ],
       "title": "Operating state",
       "type": "state-timeline"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
-      },
-      "description": "Read-only stored, pending and permanent diagnostic trouble codes. The firmware never clears codes.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 39
-      },
-      "id": 29,
-      "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "status",
-            "desc": false
-          }
-        ]
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Fault",
-          "range": false,
-          "refId": "A",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "title": "Diagnostic trouble codes",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "device_id": true,
-              "job": true,
-              "instance": true
-            },
-            "indexByName": {
-              "code": 0,
-              "status": 1,
-              "system": 2,
-              "trip_id": 3
-            },
-            "renameByName": {
-              "code": "Code",
-              "status": "Status",
-              "system": "System",
-              "trip_id": "Trip"
-            }
-          }
-        }
-      ],
-      "type": "table"
     },
     {
       "datasource": {
@@ -3270,7 +2034,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "ECU fuel rate (L/h)",
           "range": true,
           "refId": "A"
@@ -3281,7 +2045,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0))",
+          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0))",
           "legendFormat": "MAF fuel rate estimate (L/h)",
           "range": true,
           "refId": "B"
@@ -3292,7 +2056,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)), 0.01))",
+          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)), 0.01))",
           "legendFormat": "ECU economy (UK mpg)",
           "range": true,
           "refId": "C"
@@ -3303,7 +2067,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01))",
+          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01)) or (((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01))",
           "legendFormat": "MAF economy estimate (UK mpg)",
           "range": true,
           "refId": "D"
@@ -3675,7 +2439,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
           "legendFormat": "Latest fresh",
           "range": false,
           "refId": "A",
@@ -3688,7 +2452,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "min_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "min_over_time(freematics_obd_value{device_id=\"$device\"}[$__range])",
           "legendFormat": "Minimum",
           "range": false,
           "refId": "B",
@@ -3701,7 +2465,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "avg_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "avg_over_time(freematics_obd_value{device_id=\"$device\"}[$__range])",
           "legendFormat": "Average",
           "range": false,
           "refId": "C",
@@ -3714,7 +2478,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "max_over_time(freematics_obd_value{device_id=\"$device\"}[$__range])",
           "legendFormat": "Maximum",
           "range": false,
           "refId": "D",
@@ -3727,7 +2491,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time(freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
+          "expr": "last_over_time(freematics_obd_value_age_seconds{device_id=\"$device\"}[$__range])",
           "legendFormat": "Age",
           "range": false,
           "refId": "E",
@@ -3740,7 +2504,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > bool 15)[$__range:])",
+          "expr": "max_over_time((freematics_obd_value_age_seconds{device_id=\"$device\"} > bool 15)[$__range:])",
           "legendFormat": "Stale",
           "range": false,
           "refId": "F",
@@ -3906,7 +2670,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Timing advance",
           "range": true,
           "refId": "A"
@@ -3917,7 +2681,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",name=~\"oxygen_sensor_.*_voltage\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"oxygen_sensor_.*_voltage\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "B"
@@ -3928,7 +2692,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x144\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x144\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
           "legendFormat": "Equivalence ratio",
           "range": true,
           "refId": "C"
@@ -4024,7 +2788,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
           "legendFormat": "Latest",
           "range": false,
           "refId": "A",
@@ -4101,34 +2865,6 @@
         "skipUrlSync": false,
         "sort": 1,
         "type": "query"
-      },
-      {
-        "allValue": ".*",
-        "current": {
-          "selected": true,
-          "text": "All trips",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "freematics-prometheus"
-        },
-        "definition": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Trip",
-        "multi": false,
-        "name": "trip",
-        "options": [],
-        "query": {
-          "query": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 2,
-        "type": "query"
       }
     ]
   },
@@ -4160,8 +2896,8 @@
     ]
   },
   "timezone": "browser",
-  "title": "Vehicle · Freematics",
-  "uid": "freematics-vehicle",
+  "title": "Vehicle · Live",
+  "uid": "freematics-live",
   "version": 1,
   "weekStart": "monday"
 }

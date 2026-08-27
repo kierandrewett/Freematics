@@ -101,7 +101,7 @@ Repository layout
 * Root: Model B TeleLogger firmware and PlatformIO configuration
 * `lib/`: only the FreematicsPlus, FreematicsOLED and embedded HTTP libraries required by the firmware
 * `collector/`: matching Freematics Hub-compatible ingestion server
-* `monitoring/`: generated history-first Grafana dashboard and its maintainable Python source
+* `monitoring/`: generated Grafana dashboards and their maintainable Python source. Provision `grafana-live.json` for the current device link and fresh telemetry, and `grafana-trips.json` for the historical trip index, route and selected-trip evidence. `grafana-dashboard.json` remains as a backwards-compatible combined dashboard.
 
 Prerequisites
 -------------
