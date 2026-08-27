@@ -68,7 +68,8 @@ public:
 	void setHeaderFilter(uint32_t num);
 	// set CAN bus header filter bitmask
 	void setHeaderMask(uint32_t bitmask);
-	// receive sniffed data
+	// receive one raw line while CAN sniffing is enabled, without decoding or transmitting
+	int receiveRawData(char* buf, int len, unsigned int timeout = 100);
 	int receiveData(byte* buf, int len);
 	// set CAN ID for sending message
 	void setCANID(uint16_t id);

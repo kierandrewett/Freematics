@@ -841,6 +841,41 @@ void printTime()
   }
 }
 
+#if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
+bool passiveCanCaptureComplete = false;
+
+void capturePassiveCAN()
+{
+  if (passiveCanCaptureComplete) return;
+  if (!state.check(STATE_OBD_READY | STATE_STORAGE_READY)) return;
+  passiveCanCaptureComplete = true;
+
+  const byte protocol = obd.getProtocol();
+  if (protocol < 6 || protocol > 15) {
+    Serial.println("[CAN] Passive capture skipped; OBD protocol is not CAN");
+    return;
+  }
+
+  char raw[192];
+  const uint32_t started = millis();
+  uint16_t frames = 0;
+  Serial.println("[CAN] Passive capture started; transmit disabled");
+  obd.sniff(true);
+  while (millis() - started < CAN_CAPTURE_DURATION_MS && frames < CAN_CAPTURE_MAX_FRAMES) {
+    const int bytes = obd.receiveRawData(raw, sizeof(raw), CAN_CAPTURE_READ_TIMEOUT_MS);
+    if (bytes <= 0) continue;
+    const uint8_t storedBytes = bytes < CAN_CAPTURE_MAX_LINE_BYTES ? (uint8_t)bytes : CAN_CAPTURE_MAX_LINE_BYTES;
+    logger.timestamp(millis());
+    logger.logHex(PID_CAN_FRAME, (const uint8_t*)raw, storedBytes);
+    frames++;
+  }
+  obd.sniff(false);
+  logger.flush();
+  Serial.print("[CAN] Passive capture complete; frames=");
+  Serial.println(frames);
+}
+#endif
+
 /*******************************************************************************
   Initializing all data logging components
 *******************************************************************************/
@@ -901,6 +936,9 @@ void initialize()
   if (state.check(STATE_STORAGE_READY)) {
     fileid = logger.begin();
   }
+#if ENABLE_CAN_CAPTURE && ENABLE_OBD
+  capturePassiveCAN();
+#endif
 #endif
 
   // re-try OBD if connection not established
@@ -1064,6 +1102,9 @@ void process()
       reportOBDCapabilities();
     }
   }
+#endif
+#if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
+  capturePassiveCAN();
 #endif
 #if ENABLE_OBD
   uint8_t obdProtocol = obd.getProtocol();

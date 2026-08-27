@@ -27,6 +27,7 @@ class TelemetryGitMirrorTests(unittest.TestCase):
                 {"pid": "0x085", "value": "6"},
                 {"pid": "0x089", "value": "2"},
                 {"pid": "0x08C", "value": "128"},
+                {"pid": "0x092", "value": "3745452038203130203430"},
                 {"pid": "0x310", "value": "2"},
             ]
         )
@@ -38,6 +39,7 @@ class TelemetryGitMirrorTests(unittest.TestCase):
         self.assertEqual(metrics["network_transport"]["value"], {"code": 2, "name": "cellular"})
         self.assertEqual(metrics["obd_state"]["value"], {"code": 2, "name": "degraded"})
         self.assertEqual(metrics["queue_bytes"]["value"], 128)
+        self.assertEqual(metrics["can_frame"]["value"], "3745452038203130203430")
         self.assertEqual(metrics["stored_dtc_read_status"]["value"], {"code": 2, "name": "codes"})
         self.assertEqual(metrics["obd_protocol"]["value"], {"code": 6, "name": "iso15765_11bit_500k"})
 

@@ -84,6 +84,14 @@
 // maximum consecutive OBD access errors before entering standby
 #define MAX_OBD_ERRORS 3
 #define OBD_RETRY_INTERVAL_MS 5000UL
+// Passive CAN capture is opt-in and bounded. It never transmits a CAN frame.
+#ifndef ENABLE_CAN_CAPTURE
+#define ENABLE_CAN_CAPTURE 0
+#endif
+#define CAN_CAPTURE_DURATION_MS 30000UL
+#define CAN_CAPTURE_MAX_FRAMES 512
+#define CAN_CAPTURE_READ_TIMEOUT_MS 100UL
+#define CAN_CAPTURE_MAX_LINE_BYTES 120
 
 /**************************************
 * Networking configurations

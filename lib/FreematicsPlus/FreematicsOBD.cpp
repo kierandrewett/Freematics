@@ -653,6 +653,15 @@ int COBD::receiveData(byte* buf, int len)
 	return bytes;
 }
 
+int COBD::receiveRawData(char* buf, int len, unsigned int timeout)
+{
+	if (!link || !buf || len < 2) return 0;
+	int bytes = link->receive(buf, len, timeout);
+	if (bytes < 0) return 0;
+	buf[bytes < len ? bytes : len - 1] = 0;
+	return bytes;
+}
+
 void COBD::setCANID(uint16_t id)
 {
 	if (link) {

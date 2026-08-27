@@ -64,6 +64,17 @@ void CStorage::log(uint16_t pid, float values[], uint8_t count, const char* fmt)
     }
     dispatch(buf, (int)(p - buf));
 }
+void CStorage::logHex(uint16_t pid, const uint8_t values[], uint8_t count)
+{
+    if (!values || !count) return;
+    char buf[256];
+    int length = snprintf(buf, sizeof(buf), "%X%c", pid, m_delimiter);
+    if (length < 0 || length >= (int)sizeof(buf)) return;
+    for (uint8_t index = 0; index < count && length < (int)sizeof(buf) - 3; index++) {
+        length += snprintf(buf + length, sizeof(buf) - (size_t)length, "%02X", values[index]);
+    }
+    dispatch(buf, (byte)length);
+}
 
 void CStorage::timestamp(uint32_t ts)
 {

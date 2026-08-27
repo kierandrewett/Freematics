@@ -98,6 +98,16 @@ default. A caller must first apply the profile registry and then pass the raw
 response to `collector/vendor_diagnostics.py`; this keeps candidate discovery
 separate from standard polling.
 
+For a bounded passive CAN evidence run, set `ENABLE_CAN_CAPTURE` to `1` in
+`config.h` for a temporary evidence build. The capture runs once after the
+device finds a CAN OBD protocol, lasts at most 30 seconds, stores at most 512
+raw monitor lines, and never calls a CAN transmit function. Each capture writes
+an adjacent timestamp field (`0x000`) and hexadecimal raw monitor line
+(`0x092`). The raw monitor line is capped at 120 bytes to keep each local
+record bounded. Review the raw line offline before adding a Corsa-specific
+profile. Restore `ENABLE_CAN_CAPTURE` to `0` and rebuild the release image
+after the evidence run.
+
 ## Optional laptop serial check
 
 Install PlatformIO and clone the focused fork:

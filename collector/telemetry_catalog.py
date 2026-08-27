@@ -68,6 +68,7 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x8A, "obd_fast_failures", "OBD core failures", "Consecutive failed core OBD cycles.", "count", "freematics/obd", decoder="integer"),
     MetricDefinition(0x8B, "queue_readings", "Queued readings", "Number of filled telemetry readings waiting for upload.", "count", "freematics/transport", decoder="integer"),
     MetricDefinition(0x8C, "queue_bytes", "Queued bytes", "Encoded bytes waiting for upload.", "byte", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x92, "can_frame", "Passive CAN frame", "Raw CAN monitor line encoded as hexadecimal bytes.", "hex", "freematics/can", decoder="string"),
     MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
     MetricDefinition(0x330, "pending_dtc_read_status", "Pending DTC read status", "Pending DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
     MetricDefinition(0x350, "permanent_dtc_read_status", "Permanent DTC read status", "Permanent DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),

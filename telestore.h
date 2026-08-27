@@ -15,6 +15,7 @@ public:
     virtual void log(uint16_t pid, int32_t values[], uint8_t count);
     virtual void log(uint16_t pid, float values[], uint8_t count, const char* fmt = "%f");
     virtual void timestamp(uint32_t ts);
+    virtual void logHex(uint16_t pid, const uint8_t values[], uint8_t count);
     virtual void purge() { m_samples = 0; }
     virtual uint16_t samples() { return m_samples; }
     virtual void dispatch(const char* buf, byte len);
