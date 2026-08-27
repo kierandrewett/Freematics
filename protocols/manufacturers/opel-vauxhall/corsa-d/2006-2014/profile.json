@@ -1,0 +1,53 @@
+{
+  "profile_id": "opel-vauxhall.corsa-d.2006-2014",
+  "manufacturer": "Opel/Vauxhall",
+  "model": "Corsa D",
+  "model_years": [2006, 2014],
+  "status": "identity-gated",
+  "vehicle_identity_required": ["vin", "engine_code", "ecu_address"],
+  "safety": {
+    "read_only": true,
+    "writes_allowed": false,
+    "security_access_allowed": false,
+    "clear_faults_allowed": false,
+    "actuator_tests_allowed": false
+  },
+  "connector_buses": [
+    {
+      "name": "high_speed_can",
+      "pins": {"can_h": 6, "can_l": 14},
+      "nominal_bitrate": 500000,
+      "evidence": "Corsa-D OBD wiring diagram; verify on the individual vehicle"
+    },
+    {
+      "name": "medium_speed_can",
+      "pins": {"can_h": 3, "can_l": 11},
+      "nominal_bitrate": 95000,
+      "evidence": "Corsa-D reverse-engineering reports; verify before use"
+    },
+    {
+      "name": "low_speed_can",
+      "pins": {"can_h": 1},
+      "nominal_bitrate": null,
+      "evidence": "Corsa-D OBD wiring diagram; bitrate and routing require discovery"
+    }
+  ],
+  "standard_services": [
+    {"service": "0x01", "name": "current_data", "mode": "sae-j1979", "enabled": true},
+    {"service": "0x03", "name": "stored_dtcs", "mode": "sae-j1979", "enabled": true},
+    {"service": "0x07", "name": "pending_dtcs", "mode": "sae-j1979", "enabled": true},
+    {"service": "0x09", "name": "vehicle_information", "mode": "sae-j1979", "enabled": true},
+    {"service": "0x01", "pid": "0xA6", "name": "vehicle_odometer", "optional": true, "enabled": true}
+  ],
+  "gmlan_candidates": [
+    {"service": "0x1A", "identifier": "0x90", "name": "vin", "status": "experimental"},
+    {"service": "0x1A", "identifier": "0xDF", "name": "ecu_odometer", "status": "experimental"},
+    {"service": "0x22", "name": "read_data_by_identifier_family", "status": "experimental"}
+  ],
+  "activation": {
+    "requires_positive_supported_response": true,
+    "requires_capture_of_raw_response": true,
+    "unknown_identifier_action": "record_and_stop",
+    "negative_response_action": "record_capability_and_backoff"
+  }
+}
