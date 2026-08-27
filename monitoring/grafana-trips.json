@@ -2602,10 +2602,7 @@
         "multi": false,
         "name": "device",
         "options": [],
-        "query": {
-          "query": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
-          "refId": "SQLiteVariableQueryEditor-VariableQuery"
-        },
+        "query": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
@@ -2629,10 +2626,7 @@
         "multi": false,
         "name": "trip",
         "options": [],
-        "query": {
-          "query": "SELECT trip_id AS __text, trip_id AS __value FROM trip WHERE device_id = ${device:sqlstring} ORDER BY timeline_start_ms DESC",
-          "refId": "SQLiteVariableQueryEditor-VariableQuery"
-        },
+        "query": "SELECT trip_id AS __text, trip_id AS __value FROM trip WHERE device_id = ${device:sqlstring} ORDER BY timeline_start_ms DESC",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,

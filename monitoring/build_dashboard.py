@@ -1401,7 +1401,12 @@ def build_dashboard(view: str = "combined") -> dict:
             "multi": False,
             "name": "device",
             "options": [],
-            "query": {"query": device_query, "refId": "SQLiteVariableQueryEditor-VariableQuery"},
+            # frser-sqlite-datasource's metricFindQuery receives the variable's
+            # query value directly as a string.  Grafana's query-editor object
+            # shape is valid for Prometheus, but the SQLite plugin passes that
+            # object through as `rawQueryText`, which makes selector requests
+            # fail with "queryText ... type string".
+            "query": device_query,
             "refresh": 2,
             "regex": "",
             "skipUrlSync": False,
@@ -1445,7 +1450,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "multi": False,
                 "name": "trip",
                 "options": [],
-                "query": {"query": trip_query, "refId": "SQLiteVariableQueryEditor-VariableQuery"},
+                "query": trip_query,
                 "refresh": 2,
                 "regex": "",
                 "skipUrlSync": False,

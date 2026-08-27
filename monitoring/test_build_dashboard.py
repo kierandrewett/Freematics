@@ -28,6 +28,8 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(dashboard["uid"], "freematics-trips")
         self.assertEqual(dashboard["time"], {"from": "now-90d", "to": "now"})
         self.assertEqual([item["name"] for item in dashboard["templating"]["list"]], ["device", "trip"])
+        self.assertIsInstance(dashboard["templating"]["list"][0]["query"], str)
+        self.assertIsInstance(dashboard["templating"]["list"][1]["query"], str)
         titles = {panel["title"] for panel in dashboard["panels"]}
         self.assertIn("Trip index", titles)
         self.assertIn("Trip route", titles)
