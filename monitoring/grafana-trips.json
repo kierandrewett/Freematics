@@ -102,9 +102,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT start_capture_ms AS \"Trip start\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+          "queryText": "SELECT timeline_start_ms AS \"Trip start\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT timeline_start_ms AS \"Trip start\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Trip start",
@@ -166,9 +168,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT (end_capture_ms - start_capture_ms) / 1000.0 AS \"Duration\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+          "queryText": "SELECT (timeline_end_ms - timeline_start_ms) / 1000.0 AS \"Duration\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT (timeline_end_ms - timeline_start_ms) / 1000.0 AS \"Duration\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Duration",
@@ -230,9 +234,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT NULL AS \"Distance\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+          "queryText": "SELECT NULL AS \"Distance\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT NULL AS \"Distance\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Distance",
@@ -294,9 +300,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT AVG(m.numeric_value * 0.621371) AS \"Average speed (mph)\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10D' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryText": "SELECT AVG(m.numeric_value * 0.621371) AS \"Average speed (mph)\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10D' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "rawQueryText": "SELECT AVG(m.numeric_value * 0.621371) AS \"Average speed (mph)\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10D' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Average speed",
@@ -358,9 +366,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT MAX(m.numeric_value * 0.621371) AS \"Maximum speed (mph)\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10D' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryText": "SELECT MAX(m.numeric_value * 0.621371) AS \"Maximum speed (mph)\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10D' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "rawQueryText": "SELECT MAX(m.numeric_value * 0.621371) AS \"Maximum speed (mph)\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10D' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Maximum speed",
@@ -422,9 +432,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT MAX(m.numeric_value) AS \"Peak engine speed\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x10C' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryText": "SELECT MAX(m.numeric_value) AS \"Peak engine speed\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10C' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "rawQueryText": "SELECT MAX(m.numeric_value) AS \"Peak engine speed\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x10C' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Peak engine speed",
@@ -486,9 +498,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence ASC LIMIT 1",
+          "queryText": "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1",
+          "rawQueryText": "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Fuel at start",
@@ -550,9 +564,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence DESC LIMIT 1",
+          "queryText": "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1",
+          "rawQueryText": "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Fuel at end",
@@ -614,9 +630,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence ASC LIMIT 1) AS first, (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence DESC LIMIT 1) AS last",
+          "queryText": "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1) AS first, (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1) AS last",
+          "rawQueryText": "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1) AS first, (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1) AS last",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Fuel level change",
@@ -678,9 +696,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT NULL AS \"Peak acceleration\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+          "queryText": "SELECT NULL AS \"Peak acceleration\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT NULL AS \"Peak acceleration\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Peak acceleration",
@@ -742,9 +762,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT NULL AS \"Peak braking\" FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
+          "queryText": "SELECT NULL AS \"Peak braking\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT NULL AS \"Peak braking\" FROM trip WHERE trip_id = ${trip:sqlstring} AND device_id = ${device:sqlstring} LIMIT 1",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Peak braking",
@@ -818,9 +840,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT MAX(m.numeric_value) AS \"Maximum coolant\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND m.pid = '0x105' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryText": "SELECT MAX(m.numeric_value) AS \"Maximum coolant\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x105' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "rawQueryText": "SELECT MAX(m.numeric_value) AS \"Maximum coolant\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND m.pid = '0x105' AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Maximum coolant",
@@ -947,9 +971,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", timestamp_quality AS \"Timestamp quality\", sample_count AS \"Samples\", gap_count AS \"Gaps\", archive_path AS \"Archive\" FROM trip WHERE device_id = '$device' AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY start_capture_ms DESC",
+          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_start_ms DESC",
+          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_start_ms DESC",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Trip index",
@@ -1070,9 +1096,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT capture_utc_ms AS time, latitude AS \"Latitude\", longitude AS \"Longitude\", gps_speed_kph AS \"Speed (km/h)\", gps_heading_degrees AS \"Heading\", sequence AS \"Sample\", device_monotonic_ms AS \"Device monotonic (ms)\", collector_received_ms AS \"Collector receipt (ms)\", timestamp_quality AS \"Timestamp quality\" FROM sample WHERE trip_id = '$trip' AND latitude IS NOT NULL AND longitude IS NOT NULL AND capture_utc_ms IS NOT NULL AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", s.gps_speed_kph * 0.621371 AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", (SELECT numeric_value * 0.621371 FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" FROM sample AS s WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", s.gps_speed_kph * 0.621371 AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", (SELECT numeric_value * 0.621371 FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", (SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" FROM sample AS s WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY sequence",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Trip route",
@@ -1237,9 +1265,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * 0.621371 END) AS \"OBD speed (mph)\", MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", MAX(s.gps_speed_kph * 0.621371) AS \"GPS speed (mph)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Road speed and engine speed",
@@ -1331,9 +1363,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT capture_utc_ms AS time, NULL AS \"Acceleration (g)\" FROM sample WHERE trip_id = '$trip' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "queryText": "SELECT timeline_ms / 1000.0 AS time, NULL AS \"Acceleration (g)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "rawQueryText": "SELECT timeline_ms / 1000.0 AS time, NULL AS \"Acceleration (g)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Acceleration by device axis",
@@ -1425,9 +1461,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Engine load and driver demand",
@@ -1519,9 +1559,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Thermal system",
@@ -1630,9 +1674,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Fuel level, trim and mixture",
@@ -1741,9 +1789,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Airflow and pressure",
@@ -1864,9 +1916,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT capture_utc_ms AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE trip_id = '$trip' AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "queryText": "SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "rawQueryText": "SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", gps_hdop AS \"HDOP\", gps_speed_kph * 0.621371 AS \"GPS speed (mph)\" FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "GPS quality",
@@ -2001,9 +2057,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Fuel rate and economy",
@@ -2103,9 +2163,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", MAX(m.numeric_value) AS \"Maximum\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "queryText": "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", MAX(m.numeric_value) AS \"Maximum\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "rawQueryText": "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", MAX(m.numeric_value) AS \"Maximum\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Every ECU metric exposed by this vehicle",
@@ -2265,9 +2327,13 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.capture_utc_ms AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) WHERE s.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "table",
           "refId": "A",
-          "format": "time_series"
+          "timeColumns": [
+            "time"
+          ]
         }
       ],
       "title": "Combustion and exhaust",
@@ -2359,9 +2425,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) WHERE m.trip_id = '$trip' AND s.capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "queryText": "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "rawQueryText": "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence WHERE m.device_id = ${device:sqlstring} AND m.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY m.pid ORDER BY m.pid",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "ECU service and emissions counters",
@@ -2442,9 +2510,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", sample_count AS \"Samples\", archive_path AS \"Archive\" FROM trip WHERE device_id = '$device' AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND ('$trip' = '$__all' OR trip_id = '$trip') ORDER BY start_capture_ms DESC",
+          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_start_ms DESC",
+          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_start_ms DESC",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Durable trip archive (SQLite)",
@@ -2455,7 +2525,7 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; collector receipt time and device monotonic time are shown separately. Gap count is computed from monotonic clock jumps over three seconds.",
+      "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -2492,9 +2562,11 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "rawSql": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.collector_received_ms AS \"Collector receipt (ms)\", CASE WHEN s.capture_utc_ms IS NULL THEN NULL ELSE s.collector_received_ms - s.capture_utc_ms END AS \"Receipt lag (ms)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t USING (trip_id) WHERE s.trip_id = '$trip' AND s.collector_received_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "queryText": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "rawQueryText": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "queryType": "table",
           "refId": "A",
-          "format": "table"
+          "timeColumns": []
         }
       ],
       "title": "Capture evidence, timestamp quality and gaps",
@@ -2520,10 +2592,10 @@
           "value": "ZKUCALJ0"
         },
         "datasource": {
-          "type": "prometheus",
-          "uid": "freematics-prometheus"
+          "type": "frser-sqlite-datasource",
+          "uid": "freematics-history"
         },
-        "definition": "label_values(freematics_device_connected, device_id)",
+        "definition": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
         "hide": 0,
         "includeAll": false,
         "label": "Vehicle",
@@ -2531,36 +2603,35 @@
         "name": "device",
         "options": [],
         "query": {
-          "query": "label_values(freematics_device_connected, device_id)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+          "query": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
+          "refId": "SQLiteVariableQueryEditor-VariableQuery"
         },
-        "refresh": 1,
+        "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
         "sort": 1,
         "type": "query"
       },
       {
-        "allValue": ".*",
         "current": {
           "selected": true,
-          "text": "All trips",
-          "value": "$__all"
+          "text": "20260827-001247",
+          "value": "20260827-001247"
         },
         "datasource": {
-          "type": "prometheus",
-          "uid": "freematics-prometheus"
+          "type": "frser-sqlite-datasource",
+          "uid": "freematics-history"
         },
-        "definition": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
+        "definition": "SELECT trip_id AS __text, trip_id AS __value FROM trip WHERE device_id = ${device:sqlstring} ORDER BY timeline_start_ms DESC",
         "hide": 0,
-        "includeAll": true,
+        "includeAll": false,
         "label": "Trip",
         "multi": false,
         "name": "trip",
         "options": [],
         "query": {
-          "query": "label_values(freematics_trip_start_time_seconds{device_id=\"$device\"}, trip_id)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+          "query": "SELECT trip_id AS __text, trip_id AS __value FROM trip WHERE device_id = ${device:sqlstring} ORDER BY timeline_start_ms DESC",
+          "refId": "SQLiteVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
         "regex": "",

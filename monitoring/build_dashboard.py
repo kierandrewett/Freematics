@@ -51,9 +51,20 @@ def target(
 
 def history_target(sql: str, ref: str = "A", *, format: str = "table") -> dict:
     """Build a query for the durable Freematics SQLite archive contract."""
-    result = {"datasource": HISTORY_DS, "rawSql": sql, "refId": ref}
-    if format:
-        result["format"] = format
+    # frser-sqlite-datasource v4 uses queryText/rawQueryText rather than the
+    # Prometheus-style ``expr`` or the SQL plugin's legacy ``rawSql`` field.
+    # Keep both editor and execution forms in generated JSON and explicitly
+    # identify the time column for range panels.
+    # Keep selectors safe when a label contains quotes or SQL punctuation.
+    sql = sql.replace("'$device'", "${device:sqlstring}").replace("'$trip'", "${trip:sqlstring}")
+    result = {
+        "datasource": HISTORY_DS,
+        "queryText": sql,
+        "rawQueryText": sql,
+        "queryType": "table",
+        "refId": ref,
+        "timeColumns": ["time"] if format == "time_series" else [],
+    }
     return result
 
 
@@ -1086,14 +1097,14 @@ def build_dashboard(view: str = "combined") -> dict:
                 "targets": [
                     history_target(
                         "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", "
-                        "datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", "
-                        "datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", "
+                        "datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", "
+                        "datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", "
+                        "timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", "
                         "sample_count AS \"Samples\", archive_path AS \"Archive\" "
                         "FROM trip "
                         "WHERE device_id = '$device' "
-                        "AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
-                        "AND ('$trip' = '$__all' OR trip_id = '$trip') "
-                        "ORDER BY start_capture_ms DESC",
+                        "AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                        "ORDER BY timeline_start_ms DESC",
                     )
                 ],
                 "title": "Durable trip archive (SQLite)",
@@ -1106,26 +1117,28 @@ def build_dashboard(view: str = "combined") -> dict:
         # archive stores milliseconds and keeps unknown capture timestamps
         # explicit; rows without capture_utc_ms are shown by panel 42 instead
         # of being assigned a fabricated capture time.
-        historical_range = "capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)"
-        trip_where = "trip_id = '$trip'"
+        historical_range = "timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)"
+        trip_where = "device_id = '$device' AND trip_id = '$trip'"
+        sample_trip_where = "s.device_id = '$device' AND s.trip_id = '$trip'"
+        metric_trip_where = "m.device_id = '$device' AND m.trip_id = '$trip'"
 
         def metric_aggregate(pid: str, expression: str, alias: str, multiplier: float = 1) -> str:
             value_expression = f"m.numeric_value * {multiplier}" if multiplier != 1 else "m.numeric_value"
             return (
                 f"SELECT {expression}({value_expression}) AS \"{alias}\" "
                 "FROM sample_metric AS m "
-                "JOIN sample AS s USING (trip_id, sequence) "
-                f"WHERE m.trip_id = '$trip' AND m.pid = '{pid}' "
+                "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                f"WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '{pid}' "
                 f"AND {historical_range}"
             )
 
         historical_targets: dict[int, list[dict]] = {
             7: [history_target(
-                "SELECT start_capture_ms AS \"Trip start\" FROM trip "
+                "SELECT timeline_start_ms AS \"Trip start\" FROM trip "
                 "WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
             )],
             8: [history_target(
-                "SELECT (end_capture_ms - start_capture_ms) / 1000.0 AS \"Duration\" "
+                "SELECT (timeline_end_ms - timeline_start_ms) / 1000.0 AS \"Duration\" "
                 "FROM trip WHERE trip_id = '$trip' AND device_id = '$device' LIMIT 1",
             )],
             9: [history_target(
@@ -1137,22 +1150,22 @@ def build_dashboard(view: str = "combined") -> dict:
             12: [history_target(metric_aggregate("0x10C", "MAX", "Peak engine speed"))],
             13: [history_target(
                 "SELECT m.numeric_value AS \"Fuel at start\" FROM sample_metric AS m "
-                "JOIN sample AS s USING (trip_id, sequence) "
-                "WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL "
+                "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
                 "ORDER BY s.sequence ASC LIMIT 1",
             )],
             14: [history_target(
                 "SELECT m.numeric_value AS \"Fuel at end\" FROM sample_metric AS m "
-                "JOIN sample AS s USING (trip_id, sequence) "
-                "WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL "
+                "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
                 "ORDER BY s.sequence DESC LIMIT 1",
             )],
             15: [history_target(
                 "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" "
-                "FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) "
-                "WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence ASC LIMIT 1) AS first, "
-                "(SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) "
-                "WHERE m.trip_id = '$trip' AND m.pid = '0x12F' AND s.capture_utc_ms IS NOT NULL ORDER BY s.sequence DESC LIMIT 1) AS last",
+                "FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' ORDER BY s.sequence ASC LIMIT 1) AS first, "
+                "(SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' ORDER BY s.sequence DESC LIMIT 1) AS last",
             )],
             16: [history_target(
                 "SELECT NULL AS \"Peak acceleration\" FROM trip "
@@ -1165,75 +1178,79 @@ def build_dashboard(view: str = "combined") -> dict:
             18: [history_target(metric_aggregate("0x105", "MAX", "Maximum coolant"))],
             19: [history_target(
                 "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", "
-                "datetime(start_capture_ms / 1000, 'unixepoch') AS \"Start\", "
-                "datetime(end_capture_ms / 1000, 'unixepoch') AS \"End\", "
-                "timestamp_quality AS \"Timestamp quality\", sample_count AS \"Samples\", "
+                "datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", "
+                "datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", "
+                "timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", "
                 "gap_count AS \"Gaps\", archive_path AS \"Archive\" "
                 "FROM trip WHERE device_id = '$device' "
-                "AND start_capture_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
-                "ORDER BY start_capture_ms DESC",
+                "AND timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "ORDER BY timeline_start_ms DESC",
             )],
             20: [history_target(
-                "SELECT capture_utc_ms AS time, latitude AS \"Latitude\", longitude AS \"Longitude\", "
-                "gps_speed_kph AS \"Speed (km/h)\", gps_heading_degrees AS \"Heading\", "
-                "sequence AS \"Sample\", device_monotonic_ms AS \"Device monotonic (ms)\", "
-                "collector_received_ms AS \"Collector receipt (ms)\", timestamp_quality AS \"Timestamp quality\" "
-                "FROM sample WHERE trip_id = '$trip' AND latitude IS NOT NULL AND longitude IS NOT NULL "
-                "AND capture_utc_ms IS NOT NULL AND capture_utc_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", "
+                f"s.gps_speed_kph * {KM_TO_MI} AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", "
+                "(SELECT numeric_value * " + str(KM_TO_MI) + " FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", "
+                "(SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", "
+                "(SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", "
+                "s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", "
+                "s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", "
+                "s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" "
+                "FROM sample AS s WHERE s.device_id = '$device' AND s.trip_id = '$trip' AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                 "ORDER BY sequence",
             )],
             21: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 f"MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * {KM_TO_MI} END) AS \"OBD speed (mph)\", "
                 "MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", "
                 f"MAX(s.gps_speed_kph * {KM_TO_MI}) AS \"GPS speed (mph)\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             22: [history_target(
-                "SELECT capture_utc_ms AS time, NULL AS \"Acceleration (g)\" FROM sample "
+                "SELECT timeline_ms / 1000.0 AS time, NULL AS \"Acceleration (g)\" FROM sample "
                 f"WHERE {trip_where} AND {historical_range} ORDER BY time",
                 format="time_series",
             )],
             23: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", "
                 "MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             24: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", "
                 "MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             25: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", "
                 "MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             26: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             27: [history_target(
-                f"SELECT capture_utc_ms AS time, gps_satellites AS \"Satellites\", "
+                f"SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", "
                 f"gps_hdop AS \"HDOP\", gps_speed_kph * {KM_TO_MI} AS \"GPS speed (mph)\" "
                 f"FROM sample WHERE {trip_where} AND {historical_range} ORDER BY time",
                 format="time_series",
@@ -1242,32 +1259,32 @@ def build_dashboard(view: str = "combined") -> dict:
                 "SELECT m.pid AS \"PID\", COUNT(m.numeric_value) AS \"Samples\", "
                 "MIN(m.numeric_value) AS \"Minimum\", AVG(m.numeric_value) AS \"Average\", "
                 "MAX(m.numeric_value) AS \"Maximum\" "
-                "FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) "
-                f"WHERE m.{trip_where} AND s.{historical_range} "
+                "FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                f"WHERE {metric_trip_where} AND s.{historical_range} "
                 "GROUP BY m.pid ORDER BY m.pid",
             )],
             38: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", "
                 "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             39: [history_target(
-                "SELECT s.capture_utc_ms AS time, "
+                "SELECT s.timeline_ms / 1000.0 AS time, "
                 "MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", "
                 "MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" "
-                "FROM sample AS s LEFT JOIN sample_metric AS m USING (trip_id, sequence) "
-                f"WHERE s.{trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.capture_utc_ms ORDER BY time",
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             40: [history_target(
                 "SELECT m.pid AS \"PID\", MAX(m.numeric_value) AS \"Latest\" "
-                "FROM sample_metric AS m JOIN sample AS s USING (trip_id, sequence) "
-                f"WHERE m.{trip_where} AND s.{historical_range} "
+                "FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
+                f"WHERE {metric_trip_where} AND s.{historical_range} "
                 "GROUP BY m.pid ORDER BY m.pid",
             )],
         }
@@ -1289,7 +1306,7 @@ def build_dashboard(view: str = "combined") -> dict:
         panels.append(
             {
                 "datasource": HISTORY_DS,
-                "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; collector receipt time and device monotonic time are shown separately. Gap count is computed from monotonic clock jumps over three seconds.",
+                "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
                 "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
                 "gridPos": {"h": 8, "w": 24, "x": 0, "y": 71},
                 "id": 42,
@@ -1297,11 +1314,12 @@ def build_dashboard(view: str = "combined") -> dict:
                 "targets": [history_target(
                     "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", "
                     "s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", "
-                    "s.capture_utc_ms AS \"Capture UTC (ms)\", s.collector_received_ms AS \"Collector receipt (ms)\", "
-                    "CASE WHEN s.capture_utc_ms IS NULL THEN NULL ELSE s.collector_received_ms - s.capture_utc_ms END AS \"Receipt lag (ms)\", "
+                    "s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", "
+                    "s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", "
+                    "NULL AS \"Receipt lag (ms; not instrumented)\", "
                     "t.gap_count AS \"Trip gaps\" "
-                    "FROM sample AS s JOIN trip AS t USING (trip_id) "
-                    f"WHERE s.{trip_where} AND s.collector_received_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                    "FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id "
+                    f"WHERE {sample_trip_where} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                     "ORDER BY s.sequence LIMIT 5000",
                 )],
                 "title": "Capture evidence, timestamp quality and gaps",
@@ -1371,26 +1389,71 @@ def build_dashboard(view: str = "combined") -> dict:
             }
         )
 
-    templating = [
-        {
+    if view == "trips":
+        device_query = "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id"
+        device_variable = {
             "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
-            "datasource": DS,
-            "definition": "label_values(freematics_device_connected, device_id)",
+            "datasource": HISTORY_DS,
+            "definition": device_query,
             "hide": 0,
             "includeAll": False,
             "label": "Vehicle",
             "multi": False,
             "name": "device",
             "options": [],
-            "query": {"query": "label_values(freematics_device_connected, device_id)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "query": {"query": device_query, "refId": "SQLiteVariableQueryEditor-VariableQuery"},
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": False,
+            "sort": 1,
+            "type": "query",
+        }
+    else:
+        device_query = "label_values(freematics_device_connected, device_id)"
+        device_variable = {
+            "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
+            "datasource": DS,
+            "definition": device_query,
+            "hide": 0,
+            "includeAll": False,
+            "label": "Vehicle",
+            "multi": False,
+            "name": "device",
+            "options": [],
+            "query": {"query": device_query, "refId": "PrometheusVariableQueryEditor-VariableQuery"},
             "refresh": 1,
             "regex": "",
             "skipUrlSync": False,
             "sort": 1,
             "type": "query",
         }
-    ]
-    if view in {"combined", "trips"}:
+    templating = [device_variable]
+    if view == "trips":
+        trip_query = (
+            "SELECT trip_id AS __text, trip_id AS __value FROM trip "
+            "WHERE device_id = ${device:sqlstring} "
+            "ORDER BY timeline_start_ms DESC"
+        )
+        templating.append(
+            {
+                "current": {"selected": True, "text": "20260827-001247", "value": "20260827-001247"},
+                "datasource": HISTORY_DS,
+                "definition": trip_query,
+                "hide": 0,
+                "includeAll": False,
+                "label": "Trip",
+                "multi": False,
+                "name": "trip",
+                "options": [],
+                "query": {"query": trip_query, "refId": "SQLiteVariableQueryEditor-VariableQuery"},
+                "refresh": 2,
+                "regex": "",
+                "skipUrlSync": False,
+                "sort": 2,
+                "type": "query",
+            }
+        )
+    elif view == "combined":
         templating.append(
             {
                 "allValue": ".*",

@@ -23,6 +23,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -351,15 +352,23 @@ class TelemetryGitMirror:
             if askpass_dir is not None:
                 askpass_dir.cleanup()
 
-    def _maybe_push(self, state: dict[str, Any], now: int, *, force: bool) -> None:
+    def _maybe_push(self, state: dict[str, Any], now: int, *, force: bool) -> bool:
         if not self.git_push or not (self.repo / ".git").exists():
-            return
+            return False
         last_attempt = int(state.get("last_push_attempt_ms", 0))
         if not force and now - last_attempt < self.flush_seconds * 1_000:
-            return
+            return False
         state["last_push_attempt_ms"] = now
         self._write_state(state)
-        self._push()
+        try:
+            self._push()
+        except (OSError, subprocess.SubprocessError) as error:
+            # A GitHub outage must never stop ingestion.  The local commit is
+            # already durable; the next scheduled attempt will push it.
+            # Avoid echoing command stderr because it may contain a remote URL.
+            print(f"[TELEMETRY-GIT] push deferred ({type(error).__name__})", file=sys.stderr, flush=True)
+            return False
+        return True
 
     def flush(self, *, force: bool = False) -> bool:
         if not self.spool_path.exists() or self.spool_path.stat().st_size == 0:
@@ -418,8 +427,7 @@ class TelemetryGitMirror:
             # deterministic segment check above makes clearing it safe.  A
             # previous push may also have failed after its local commit; retry
             # that push before acknowledging the spool.
-            if self.git_push:
-                self._push()
+            self._maybe_push(state, now, force=True)
             self.spool_path.write_bytes(b"")
             state["last_flush_ms"] = now
             self._write_state(state)

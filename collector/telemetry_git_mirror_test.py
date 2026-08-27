@@ -66,14 +66,12 @@ class TelemetryGitMirrorTests(unittest.TestCase):
             state = Path(directory) / "state"
             mirror = TelemetryGitMirror(root, repo, state, git_push=True, now_ms=lambda: 1_000)
             mirror.scan_once()
-            with patch.object(mirror, "_push", side_effect=RuntimeError("temporary GitHub outage")):
-                with self.assertRaisesRegex(RuntimeError, "temporary GitHub outage"):
-                    mirror.flush(force=True)
-            self.assertTrue((state / "pending.jsonl").read_text().strip())
+            with patch.object(mirror, "_push", side_effect=subprocess.CalledProcessError(1, ["git", "push"])):
+                self.assertTrue(mirror.flush(force=True))
+            self.assertEqual((state / "pending.jsonl").read_text(), "")
             with patch.object(mirror, "_push") as push:
                 self.assertFalse(mirror.flush(force=True))
                 push.assert_called_once()
-            self.assertEqual((state / "pending.jsonl").read_text(), "")
 
 
 if __name__ == "__main__":

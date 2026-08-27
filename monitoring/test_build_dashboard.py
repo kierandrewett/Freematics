@@ -34,17 +34,16 @@ class DashboardViewsTest(unittest.TestCase):
         archive_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 41)
         self.assertEqual(archive_panel["datasource"]["uid"], "freematics-history")
         self.assertEqual(archive_panel["datasource"]["type"], "frser-sqlite-datasource")
-        archive_sql = archive_panel["targets"][0]["rawSql"]
+        archive_sql = archive_panel["targets"][0]["queryText"]
         self.assertIn("FROM trip", archive_sql)
-        self.assertIn("start_capture_ms BETWEEN", archive_sql)
+        self.assertIn("timeline_start_ms BETWEEN", archive_sql)
         self.assertIn("$__from", archive_sql)
         self.assertIn("$__to", archive_sql)
-        self.assertIn("$device", archive_sql)
-        self.assertIn("$trip", archive_sql)
+        self.assertIn("${device:sqlstring}", archive_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
-        self.assertTrue(all("$trip" in target["rawSql"] for target in route["targets"]))
-        self.assertTrue(all("capture_utc_ms" in target["rawSql"] for target in route["targets"]))
+        self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
+        self.assertTrue(all("timeline_ms" in target["queryText"] for target in route["targets"]))
 
     def test_live_view_is_prometheus_only(self) -> None:
         dashboard = build_dashboard("live")
@@ -69,11 +68,10 @@ class DashboardViewsTest(unittest.TestCase):
             ]
             self.assertGreaterEqual(len(history_targets), 20)
             for target in history_targets:
-                sql = target["rawSql"]
+                sql = target["queryText"]
                 for variable, value in {
-                    "$device": "ZKUCALJ0",
-                    "$trip": "20260827-001247",
-                    "$__all": "All",
+                    "${device:sqlstring}": "'ZKUCALJ0'",
+                    "${trip:sqlstring}": "'20260827-001247'",
                     "$__from": "0",
                     "$__to": "9999999999999",
                 }.items():

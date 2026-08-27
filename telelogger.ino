@@ -673,6 +673,11 @@ bool processGPS(CBuffer* buffer)
   if (kph >= 2) lastMotionTime = millis();
 
   if (buffer) {
+    // Keep the UTC date alongside the time so queued samples can be placed on
+    // their original timeline after an offline replay.  Older firmware only
+    // emitted PID_GPS_TIME, which is not sufficient to recover a calendar
+    // date after the collector has received a backlog.
+    if (gd->date) buffer->add(PID_GPS_DATE, ELEMENT_UINT32, &gd->date, sizeof(uint32_t));
     buffer->add(PID_GPS_TIME, ELEMENT_UINT32, &gd->time, sizeof(uint32_t));
     buffer->add(PID_GPS_LATITUDE, ELEMENT_FLOAT, &gd->lat, sizeof(float));
     buffer->add(PID_GPS_LONGITUDE, ELEMENT_FLOAT, &gd->lng, sizeof(float));
