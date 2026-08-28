@@ -134,6 +134,9 @@ the profile or send a request. If the archive format is not an ELM-style
 monitor line, the record is counted as unparsed evidence. Keep the original
 archive beside the report.
 
+The repository tests use synthetic captures for parser-contract coverage. They
+are not vehicle evidence.
+
 ## Optional laptop serial check
 
 Use a verified checkout of this repository. Do not clone the default branch

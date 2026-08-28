@@ -378,6 +378,9 @@ ISO-TP payload, CAN identifier, capability result and matching
 profile candidate. Disabled candidates remain disabled. The tool has no
 transport or transmit path.
 
+The adapter tests use synthetic CAN frames to cover parser contracts only.
+They do not establish support for the connected vehicle or any Corsa ECU.
+
 Install the pinned analysis dependency and run it against a captured archive:
 
 ```bash
