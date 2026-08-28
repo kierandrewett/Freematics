@@ -20,6 +20,9 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(dashboard["time"], {"from": "now-5m", "to": "now"})
         road_speed = next(panel for panel in dashboard["panels"] if panel["id"] == 21)
         self.assertEqual(road_speed["fieldConfig"]["defaults"]["custom"]["lineInterpolation"], "linear")
+        chart_options = road_speed["fieldConfig"]["defaults"]["custom"]
+        self.assertFalse(chart_options["insertNulls"])
+        self.assertFalse(chart_options["spanNulls"])
         self.assertEqual([item["name"] for item in dashboard["templating"]["list"]], ["device"])
         self.assertNotIn("Trip index", {panel["title"] for panel in dashboard["panels"]})
         self.assertNotIn("Trip route", {panel["title"] for panel in dashboard["panels"]})
