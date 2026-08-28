@@ -154,7 +154,7 @@ def timeseries(
                     "gradientMode": "none",
                     "hideFrom": {"legend": False, "tooltip": False, "viz": False},
                     "insertNulls": False,
-                    "lineInterpolation": "smooth",
+                    "lineInterpolation": "linear",
                     "lineWidth": 2,
                     "pointSize": 3,
                     "scaleDistribution": {"type": "linear"},
@@ -1827,7 +1827,7 @@ def build_dashboard(view: str = "combined") -> dict:
         "graphTooltip": 1,
         "id": None,
         "links": dashboard_links,
-        "liveNow": True,
+        "liveNow": view in {"combined", "live"},
         "panels": panels,
         "refresh": "2s" if view in {"combined", "live"} else "1m",
         "schemaVersion": 41,
@@ -1835,7 +1835,11 @@ def build_dashboard(view: str = "combined") -> dict:
         "templating": {"list": templating},
         "time": {"from": "now-5m" if view in {"combined", "live"} else "now-90d", "to": "now"},
         "timepicker": {
-            "refresh_intervals": ["2s", "5s", "10s", "30s", "1m", "5m"],
+            "refresh_intervals": (
+                ["2s", "5s", "10s", "30s", "1m", "5m"]
+                if view in {"combined", "live"}
+                else ["30s", "1m", "5m", "15m"]
+            ),
             "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d", "30d", "90d", "1y"],
         },
         "timezone": "browser",

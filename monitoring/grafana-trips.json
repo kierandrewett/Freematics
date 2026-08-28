@@ -45,7 +45,7 @@
       "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device"
     }
   ],
-  "liveNow": true,
+  "liveNow": false,
   "panels": [
     {
       "datasource": {
@@ -1125,7 +1125,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1287,7 +1287,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1385,7 +1385,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1483,7 +1483,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1581,7 +1581,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1696,7 +1696,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1811,7 +1811,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -1950,7 +1950,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -2211,7 +2211,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
@@ -2841,12 +2841,10 @@
   },
   "timepicker": {
     "refresh_intervals": [
-      "2s",
-      "5s",
-      "10s",
       "30s",
       "1m",
-      "5m"
+      "5m",
+      "15m"
     ],
     "time_options": [
       "5m",

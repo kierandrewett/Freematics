@@ -14,8 +14,12 @@ from build_dashboard import build_dashboard  # noqa: E402
 class DashboardViewsTest(unittest.TestCase):
     def test_live_view_is_current_and_does_not_require_trip_selection(self) -> None:
         dashboard = build_dashboard("live")
+        self.assertTrue(dashboard["liveNow"])
+        self.assertIn("2s", dashboard["timepicker"]["refresh_intervals"])
         self.assertEqual(dashboard["uid"], "freematics-live")
         self.assertEqual(dashboard["time"], {"from": "now-5m", "to": "now"})
+        road_speed = next(panel for panel in dashboard["panels"] if panel["id"] == 21)
+        self.assertEqual(road_speed["fieldConfig"]["defaults"]["custom"]["lineInterpolation"], "linear")
         self.assertEqual([item["name"] for item in dashboard["templating"]["list"]], ["device"])
         self.assertNotIn("Trip index", {panel["title"] for panel in dashboard["panels"]})
         self.assertNotIn("Trip route", {panel["title"] for panel in dashboard["panels"]})
@@ -81,6 +85,8 @@ class DashboardViewsTest(unittest.TestCase):
         dashboard = build_dashboard("trips")
         self.assertEqual(dashboard["uid"], "freematics-trips")
         self.assertEqual(dashboard["time"], {"from": "now-90d", "to": "now"})
+        self.assertFalse(dashboard["liveNow"])
+        self.assertEqual(dashboard["timepicker"]["refresh_intervals"], ["30s", "1m", "5m", "15m"])
         self.assertEqual([item["name"] for item in dashboard["templating"]["list"]], ["device", "trip"])
         self.assertIsInstance(dashboard["templating"]["list"][0]["query"], str)
         self.assertIsInstance(dashboard["templating"]["list"][1]["query"], str)
