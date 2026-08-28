@@ -360,3 +360,35 @@ The next safe implementation boundary is therefore a richer disabled
 signalset: retain the request and response route, exact identity range, raw
 capture, source revision, decoder and capability result. Do not copy a DID,
 ECU address, DBC scale or write-capable operation from another model.
+
+## Offline Scapy capture adapter
+
+`collector/gmlan_capture.py` uses Scapy only for offline analysis. It accepts
+either a Freematics archive or strict JSON Lines records:
+
+```json
+{"timestamp_ms": 100, "can_id": "0x5E8", "data_hex": "03 5A 90 00"}
+```
+
+The archive reader extracts PID `0x92`, decodes the firmware's hexadecimal
+ASCII monitor line, and validates ELM-style CAN lines. The decoder then uses
+Scapy's ISO-TP reassembly and GMLAN layers to classify `0x1A`, `0x22`, `0x5A`,
+`0x62` and `0x7F` messages. Each report includes the source SHA-256, raw
+ISO-TP payload, CAN identifier, capability result and matching
+profile candidate. Disabled candidates remain disabled. The tool has no
+transport or transmit path.
+
+Install the pinned analysis dependency and run it against a captured archive:
+
+```bash
+python3 -m venv /tmp/freematics-gmlan-venv
+/tmp/freematics-gmlan-venv/bin/python -m pip install -r tools/requirements-gmlan.txt
+PYTHONPATH=collector /tmp/freematics-gmlan-venv/bin/python collector/gmlan_capture.py \
+  --format archive /path/to/capture.txt > gmlan-evidence.json
+```
+
+The 75 archived `ZKUCALJ0` files checked on 2026-08-28 contain zero PID
+`0x92` records. The historical projection also contains no `0x090`, `0x091`
+or `0x092` rows for that device. Historical telemetry therefore does not
+provide a raw CAN capture for Scapy to decode, and no Corsa-specific
+proprietary candidate is enabled.

@@ -119,6 +119,21 @@ record bounded. Review the raw line offline before adding a Corsa-specific
 profile. Restore `ENABLE_CAN_CAPTURE` to `0` and rebuild the release image
 after the evidence run.
 
+Analyse a copied archive without connecting to the vehicle:
+
+```bash
+python3 -m venv /tmp/freematics-gmlan-venv
+/tmp/freematics-gmlan-venv/bin/python -m pip install -r tools/requirements-gmlan.txt
+PYTHONPATH=collector /tmp/freematics-gmlan-venv/bin/python collector/gmlan_capture.py \
+  --format archive /path/to/capture.txt > gmlan-evidence.json
+```
+
+The report records the source hash, ISO-TP payload, CAN identifier, positive or
+negative capability result, and matching profile candidate. It does not change
+the profile or send a request. If the archive format is not an ELM-style
+monitor line, the record is counted as unparsed evidence. Keep the original
+archive beside the report.
+
 ## Optional laptop serial check
 
 Use a verified checkout of this repository. Do not clone the default branch
