@@ -155,9 +155,10 @@ def gnss_capture_ms(fields: dict[str, str]) -> int | None:
         date_text = str(int(raw_date))
         time_text = str(int(raw_time)).zfill(8)
         if len(date_text) == 6:
-            year = 2000 + int(date_text[:2])
+            # Freematics PID 0x11 is UTC date in DDMMYY order.
+            day = int(date_text[:2])
             month = int(date_text[2:4])
-            day = int(date_text[4:6])
+            year = 2000 + int(date_text[4:6])
         elif len(date_text) == 8:
             year = int(date_text[:4])
             month = int(date_text[4:6])
