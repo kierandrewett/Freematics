@@ -24,10 +24,21 @@
 - USB disconnects, a serial response is damaged, or the firmware restarts. Return an I/O error and reconnect.
 - ESP32 light sleep loses incoming USB serial requests while parked. Keep serial input available on USB power.
 - A malformed export path accesses credentials or changes device configuration.
+- An SD failure produces only one warning and then remains silent. Repeat three
+  beeps every five seconds until fresh local recording recovers.
+- Accepted cellular data, disabled server alerts or a different upload protocol
+  suppress the SD alarm. Local recording failure must have its own alarm.
+- Standby silences an existing recording failure. Keep an existing fault alarm
+  active; deliberate healthy standby alone does not create a failure.
+- Startup blocks before storage is checked, or collection stops after setup.
+  Warn after 15 seconds without progress, and continue the alarm.
+- An SD remount reports healthy before a fresh sample is recorded. Do not clear
+  the alarm until storage is healthy and a new sample has completed.
 
 ## Current evidence
 
 Evidence directory: `/tmp/freematics-review-20260929` (private permissions).
+Repeating-alarm evidence: `/home/kieran/.cache/freematics-review-20260929`.
 
 - The connected device is `ZKUCALJ0`, hardware type 14, ESP32-D0WDQ6,
   with a CH340 USB bridge (`1a86:7523`) and SIM7670E-LN modem.
@@ -55,7 +66,7 @@ Evidence directory: `/tmp/freematics-review-20260929` (private permissions).
   matching archive bytes. It did not inject test samples into the real
   journal. The original journal remained 3,681,396 bytes in that check.
 - Every deployed candidate in this review used `ENABLE_WIFI=0`.
-- The final production image booted as `cell-sd-guard-20260929`. USB status
+- The earlier production image booted as `cell-sd-guard-20260929`. USB status
   confirmed Wi-Fi disabled and the 14-day retention setting. Cellular HTTPS
   accepted fresh readings while the failed card remained unavailable.
 
@@ -69,6 +80,15 @@ setup, and successful login cannot silence an alarm for missing accepted data.
 The buzzer code replaced the tone's 50 percent duty cycle with a nearly constant
 output. The tone now retains its normal duty cycle. Kieran heard the warning
 on the connected hardware.
+
+The original SD warning sounded once and depended on server-alert settings.
+The SD alarm now has its own check and repeats three beeps every five seconds.
+A known mount or write failure starts the alarm as soon as the completed
+storage check or write reports failure. A blocked startup or stopped collector
+starts the alarm after 15 seconds without progress. Cellular acknowledgements
+cannot stop it. An existing fault continues to warn during standby. Recovery
+requires healthy storage and a fresh completed sample. Healthy deliberate
+standby does not create a new fault.
 
 The modem clock write repeatedly restarted the modem. HTTPS now uses the ESP32
 TLS implementation over cellular TCP. It verifies certificates, hostname and
@@ -118,8 +138,10 @@ idle. Vehicle power retains the normal parked sleep policy.
 
 ## Acceptance gates
 
-- [x] Seven lifecycle checks passed, including ignition, normal motion,
-  failed/absent motion sensors, login-only alarm and quiet standby.
+- [x] Twenty lifecycle/protocol checks passed, including ignition, normal motion,
+  failed/absent motion sensors, login-only alarm, repeat alarms, recovery and
+  healthy quiet standby. SD warnings also passed with server alerts disabled
+  and an upload protocol other than HTTPS POST.
 - [x] Production firmware built from committed source in an isolated checkout.
 - [x] Cellular HTTPS received real collector acknowledgements with Wi-Fi off.
 - [x] An acknowledged scratch journal retained matching local bytes.
@@ -131,6 +153,25 @@ idle. Vehicle power retains the normal parked sleep policy.
 - [ ] Real USB mass storage available (requires different hardware).
 
 ## Final installed image
+
+The normal production logger is installed with the repeating fault alarm.
+
+- Source revision: `757863e`, with the existing local production configuration.
+- Build identity: `sd-alarm-repeat-20260929` (confirmed by USB `STATUS`).
+- Image size: 636,144 bytes.
+- SHA-256: `a393901ff3b95d84802ce7f68db3b31fbcac7b232cd7b85059d3e35ab0074851`.
+- PlatformIO upload completed and esptool verified the written image hash.
+- Live check: 19 alarm bursts in 105 seconds, spaced approximately 5.01 seconds
+  apart. Nine cellular requests accepted 690 values during the same check.
+- USB status confirmed the SD journal and CSV logger unavailable, Wi-Fi disabled,
+  and retention set to 14 days. Successful uploads did not silence the alarm.
+- The installed image does not include the format-provisioning branch or its
+  message. The live log has no format-provisioning message. The SD card was not
+  formatted during this review.
+- The buzzer waveform was already heard on the previous image. Confirmation
+  that Kieran hears the new repeated warning is pending.
+
+## Previous production image evidence
 
 The normal production logger is installed. The diagnostic probe is removed
 from the device. The modem radio was restored with `AT+CFUN=1` before upload.
