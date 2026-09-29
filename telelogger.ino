@@ -27,7 +27,6 @@
 #include "telestore.h"
 #include "teleclient.h"
 #include "telequeue.h"
-#include "sdexport.h"
 #include "sdaccess.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
@@ -1285,13 +1284,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       // Keep the MEMS polling wake-up responsive without leaving the ESP32
       // CPU spinning for the entire parked interval. The timer wake-up is
       // deliberately short so real vehicle movement is acted on promptly.
-      if (voltage < 6.0f) {
-        // UART input from the USB bridge must remain available on bench power.
-        delay(STANDBY_POLL_INTERVAL_MS);
-      } else {
-        esp_sleep_enable_timer_wakeup((uint64_t)STANDBY_POLL_INTERVAL_MS * 1000ULL);
-        esp_light_sleep_start();
-      }
+      esp_sleep_enable_timer_wakeup((uint64_t)STANDBY_POLL_INTERVAL_MS * 1000ULL);
+      esp_light_sleep_start();
     } while (state.check(STATE_STANDBY) && ((long)(millis() - t) < timeout || timeout == -1));
     return false;
 }
@@ -2071,9 +2065,6 @@ void loadConfig()
 
 void processBLE(int timeout)
 {
-#if STORAGE == STORAGE_SD
-  processSDExport();
-#endif
 #if ENABLE_BLE
   static byte echo = 0;
   char* cmd;
@@ -2219,9 +2210,7 @@ void processBLE(int timeout)
   buf[n] = 0;
   ble_send_response(buf, n, cmd);
 #else
-  // Keep USB requests responsive throughout a long stationary sample interval.
-  // process() continues this wait until the original collection deadline.
-  if (timeout) delay(min(timeout, 25));
+  if (timeout) delay(timeout);
 #endif
 }
 
@@ -2403,7 +2392,6 @@ void loop()
       logger.end();
       durableQueue.suspend();
       state.clear(STATE_STORAGE_READY);
-      resetSDExportDirectory();
       SD.end();
       SPI.end();
       delay(100);
