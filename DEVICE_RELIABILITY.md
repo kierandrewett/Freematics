@@ -145,7 +145,9 @@ parked idle cutoff. Parked motion checks use the normal light-sleep policy.
 - [x] Retention boundaries and safe archive paths passed focused checks.
 - [x] Physical buzzer audibility was confirmed.
 - [x] Final installed build identity and image hash recorded below.
-- [ ] Repeated reboot and sustained SD recording/upload remain healthy.
+- [x] Three complete USB power disconnect/reconnect cycles passed a 90-second
+  recording and cellular-upload check each; details below.
+- [ ] Software-only reset behaviour and longer-term endurance remain healthy.
 - [ ] Physical ignition/OBD collection verified in the car (USB only available).
 - [x] USB SD export removed at the user request; local SD retention preserved.
 
@@ -168,8 +170,28 @@ The production logger is installed without USB SD export.
   4 KB to 6 KB. The capture had zero SD errors, recording warnings or resets.
   The remaining backlog was 1,254,435 bytes, and the collector file
   `20260929-112334.txt` grew from 59,705 to 287,463 bytes.
-  This confirms current bench recording. The recurring warm-reset fault remains
-  unresolved, so repeated-reboot and in-car acceptance gates remain open.
+  This confirmed bench recording after a cold power cycle. A later three-cycle
+  check also passed as detailed below. The previously observed software-only
+  reset fault remains unresolved, and in-car OBD collection is unverified.
+
+### Three-cycle cold-power check
+
+Each cycle was a physical USB power disconnect for 10 seconds followed by
+reconnection. The installed build identity was verified after each boot. Every
+cycle mounted the SD journal, created and grew a new CSV, and received cellular
+collector acknowledgements, with no SD errors, recording warnings or beep
+faults during the 90-second check.
+
+| Cycle | CSV | Check duration | Cellular acknowledgements | Values accepted |
+| --- | --- | ---: | ---: | ---: |
+| 1 | `/DATA/78.CSV` | 90 s minimum | 48 | 23,715 |
+| 2 | `/DATA/79.CSV` | 90 s minimum | 46 | 22,923 |
+| 3 | `/DATA/80.CSV` | 90 s | 20 | 9,897 |
+| **Total** | | | **114** | **56,535** |
+
+Cycles 1 and 2 remained healthy until the next requested disconnect, for
+approximately 176 seconds each. This verifies repeatable cold boot recovery on
+the bench; it does not establish software-reset or in-car reliability.
 
 ## Cold-power recovery evidence before export removal
 
