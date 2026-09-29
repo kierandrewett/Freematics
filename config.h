@@ -246,6 +246,9 @@
 #define ENABLE_AUDIBLE_NETWORK_ALERTS 0
 #define ENABLE_AUDIBLE_SERVER_ALERTS 1
 #define SERVER_RESPONSE_ALERT_MS 60000UL
+// Local recording failure remains audible even when cellular uploads succeed.
+#define RECORDING_ALERT_REPEAT_MS 5000UL
+#define RECORDING_STALL_ALERT_MS 15000UL
 // Ignore short cellular handovers before announcing a genuine outage.
 #define NETWORK_ALERT_GRACE_MS 15000UL
 // Do not turn a flapping modem into a repeating audible alarm.

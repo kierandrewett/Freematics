@@ -87,7 +87,7 @@ CBufferManager bufman;
 DurableQueue durableQueue;
 #endif
 Task subtask;
-#if ENABLE_NETWORK_STATUS_SIGNALS
+#if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
 Task statusTask;
 #endif
 
@@ -131,6 +131,9 @@ char isoTime[32] = {0};
 // stats data
 uint32_t lastMotionTime = 0;
 volatile uint32_t lastCollectionTime = 0;
+#if STORAGE == STORAGE_SD
+volatile bool storageCheckComplete = false;
+#endif
 uint32_t lastOBDDistanceTime = 0;
 uint32_t lastGPSDistanceTime = 0;
 uint32_t timeoutsOBD = 0;
@@ -350,7 +353,7 @@ void recordingAlert(const char* message)
   }
 }
 
-#if ENABLE_NETWORK_STATUS_SIGNALS
+#if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
 void statusSignals(void* inst)
 {
   bool hadNetwork = false;
@@ -359,13 +362,19 @@ void statusSignals(void* inst)
   bool restoreChirpPending = false;
   uint32_t offlineSince = 0;
   uint32_t lastAlertAt = 0;
+#if ENABLE_AUDIBLE_SERVER_ALERTS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
   uint32_t activeSince = 0;
   uint32_t observedServerResponse = 0;
   uint32_t lastServerResponse = 0;
   bool monitoringServer = false;
   bool serverAlerted = false;
-  bool recordingFaultAlerted = false;
-  uint32_t recordingFaultSince = 0;
+#endif
+#if STORAGE == STORAGE_SD
+  const uint32_t recordingMonitorSince = millis();
+  bool recordingFaultActive = false;
+  uint32_t captureAtFault = 0;
+  uint32_t lastRecordingAlertAt = 0;
+#endif
 
   for (;;) {
     const uint32_t now = millis();
@@ -401,21 +410,38 @@ void statusSignals(void* inst)
         recordingAlert("[STATUS] No accepted telemetry for 60 seconds; three audible beeps");
       }
     }
+#endif
+
 #if STORAGE == STORAGE_SD
-    const bool recordingFault = !standbyMode && working &&
-      ((!durableQueue.healthy() || !logger.healthy()) ||
-       (lastCollectionTime && now - lastCollectionTime >= SERVER_RESPONSE_ALERT_MS));
-    if (!recordingFault) {
-      recordingFaultSince = 0;
-      recordingFaultAlerted = false;
-    } else {
-      if (!recordingFaultSince) recordingFaultSince = now;
-      if (!recordingFaultAlerted && now - recordingFaultSince >= NETWORK_ALERT_GRACE_MS) {
-        recordingFaultAlerted = true;
-        recordingAlert("[STATUS] Local recording or SD journal failed; three audible beeps");
+    // A known mount/write failure warns immediately. A blocked startup or
+    // stopped collector gets 15 seconds. Upload acknowledgements cannot clear
+    // this alarm, and standby cannot silence an existing recording failure.
+    const uint32_t capturedAt = lastCollectionTime;
+    // Read time after the cross-core capture timestamp, including time spent
+    // sounding a server warning above. Unsigned subtraction must not see a
+    // newer capture as a long recording stall.
+    const uint32_t recordingNow = millis();
+    const uint32_t progressAt = capturedAt ? capturedAt : recordingMonitorSince;
+    const bool storageHealthy = durableQueue.healthy() && logger.healthy();
+    const bool checked = storageCheckComplete ||
+      recordingNow - recordingMonitorSince >= RECORDING_STALL_ALERT_MS;
+    if (!standbyMode && checked) {
+      const bool failed = !storageHealthy || recordingNow - progressAt >= RECORDING_STALL_ALERT_MS;
+      if (failed && !recordingFaultActive) {
+        recordingFaultActive = true;
+        captureAtFault = capturedAt;
+        lastRecordingAlertAt = 0;
+      } else if (!failed && recordingFaultActive && capturedAt && capturedAt != captureAtFault) {
+        recordingFaultActive = false;
+        lastRecordingAlertAt = 0;
+        Serial.println("[STATUS] Fresh local recording restored; fault alarm stopped");
       }
     }
-#endif
+    if (recordingFaultActive &&
+        (!lastRecordingAlertAt || recordingNow - lastRecordingAlertAt >= RECORDING_ALERT_REPEAT_MS)) {
+      lastRecordingAlertAt = recordingNow;
+      recordingAlert("[STATUS] Local recording failed; three beeps, repeating every five seconds");
+    }
 #endif
 
     if (networkOnline) {
@@ -481,7 +507,7 @@ void statusSignals(void* inst)
       }
     }
 
-#ifdef PIN_LED
+#if ENABLE_NETWORK_STATUS_SIGNALS && defined(PIN_LED)
     bool ledOn;
     if (standbyMode) {
       // A parked device must be visually and electrically quiet. Motion
@@ -1113,6 +1139,9 @@ void initialize()
       Serial.println("[STORAGE] Local logging unavailable");
     }
   }
+#if STORAGE == STORAGE_SD
+  storageCheckComplete = true;
+#endif
 #if ENABLE_CAN_CAPTURE && ENABLE_OBD
   capturePassiveCAN();
 #endif
@@ -2320,7 +2349,7 @@ if (!state.check(STATE_MEMS_READY)) do {
 #endif
 
   // initialize components
-#if ENABLE_NETWORK_STATUS_SIGNALS
+#if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
   // Start the alarm before GNSS, OBD and storage setup can block.
   if (!statusTask.create(statusSignals, "status", 1, 3072)) {
     Serial.println("[CRITICAL] Status task creation failed");
