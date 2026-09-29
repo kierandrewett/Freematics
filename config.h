@@ -88,7 +88,7 @@
 // maximum consecutive OBD access errors before entering standby
 #define MAX_OBD_ERRORS 3
 #define OBD_RETRY_INTERVAL_MS 5000UL
-#define OBD_FAST_PIDS_PER_CYCLE 2
+#define OBD_FAST_PIDS_PER_CYCLE 3 /* RPM plus two rotating core metrics */
 // Passive CAN capture is opt-in and bounded. It never transmits a CAN frame.
 #ifndef ENABLE_CAN_CAPTURE
 #define ENABLE_CAN_CAPTURE 0
@@ -164,14 +164,13 @@
 #define DATA_RECEIVING_TIMEOUT 5000 /* ms */
 // expected maximum server sync signal interval
 #define SERVER_SYNC_INTERVAL 120 /* seconds, 0 to disable */
-// Data interval settings. Moving samples are deliberately faster than the
-// original one-second cadence so RPM/speed transitions are visible. The
-// slower tiers are still used while idling/parked to limit flash and radio
-// traffic.
+// Data interval settings. Moving samples target 4 Hz so brief RPM/speed
+// transitions have a better chance of being recorded. Slower tiers remain
+// active while idling/parked to limit flash and radio traffic.
 #define STATIONARY_TIME_TABLE {10, 60, 180} /* seconds */
-#define OBD_FAST_INTERVAL_MS 500UL /* speed/RPM/load/throttle sample cadence */
-#define OBD_AUX_INTERVAL_MS 5000UL /* rotating non-critical PID cadence */
-#define OBD_AUX_PIDS_PER_CYCLE 8 /* bounded auxiliary reads per rotation */
+#define OBD_FAST_INTERVAL_MS 250UL /* target 4 Hz RPM and moving-sample cadence */
+#define OBD_AUX_INTERVAL_MS 250UL /* interleave auxiliary reads with core reads */
+#define OBD_AUX_PIDS_PER_CYCLE 1 /* one bounded auxiliary read per cycle */
 #define DTC_SCAN_INTERVAL_MS 120000UL /* stored, pending and permanent code scan */
 #define OBD_PID_READ_WARN_MS 200UL /* log a slow Mode 01 response at most once per 10 s */
 #define DATA_INTERVAL_TABLE {OBD_FAST_INTERVAL_MS, 2000, 5000} /* ms */
@@ -182,7 +181,7 @@
 // and lets queued readings drain efficiently after a coverage gap.
 #define HTTP_BATCH_MAX_SAMPLES 24
 // Bound live latency while allowing normal samples to share a request.
-#define HTTP_BATCH_MAX_WAIT_MS 5000UL
+#define HTTP_BATCH_MAX_WAIT_MS 1000UL
 
 /**************************************
 * Data storage configurations

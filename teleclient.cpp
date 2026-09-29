@@ -29,6 +29,7 @@ extern char isoTime[];
 CBuffer::CBuffer(uint8_t* mem)
 {
   m_data = mem;
+  state = BUFFER_STATE_EMPTY;
   purge();
 }
 
@@ -50,7 +51,6 @@ bool CBuffer::add(uint16_t pid, uint8_t type, void* values, int bytes, uint8_t c
 
 void CBuffer::purge()
 {
-  state = BUFFER_STATE_EMPTY;
   timestamp = 0;
   offset = 0;
   total = 0;
@@ -124,29 +124,43 @@ void CBufferManager::init()
 
 void CBufferManager::purge()
 {
-  for (int n = 0; n < total; n++) slots[n]->purge();
+  portENTER_CRITICAL(&m_mux);
+  for (int n = 0; n < total; n++) {
+    slots[n]->purge();
+    slots[n]->state = BUFFER_STATE_EMPTY;
+  }
+  last = 0;
+  portEXIT_CRITICAL(&m_mux);
 }
 
 CBuffer* CBufferManager::getFree()
 {
+  CBuffer* freeSlot = 0;
+  portENTER_CRITICAL(&m_mux);
   if (last) {
     CBuffer* slot = last;
     last = 0;
-    if (slot->state == BUFFER_STATE_EMPTY) return slot;
-  }
-  // A full queue must never overwrite a captured reading.
-  for (int n = 0; n < total; n++) {
-    if (slots[n]->state == BUFFER_STATE_EMPTY) {
-      return slots[n];
+    if (slot->state == BUFFER_STATE_EMPTY) {
+      slot->state = BUFFER_STATE_FILLING;
+      freeSlot = slot;
     }
   }
-  return nullptr;
+  // A full queue must never overwrite a captured reading.
+  for (int n = 0; !freeSlot && n < total; n++) {
+    if (slots[n]->state == BUFFER_STATE_EMPTY) {
+      slots[n]->state = BUFFER_STATE_FILLING;
+      freeSlot = slots[n];
+    }
+  }
+  portEXIT_CRITICAL(&m_mux);
+  return freeSlot;
 }
 
 CBuffer* CBufferManager::getOldest()
 {
   uint32_t ts = 0xffffffff;
   int m = -1;
+  portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->timestamp < ts) {
         m = n;
@@ -155,15 +169,17 @@ CBuffer* CBufferManager::getOldest()
   }
   if (m >= 0) {
     slots[m]->state = BUFFER_STATE_LOCKED;
-    return slots[m];
   }
-  return 0;
+  CBuffer* result = m >= 0 ? slots[m] : 0;
+  portEXIT_CRITICAL(&m_mux);
+  return result;
 }
 
 CBuffer* CBufferManager::getNewest()
 {
   uint32_t ts = 0;
   int m = -1;
+  portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->timestamp > ts) {
       m = n;
@@ -172,15 +188,48 @@ CBuffer* CBufferManager::getNewest()
   }
   if (m >= 0) {
     slots[m]->state = BUFFER_STATE_LOCKED;
-    return slots[m];
   }
-  return 0;
+  CBuffer* result = m >= 0 ? slots[m] : 0;
+  portEXIT_CRITICAL(&m_mux);
+  return result;
 }
 
 void CBufferManager::free(CBuffer* slot)
 {
   slot->purge();
+  portENTER_CRITICAL(&m_mux);
+  slot->state = BUFFER_STATE_EMPTY;
   last = slot;  
+  portEXIT_CRITICAL(&m_mux);
+}
+
+void CBufferManager::publish(CBuffer* slot)
+{
+  portENTER_CRITICAL(&m_mux);
+  slot->state = BUFFER_STATE_FILLED;
+  portEXIT_CRITICAL(&m_mux);
+}
+
+void CBufferManager::restore(CBuffer* slot)
+{
+  portENTER_CRITICAL(&m_mux);
+  slot->state = BUFFER_STATE_FILLED;
+  portEXIT_CRITICAL(&m_mux);
+}
+
+void CBufferManager::recordMissedReading()
+{
+  portENTER_CRITICAL(&m_mux);
+  missed++;
+  portEXIT_CRITICAL(&m_mux);
+}
+
+uint32_t CBufferManager::missedReadings() const
+{
+  portENTER_CRITICAL(&m_mux);
+  uint32_t result = missed;
+  portEXIT_CRITICAL(&m_mux);
+  return result;
 }
 
 void CBufferManager::printStats()
@@ -188,12 +237,14 @@ void CBufferManager::printStats()
   int bytes = 0;
   int count = 0;
   int samples = 0;
+  portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
     if (slots[n]->state != BUFFER_STATE_FILLED) continue;
     bytes += slots[n]->offset;
     samples += slots[n]->total;
     count++;
   }
+  portEXIT_CRITICAL(&m_mux);
   if (slots) {
     Serial.print("[QUEUE] Waiting readings: ");
     Serial.print(count);
@@ -210,9 +261,11 @@ uint16_t CBufferManager::pendingReadings() const
 {
   if (!slots) return 0;
   uint16_t count = 0;
+  portENTER_CRITICAL(&m_mux);
   for (uint32_t n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_FILLED) count++;
   }
+  portEXIT_CRITICAL(&m_mux);
   return count;
 }
 
@@ -220,11 +273,13 @@ uint16_t CBufferManager::unpersistedReadings() const
 {
   if (!slots) return 0;
   uint16_t count = 0;
+  portENTER_CRITICAL(&m_mux);
   for (uint32_t n = 0; n < total; n++) {
     // An HTTP request can own a LOCKED buffer while the ordinary pending
     // count is zero. It is still the only copy until the server accepts it.
     if (slots[n]->state != BUFFER_STATE_EMPTY) count++;
   }
+  portEXIT_CRITICAL(&m_mux);
   return count;
 }
 
@@ -232,9 +287,11 @@ uint32_t CBufferManager::pendingBytes() const
 {
   if (!slots) return 0;
   uint32_t bytes = 0;
+  portENTER_CRITICAL(&m_mux);
   for (uint32_t n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_FILLED) bytes += slots[n]->offset;
   }
+  portEXIT_CRITICAL(&m_mux);
   return bytes;
 }
 

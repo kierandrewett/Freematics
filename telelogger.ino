@@ -672,12 +672,36 @@ void processOBD(CBuffer* buffer)
     lastOBDFastPoll = now;
     lastOBDReadLatency = 0;
     byte sampled = 0;
+    // Poll RPM every fast cycle instead of waiting for its turn in the core
+    // rotation, so short engine-speed transients are easier to capture.
+    for (byte rpmIndex = 0; rpmIndex < count; rpmIndex++) {
+      PID_POLLING_INFO& rpm = obdData[rpmIndex];
+      if (rpm.pid != PID_RPM || !obd.isValidPID(rpm.pid)) continue;
+      sampled++;
+      float value;
+      const uint32_t readStarted = millis();
+      const bool read = obd.readPID(rpm.pid, value);
+      const uint32_t elapsed = millis() - readStarted;
+      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
+      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(rpm.pid, "Fast", elapsed);
+      if (!read) {
+        timeoutsOBD++;
+        reportOBDReadFailure(rpm.pid, "Fast");
+        fastReadFailed = true;
+      } else {
+        rpm.ts = millis();
+        rpm.value = value;
+        buffer->add((uint16_t)rpm.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+        if (value >= 100) lastMotionTime = millis();
+      }
+      break;
+    }
     byte visited = 0;
     while (sampled < OBD_FAST_PIDS_PER_CYCLE && visited < count) {
       if (fastOBDIndex >= count) fastOBDIndex = 0;
       PID_POLLING_INFO& item = obdData[fastOBDIndex++];
       visited++;
-      if (item.priority != 1 || !obd.isValidPID(item.pid)) continue;
+      if (item.priority != 1 || item.pid == PID_RPM || !obd.isValidPID(item.pid)) continue;
       sampled++;
       float value;
       const uint32_t readStarted = millis();
@@ -715,9 +739,9 @@ void processOBD(CBuffer* buffer)
   }
   if (fastDue) fastOBDFailureCycles = 0;
 
-  // Rotate through every other ECU-advertised PID, but only once per five
-  // seconds. This keeps the CAN/ELM bridge responsive while still discovering
-  // the full catalogue over time.
+  // Interleave auxiliary reads with the core schedule so a large burst cannot
+  // stall collection. Bound attempted reads, including timeouts, so an ECU
+  // that stops responding cannot turn one cycle into a full-catalogue scan.
   if (!lastAuxPoll || now - lastAuxPoll >= OBD_AUX_INTERVAL_MS) {
     lastAuxPoll = now;
     byte sampled = 0;
@@ -727,6 +751,7 @@ void processOBD(CBuffer* buffer)
       PID_POLLING_INFO& item = obdData[auxIndex++];
       visited++;
       if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
+      sampled++;
       float value;
       const uint32_t readStarted = millis();
       const bool read = obd.readPID(item.pid, value);
@@ -741,7 +766,6 @@ void processOBD(CBuffer* buffer)
       item.ts = millis();
       item.value = value;
       buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-      sampled++;
     }
   }
 
@@ -1309,7 +1333,6 @@ void process()
     delay(50);
     return;
   }
-  buffer->state = BUFFER_STATE_FILLING;
 
 #if ENABLE_OBD
   // Process OBD data if connected. Reinitialisation is rate-limited because
@@ -1464,9 +1487,9 @@ void process()
       bufman.free(buffer);
     }
   }
-  if (!journaled) buffer->state = BUFFER_STATE_FILLED;
+  if (!journaled) bufman.publish(buffer);
 #else
-  buffer->state = BUFFER_STATE_FILLED;
+  bufman.publish(buffer);
 #endif
   lastCollectionTime = millis();
 
@@ -1804,7 +1827,7 @@ void telemetry(void* inst)
         if (store.overflowed()) {
           // Keep this complete sample queued and restore the last valid packet.
           store.rollback();
-          buffer->state = BUFFER_STATE_FILLED;
+          bufman.restore(buffer);
           if (batchCount) store.tailer();
           break;
         }
@@ -1864,7 +1887,7 @@ void telemetry(void* inst)
         else
 #endif
           for (uint8_t i = 0; i < batchCount; i++) {
-            batch[i]->state = BUFFER_STATE_FILLED;
+            bufman.restore(batch[i]);
           }
         timeoutsNet++;
         connErrors++;

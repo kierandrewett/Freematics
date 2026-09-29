@@ -55,13 +55,16 @@ public:
     uint16_t pendingReadings() const;
     uint16_t unpersistedReadings() const;
     uint32_t pendingBytes() const;
-    void recordMissedReading() { missed++; }
-    uint32_t missedReadings() const { return missed; }
+    void publish(CBuffer* slot);
+    void restore(CBuffer* slot);
+    void recordMissedReading();
+    uint32_t missedReadings() const;
 private:
     CBuffer** slots = 0;
     CBuffer* last = 0;
     uint32_t total = 0;
     uint32_t missed = 0;
+    mutable portMUX_TYPE m_mux = portMUX_INITIALIZER_UNLOCKED;
 };
 
 class TeleClient
