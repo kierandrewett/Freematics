@@ -1,3 +1,5 @@
+-- Readers use mode=ro, with a writable directory for SQLite's WAL sidecars.
+-- WAL keeps archive writes from blocking dashboard and analysis reads.
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 

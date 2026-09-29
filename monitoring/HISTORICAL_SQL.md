@@ -97,3 +97,14 @@ the projection from raw archives, but a dashboard query must not mutate
 files, generate KML, or update ingest state. Any migration from an older
 schema must create a verified backup and rebuild the projection; do not rely
 on `CREATE TABLE IF NOT EXISTS` to change an existing table.
+
+The projection uses SQLite `WAL` journal mode so an archive write does not
+block dashboard reads. Readers open the database with `mode=ro`; Grafana also
+uses `_pragma=query_only(1)&_pragma=busy_timeout(10000)` in `pathOptions`.
+The shared history directory must be writable in each container so SQLite can
+create its `-wal` and `-shm` sidecars after the last connection exits. The SQL
+connection remains read-only. Do not use `immutable=1` on this changing database.
+Keep the mode in `history_schema.sql` aligned with the deployed indexer image.
+AI workers must consume history query results before network/model calls so
+long reads do not prevent WAL checkpoints. The indexer commits each changed
+archive before scanning the next one.
