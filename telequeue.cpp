@@ -3,6 +3,8 @@
 #if STORAGE == STORAGE_SD
 #include <SD.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <time.h>
 #include "sdaccess.h"
 
@@ -47,11 +49,13 @@ uint32_t crc32(const uint8_t* data, size_t length)
 bool ensureDataFile()
 {
     if (SD.exists(DATA_PATH)) return true;
-    // Arduino's FILE_APPEND opens an existing file; it does not create one.
-    File file = SD.open(DATA_PATH, FILE_WRITE);
-    if (!file) return false;
-    file.close();
-    return SD.exists(DATA_PATH);
+    // A failed stat must never turn into a truncating FILE_WRITE open. Create
+    // exclusively through the same SD VFS, preserving an existing journal.
+    char path[64];
+    snprintf(path, sizeof(path), "/sd%s", DATA_PATH);
+    const int descriptor = ::open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if (descriptor < 0) return errno == EEXIST;
+    return ::close(descriptor) == 0;
 }
 
 bool archiveAcceptedJournal()
@@ -157,7 +161,7 @@ void DurableQueue::suspend()
 
 bool DurableQueue::append(const char* frame, uint16_t length)
 {
-    if (!m_ready || m_corrupt || !frame || length < 3 || length > MAX_FRAME || frame[length - 1] != ',' || !lock()) return false;
+    if (!m_ready || m_fault || m_corrupt || !frame || length < 3 || length > MAX_FRAME || frame[length - 1] != ',' || !lock()) return false;
     File file = ensureDataFile() ? SD.open(DATA_PATH, FILE_APPEND) : File();
     if (!file) {
         Serial.print("[QUEUE] Append open errno: ");
@@ -208,7 +212,7 @@ bool DurableQueue::append(const char* frame, uint16_t length)
 
 bool DurableQueue::peek(char* frame, uint16_t capacity, uint16_t* length)
 {
-    if (!m_ready || !frame || !length || !lock()) return false;
+    if (!m_ready || m_fault || !frame || !length || !lock()) return false;
     File file = SD.open(DATA_PATH, FILE_READ);
     if (!file) {
         m_fault = true;
@@ -294,7 +298,7 @@ void DurableQueue::retry()
 uint32_t DurableQueue::pendingBytes()
 {
     if (!lock()) return m_size >= m_ack ? m_size - m_ack : 0;
-    if (!m_ready) {
+    if (!m_ready || m_fault) {
         uint32_t bytes = m_size >= m_ack ? m_size - m_ack : 0;
         unlock();
         return bytes;
