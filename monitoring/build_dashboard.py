@@ -309,7 +309,7 @@ def build_dashboard(view: str = "combined") -> dict:
                         "2": {"color": "green", "index": 0, "text": "Cellular"},
                     }
                 ),
-                no_value="Starting",
+                no_value="No recent telemetry",
                 threshold_steps=((None, "red"), (1, "blue"), (2, "green")),
             ),
             stat(

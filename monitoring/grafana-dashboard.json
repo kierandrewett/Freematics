@@ -166,7 +166,7 @@
               }
             }
           ],
-          "noValue": "Starting",
+          "noValue": "No recent telemetry",
           "thresholds": {
             "mode": "absolute",
             "steps": [
