@@ -55,6 +55,7 @@ public:
     }
     unsigned int length() { return m_cacheBytes; }
     char* buffer() { return m_cache; }
+    bool appendRaw(const char* data, unsigned int length);
     bool overflowed() const { return m_overflowed; }
     void checkpoint();
     void rollback();
@@ -100,6 +101,14 @@ public:
     bool init();
     uint32_t begin();
     void flush();
+    void maintain();
+    void end() override;
+    void dispatch(const char* buf, byte len) override;
+    bool healthy() const { return m_id != 0 && bool(m_file); }
+private:
+    uint32_t m_retentionDay = 0;
+    uint32_t m_lastMaintenance = 0;
+    File m_retentionRoot;
 };
 
 class SPIFFSLogger : public FileLogger {

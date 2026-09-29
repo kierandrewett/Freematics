@@ -1,6 +1,9 @@
 #include <FreematicsPlus.h>
 #include "telestore.h"
 #include "config.h"
+#include "sdaccess.h"
+#include "sdarchive.h"
+#include <time.h>
 
 void CStorage::log(uint16_t pid, uint8_t values[], uint8_t count)
 {
@@ -113,6 +116,18 @@ void CStorageRAM::dispatch(const char* buf, byte len)
     m_samples++;
 }
 
+bool CStorageRAM::appendRaw(const char* data, unsigned int length)
+{
+    if (!m_cache || !data || !length || m_overflowed ||
+        m_cacheBytes > m_cacheSize || length + 4 > m_cacheSize - m_cacheBytes) {
+        m_overflowed = true;
+        return false;
+    }
+    memcpy(m_cache + m_cacheBytes, data, length);
+    m_cacheBytes += length;
+    return true;
+}
+
 void CStorageRAM::checkpoint()
 {
     m_checkpointBytes = m_cacheBytes;
@@ -186,8 +201,25 @@ int FileLogger::getFileID(File& root)
 
 bool SDLogger::init()
 {
+    SDGuard guard;
+    if (!guard) return false;
     SPI.begin();
-    if (SD.begin(PIN_SD_CS, SPI, SPI_FREQ)) {
+    bool mounted = false;
+#ifdef FREEMATICS_FORMAT_SD_ONCE
+    Serial.println("[STORAGE] SD provisioning image: unformatted card may be formatted now");
+    mounted = SD.begin(PIN_SD_CS, SPI, SPI_FREQ, "/sd", 5, true);
+#else
+    // Power and SPI can settle after the ESP32 starts. Retry the mount before
+    // falling back to the finite RAM queue; never format a production card.
+    for (uint8_t attempt = 0; attempt < 3 && !mounted; attempt++) {
+        if (attempt) {
+            SD.end();
+            delay(250);
+        }
+        mounted = SD.begin(PIN_SD_CS, SPI, SPI_FREQ);
+    }
+#endif
+    if (mounted) {
         unsigned int total = SD.totalBytes() >> 20;
         unsigned int used = SD.usedBytes() >> 20;
         Serial.print("SD:");
@@ -204,6 +236,10 @@ bool SDLogger::init()
 
 uint32_t SDLogger::begin()
 {
+    SDGuard guard;
+    if (!guard) return 0;
+    m_retentionRoot.close();
+    m_file.close();
     File root = SD.open("/DATA");
     m_id = getFileID(root);
     if (m_id == 0) {
@@ -220,27 +256,98 @@ uint32_t SDLogger::begin()
         m_id = 0;
     }
     m_dataCount = 0;
+    m_size = 0;
+    m_retentionDay = 0;
     return m_id;
 }
 
 void SDLogger::flush()
 {
-    char path[24];
-    sprintf(path, "/DATA/%u.CSV", m_id);
-    m_file.close();
-    m_file = SD.open(path, FILE_APPEND);
-    if (!m_file) {
-        Serial.println("File error");
+    SDGuard guard;
+    if (guard) m_file.flush();
+}
+
+void SDLogger::end()
+{
+    SDGuard guard;
+    if (guard) {
+        m_retentionRoot.close();
+        FileLogger::end();
+    }
+}
+
+void SDLogger::dispatch(const char* buf, byte len)
+{
+    SDGuard guard;
+    if (guard) FileLogger::dispatch(buf, len);
+}
+
+void SDLogger::maintain()
+{
+    time_t clock = time(nullptr);
+    if (clock < 1704067200 || clock > UINT32_MAX || !m_id) return;
+    const uint32_t now = (uint32_t)clock;
+    const uint32_t day = now / 86400UL;
+    if (m_retentionDay && m_retentionDay != day) {
+        end();
+        if (!begin()) return;
+    }
+    SDGuard guard;
+    if (!guard) return;
+    if (!m_retentionRoot) {
+        if (m_retentionDay == day && millis() - m_lastMaintenance < 3600000UL) return;
+        m_retentionRoot = SD.open("/DATA");
+        if (!m_retentionRoot) return;
+        m_retentionDay = day;
+        m_lastMaintenance = millis();
+    }
+    // A large archive must not stop fresh collection. Continue the directory
+    // scan across collection cycles, with bounded work on each call.
+    const uint32_t started = millis();
+    for (uint8_t scanned = 0; scanned < 4 && millis() - started < 100; scanned++) {
+        File entry = m_retentionRoot.openNextFile();
+        if (!entry) {
+            m_retentionRoot.close();
+            break;
+        }
+        char path[48];
+        snprintf(path, sizeof(path), "%s", entry.path());
+        entry.close();
+        if (!localLogPath(path) || !strcmp(strrchr(path, '.'), ".UTC")) continue;
+        char metadata[48];
+        snprintf(metadata, sizeof(metadata), "%s", path);
+        strcpy(strrchr(metadata, '.'), ".UTC");
+        uint32_t anchor = 0;
+        File date = SD.open(metadata, FILE_READ);
+        char value[24] = {0};
+        if (date) {
+            date.read((uint8_t*)value, sizeof(value) - 1);
+            date.close();
+            anchor = strtoul(value, nullptr, 10);
+        }
+        if (anchor < 1704067200UL || anchor > now) {
+            // Old firmware did not record creation time. Start a full new
+            // 14-day window, rather than guessing and deleting those files.
+            date = SD.open(metadata, FILE_WRITE);
+            if (date) {
+                date.printf("%lu\n", (unsigned long)now);
+                date.flush();
+                date.close();
+            }
+            continue;
+        }
+        const unsigned long id = strtoul(path + 6, nullptr, 10);
+        if (id != m_id && localLogExpired(anchor, now) && SD.remove(path)) {
+            SD.remove(metadata);
+            Serial.print("[STORAGE] Removed local archive older than 14 days: ");
+            Serial.println(path);
+        }
     }
 }
 
 bool SPIFFSLogger::init()
 {
     bool mounted = SPIFFS.begin();
-    if (!mounted) {
-        Serial.println("Formatting SPIFFS...");
-        mounted = SPIFFS.begin(true);
-    }
     if (mounted) {
         Serial.print("[STORAGE] Internal flash: ");
         Serial.print(SPIFFS.totalBytes());
@@ -248,16 +355,23 @@ bool SPIFFSLogger::init()
         Serial.print(SPIFFS.usedBytes());
         Serial.println(" bytes");
     } else {
-        Serial.println("[STORAGE] Internal flash is not available");
+        // A transient mount failure must not erase the only local copy of a
+        // trip. Recovery or formatting requires an explicit maintenance step.
+        Serial.println("[STORAGE] Internal flash mount failed; existing logs preserved");
     }
     return mounted;
 }
 
 uint32_t SPIFFSLogger::begin()
 {
-    while (SPIFFS.totalBytes() - SPIFFS.usedBytes() < SPIFFS_RESERVE_BYTES) {
-        if (!purgeOldest()) break;
+    if (SPIFFS.totalBytes() - SPIFFS.usedBytes() < SPIFFS_RESERVE_BYTES) {
+        // Old trip logs may be the only surviving copy after an outage.
+        Serial.println("[STORAGE] Flash reserve reached; existing logs preserved");
+        return 0;
     }
+    // SPIFFS uses flat filenames, but its VFS accepts a /DATA prefix. New
+    // partitions need that path initialised before the first trip file.
+    if (!SPIFFS.exists("/DATA")) SPIFFS.mkdir("/DATA");
     File root = SPIFFS.open("/");
     m_id = getFileID(root);
     char path[24];
@@ -279,18 +393,25 @@ bool SPIFFSLogger::purgeOldest()
     // closed before begin() calls this method.
     File root = SPIFFS.open("/");
     File file;
-    int idx = 0;
+    unsigned int idx = 0;
+    char oldestPath[32] = {0};
     while(file = root.openNextFile()) {
-        if (!strncmp(file.name(), "/DATA/", 6)) {
-            unsigned int n = atoi(file.name() + 6);
-            if (n != 0 && (idx == 0 || n < idx)) idx = n;
+        const char* path = file.path();
+        if (!path) continue;
+        const char* name = path[0] == '/' ? path + 1 : path;
+        if (!strncmp(name, "DATA/", 5)) {
+            const char* number = name + 5;
+            char* end = 0;
+            unsigned long n = strtoul(number, &end, 10);
+            if (n != 0 && end && !strcmp(end, ".CSV") && (idx == 0 || n < idx)) {
+                idx = (unsigned int)n;
+                snprintf(oldestPath, sizeof(oldestPath), "/DATA/%u.CSV", idx);
+            }
         }
     }
     if (idx) {
-        char path[32];
-        sprintf(path, "/DATA/%u.CSV", idx);
-        if (SPIFFS.remove(path)) {
-            Serial.print(path);
+        if (SPIFFS.remove(oldestPath)) {
+            Serial.print(oldestPath);
             Serial.println(" removed");
             return true;
         }
