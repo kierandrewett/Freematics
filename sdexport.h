@@ -5,6 +5,7 @@
 
 #if STORAGE == STORAGE_SD
 void processSDExport();
+void resetSDExportDirectory();
 #endif
 
 #endif

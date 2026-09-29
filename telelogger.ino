@@ -2401,6 +2401,7 @@ void loop()
       logger.end();
       durableQueue.suspend();
       state.clear(STATE_STORAGE_READY);
+      resetSDExportDirectory();
       SD.end();
       SPI.end();
       delay(100);

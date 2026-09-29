@@ -9,18 +9,31 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import threading
 import time
 
 import serial
 
 
+class PassiveSerial(serial.Serial):
+    """Keep POSIX control lines unchanged on this board's reset circuit."""
+
+    # pyserial 3.5 changes these lines separately during open(). The temporary
+    # difference can reset the ESP32. This reader never controls boot/reset.
+    def _update_dtr_state(self) -> None:
+        pass
+
+    def _update_rts_state(self) -> None:
+        pass
+
+
 class Device:
     def __init__(self, port: str, log: Path | None = None):
         self.lock = threading.Lock()
-        self.sequence = 0
+        self.sequence = secrets.randbits(31)
         self.log = log.open("ab", buffering=0) if log else None
-        self.serial = serial.Serial()
+        self.serial = PassiveSerial() if os.name == "posix" else serial.Serial()
         self.serial.port = port
         self.serial.baudrate = 115200
         self.serial.timeout = 0.3
