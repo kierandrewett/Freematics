@@ -835,7 +835,6 @@ void FreematicsESP32::buzzer(int freq)
 #ifdef PIN_BUZZER
     if (freq) {
         ledcWriteTone(0, freq);
-        ledcWrite(0, 255);
     } else {
         ledcWrite(0, 0);
     }
