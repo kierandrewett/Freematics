@@ -152,6 +152,8 @@ protected:
     uint16_t udpPort = 0;
 };
 
+class CellularTLS;
+
 class CellHTTP : public HTTPClient, public CellSIMCOM
 {
 public:
@@ -162,6 +164,8 @@ public:
     char* receive(int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
 private:
     bool m_tlsReady = false;
+    bool m_clockRefreshed = false;
+    CellularTLS* m_cellTLS = nullptr;
 };
 
 #endif

@@ -7,8 +7,10 @@ on
 *************************************************************************/
 
 #include <Arduino.h>
+#include <time.h>
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
+#include "FreematicsCellTLS.h"
 
 // ISRG Root X1 is the trust anchor for the RSA Let's Encrypt chain used by the
 // production telemetry endpoint. Keep this as a root CA rather than pinning a
@@ -282,8 +284,13 @@ bool CellSIMCOM::begin(CFreematics* device)
   getBuffer();
   m_device = device;
   for (byte n = 0; n < 30; n++) {
-    device->xbTogglePower(200);
     device->xbPurge();
+    // sys.begin() already powers the module. Toggling a responding module
+    // starts a shutdown while the following AT commands can still succeed.
+    if (!check(1000)) {
+      device->xbTogglePower(200);
+      delay(1500);
+    }
     if (!check(2000)) continue;
     if (sendCommand("ATE0\r") && sendCommand("ATI\r")) {
       // retrieve module info
@@ -347,6 +354,7 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
 {
   uint32_t t = millis();
   bool success = false;
+  if (m_type == CELL_SIM7670) sendCommand("AT+CTZU=1\r");
 
   if (m_type == CELL_SIM7070) {
     do {
@@ -403,7 +411,7 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
         delay(100);
         if (sendCommand("AT+CREG?\r", 1000, "+CREG: 0,")) {
           char *p = strstr(m_buffer, "+CREG: 0,");
-          success = (p && (*(p + 9) == '1' || *(p + 9) == '5') || *(p + 9) == '6');
+          success = p && (*(p + 9) == '1' || *(p + 9) == '5' || *(p + 9) == '6');
         }
       } while (!success && millis() - t < timeout);
       if (!success) break;
@@ -440,7 +448,29 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
         sendCommand("AT+CSOCKSETPN=1\r");
         sendCommand("AT+CIPMODE=0\r");
       }
-      sendCommand("AT+NETOPEN\r");
+      if (m_type == CELL_SIM7670) {
+        // Registration and CGPADDR do not prove that the data context opened.
+        // NETOPEN acknowledges immediately and completes asynchronously.
+        bool active = false;
+        if (sendCommand("AT+NETOPEN?\r", 5000)) {
+          char* p = strstr(m_buffer, "+NETOPEN:");
+          active = p && atoi(p + 9) == 1;
+        }
+        if (!active) {
+          sendCommand("AT+NETOPEN\r", 30000, "+NETOPEN:");
+          Serial.print("[CELL] PDP activation response: ");
+          Serial.println(m_buffer);
+          if (sendCommand("AT+NETOPEN?\r", 5000)) {
+            char* p = strstr(m_buffer, "+NETOPEN:");
+            active = p && atoi(p + 9) == 1;
+          }
+        }
+        Serial.print("[CELL] PDP context verified: ");
+        Serial.println(active ? "active" : "inactive");
+        success = active;
+      } else {
+        sendCommand("AT+NETOPEN\r");
+      }
     } while(0);
   }
   if (!success) Serial.println(m_buffer);
@@ -829,59 +859,13 @@ void CellHTTP::init()
 {
   m_tlsReady = false;
   if (m_type == CELL_SIM7670) {
-    static const char certName[] = "isrg_root_x1.pem";
-
-    // Certificate expiry checks require a trustworthy modem clock. Prefer the
-    // mobile network's NITZ time and fall back to NTP over the active PDP link.
-    sendCommand("AT+CTZU=1\r");
-    bool validClock = false;
-    bool usedNtp = false;
-    if (sendCommand("AT+CCLK?\r")) {
-      char* p = strstr(m_buffer, "+CCLK: \"");
-      validClock = p && atoi(p + 8) >= 24;
-    }
-    if (!validClock) {
-      usedNtp = true;
-      Serial.println("[TIME] Mobile network time unavailable; trying NTP over cellular");
-      sendCommand("AT+CNTP=\"pool.ntp.org\",0\r");
-      sendCommand("AT+CNTP\r", 15000, "+CNTP:");
-      if (sendCommand("AT+CCLK?\r")) {
-        char* p = strstr(m_buffer, "+CCLK: \"");
-        validClock = p && atoi(p + 8) >= 24;
-      }
-    }
-    if (!validClock) {
-      Serial.println("[TLS] Modem time unavailable");
-      return;
-    }
-    Serial.print("[TIME] Modem clock ready from ");
-    Serial.println(usedNtp ? "NTP over cellular" : "the mobile network");
-
-    bool certReady = sendCommand("AT+CCERTLIST\r") && strstr(m_buffer, certName);
-    if (!certReady) {
-      snprintf(m_buffer, RECV_BUF_SIZE, "AT+CCERTDOWN=\"%s\",%u\r", certName,
-        (unsigned int)strlen(TLS_ROOT_CA));
-      if (sendCommand(m_buffer, 1000, ">")) {
-        m_device->xbWrite(TLS_ROOT_CA, strlen(TLS_ROOT_CA));
-        certReady = sendCommand(0, 5000);
-      }
-    }
-    if (!certReady) {
-      Serial.println("[TLS] CA provisioning failed");
-      return;
-    }
-
-    bool configured = sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r") &&
-      sendCommand("AT+CSSLCFG=\"authmode\",0,1\r") &&
-      sendCommand("AT+CSSLCFG=\"cacert\",0,\"isrg_root_x1.pem\"\r") &&
-      sendCommand("AT+CSSLCFG=\"ignorelocaltime\",0,0\r") &&
-      sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r");
-    if (!configured) {
-      Serial.println("[TLS] Strict modem TLS configuration failed");
-      return;
-    }
+    // This modem firmware reboots on AT+CCLK writes. Keep its TLS engine
+    // out of the path and verify HTTPS on the ESP32 over cellular TCP.
+    if (!m_cellTLS) m_cellTLS = new CellularTLS;
+    m_cellTLS->begin(m_device);
+    m_cellTLS->close();
+    m_clockRefreshed = false;
     m_tlsReady = true;
-    Serial.println("[TLS] CA and time verification enabled");
   } else if (m_type != CELL_SIM7070) {
     sendCommand("AT+CHTTPSSTOP\r");
     sendCommand("AT+CHTTPSSTART\r");
@@ -936,20 +920,14 @@ bool CellHTTP::open(const char* host, uint16_t port)
       }
     }
   } else if (m_type == CELL_SIM7670) {
-    if (port == 443 && !m_tlsReady) {
+    if (!m_cellTLS || port != 443) { m_state = HTTP_ERROR; return false; }
+    if (!m_clockRefreshed) m_clockRefreshed = m_cellTLS->synchroniseClock(host);
+    if (!m_clockRefreshed || !m_cellTLS->open(host, port, TLS_ROOT_CA)) {
       m_state = HTTP_ERROR;
       return false;
     }
-    sendCommand("AT+HTTPINIT\r");
-    sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r");
-    if (m_bearerToken && *m_bearerToken) {
-      snprintf(m_buffer, RECV_BUF_SIZE,
-        "AT+HTTPPARA=\"USERDATA\",\"Authorization: Bearer %s\"\r", m_bearerToken);
-      if (!sendCommand(m_buffer)) {
-        m_state = HTTP_ERROR;
-        return false;
-      }
-    }
+    m_host = host;
+    m_state = HTTP_CONNECTED;
     return true;
   } else {
     memset(m_buffer, 0, RECV_BUF_SIZE);
@@ -975,7 +953,8 @@ bool CellHTTP::close()
   } else if (m_type == CELL_SIM5360) {
     return sendCommand("AT+CHTTPSCLSE\r", 1000, "+CHTTPSCLSE:");
   } else if (m_type == CELL_SIM7670) {
-    return sendCommand("AT+HTTPTERM\r");
+    if (m_cellTLS) m_cellTLS->close();
+    return true;
   } else {
     return sendCommand("AT+CIPCLOSE=0\r");
   }
@@ -1010,36 +989,16 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
       }
     }
   } else if (m_type == CELL_SIM7670) {
-    sprintf(m_buffer, "AT+HTTPPARA=\"URL\",\"https://%s:%u%s\"\r", host, port, path);
-    if (!sendCommand(m_buffer, 1000)) {
+    if (m_state != HTTP_CONNECTED && !open(host, port)) return false;
+    String header = genHeader(method, path, payload, payloadSize);
+    if (!m_cellTLS->write(header.c_str(), header.length()) ||
+        (payload && payloadSize > 0 && !m_cellTLS->write(payload, payloadSize))) {
+      close();
       m_state = HTTP_ERROR;
       return false;
     }
-    if (payload) {
-      sprintf(m_buffer, "AT+HTTPDATA=%u,1000\r", payloadSize);
-      if (!sendCommand(m_buffer, 1000, "DOWNLOAD\r")) {
-        m_state = HTTP_ERROR;
-        return false;
-      }
-      m_device->xbWrite(payload, payloadSize);
-      if (!sendCommand(0, HTTP_CONN_TIMEOUT)) {
-        m_state = HTTP_ERROR;
-        return false;
-      }
-    }
-    const char* action = payload ? "AT+HTTPACTION=1\r" : "AT+HTTPACTION=0\r";
-    if (sendCommand(action, HTTP_CONN_TIMEOUT)) {
-      bool completed = strstr(m_buffer, "+HTTPACTION:") ||
-        sendCommand(0, HTTP_CONN_TIMEOUT, "+HTTPACTION:");
-      if (completed) {
-        char* p = strstr(m_buffer, "+HTTPACTION:");
-        if (p && (p = strchr(p, ','))) {
-          m_code = atoi(++p);
-        }
-        m_state = HTTP_SENT;
-        return true;
-      }
-    }
+    m_state = HTTP_SENT;
+    return true;
   } else {
     String header = genHeader(method, path, payload, payloadSize);
     int len = header.length();
@@ -1082,24 +1041,13 @@ char* CellHTTP::receive(int* pbytes, unsigned int timeout)
       }
     }
   } else if (m_type == CELL_SIM7670) {
-    if (sendCommand("AT+HTTPHEAD\r", timeout, "+HTTPHEAD:")) {
-      char *p = strstr(m_buffer, "HTTP/1.");
-      if (p) m_code = atoi(p + 9);
+    if (!m_cellTLS || !m_cellTLS->response(m_buffer, RECV_BUF_SIZE, &m_code, pbytes, timeout)) {
+      close();
+      m_state = HTTP_ERROR;
+      return nullptr;
     }
-    sprintf(m_buffer, "AT+HTTPREAD=0,%u\r", RECV_BUF_SIZE - 32);
-    sendCommand(m_buffer);
-    char *p = strstr(m_buffer, "+HTTPREAD:");
-    if (p) {
-      m_state = HTTP_CONNECTED;
-      int bytes = atoi(p + 11);
-      if (pbytes) *pbytes = bytes;
-      p = strchr(p, '\n');
-      if (p) {
-        p++;
-        if (bytes < RECV_BUF_SIZE - 32) *(p + bytes) = 0;
-        return p;
-      }
-    }
+    m_state = HTTP_CONNECTED;
+    return m_buffer;
   } else {
     // start receiving
     int received = 0;
