@@ -134,21 +134,13 @@ CBuffer* CBufferManager::getFree()
     last = 0;
     if (slot->state == BUFFER_STATE_EMPTY) return slot;
   }
-  uint32_t ts = 0xffffffff;
-  int m = 0;
-  // search for free slot, if none, mark the oldest one
+  // A full queue must never overwrite a captured reading.
   for (int n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_EMPTY) {
       return slots[n];
-    } else if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->timestamp < ts) {
-        m = n;
-        ts = slots[n]->timestamp;
     }
   }
-  // dispose oldest data when buffer is full
-  while (slots[m]->state == BUFFER_STATE_LOCKED) delay(1);
-  slots[m]->purge();
-  return slots[m];
+  return nullptr;
 }
 
 CBuffer* CBufferManager::getOldest()
@@ -220,6 +212,18 @@ uint16_t CBufferManager::pendingReadings() const
   uint16_t count = 0;
   for (uint32_t n = 0; n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_FILLED) count++;
+  }
+  return count;
+}
+
+uint16_t CBufferManager::unpersistedReadings() const
+{
+  if (!slots) return 0;
+  uint16_t count = 0;
+  for (uint32_t n = 0; n < total; n++) {
+    // An HTTP request can own a LOCKED buffer while the ordinary pending
+    // count is zero. It is still the only copy until the server accepts it.
+    if (slots[n]->state != BUFFER_STATE_EMPTY) count++;
   }
   return count;
 }
@@ -546,21 +550,46 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
     (unsigned int)event, (int)rssi, (unsigned long)millis(), vin);
   if (event == EVENT_LOGOUT) login = false;
 #if ENABLE_WIFI
-  if (wifi.connected())
+  if (m_useWifi)
   {
-    return wifi.send(METHOD_POST, path) && wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1) && wifi.code() == 200;
+    if (!wifi.send(METHOD_POST, path)) {
+      Serial.println("[HTTP] Notification send failed via Wi-Fi");
+      return false;
+    }
+    char* response = wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1);
+    if (!response) {
+      Serial.println("[HTTP] Notification response timed out via Wi-Fi");
+      return false;
+    }
+    if (wifi.code() == 200) return true;
+    Serial.print("[HTTP] Notification rejected via Wi-Fi (status ");
+    Serial.print(wifi.code());
+    Serial.println(')');
+    return false;
   }
-  else
 #endif
   {
-    return cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, 0, 0) && cell.receive() && cell.code() == 200;
+    if (!cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, 0, 0)) {
+      Serial.println("[HTTP] Notification send failed via cellular");
+      return false;
+    }
+    char* response = cell.receive();
+    if (!response) {
+      Serial.println("[HTTP] Notification response timed out via cellular");
+      return false;
+    }
+    if (cell.code() == 200) return true;
+    Serial.print("[HTTP] Notification rejected via cellular (status ");
+    Serial.print(cell.code());
+    Serial.println(')');
+    return false;
   }
 }
 
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
 #if ENABLE_WIFI
-  bool disconnected = wifi.connected() ? wifi.state() != HTTP_CONNECTED : cell.state() != HTTP_CONNECTED;
+  bool disconnected = m_useWifi ? wifi.state() != HTTP_CONNECTED : cell.state() != HTTP_CONNECTED;
   if (disconnected) {
 #else
   if (cell.state() != HTTP_CONNECTED) {
@@ -587,7 +616,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     return false;
   }
 #if ENABLE_WIFI
-  if (wifi.connected()) {
+  if (m_useWifi) {
     Serial.println("[HTTP] GET via Wi-Fi");
     success = wifi.send(METHOD_GET, path);
   }
@@ -600,7 +629,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 #else
   len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
 #if ENABLE_WIFI
-  if (wifi.connected()) {
+  if (m_useWifi) {
     Serial.print("[HTTP] POST via Wi-Fi: ");
     Serial.println(path);
     success = wifi.send(METHOD_POST, path, packetBuffer, packetSize);
@@ -626,7 +655,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   int recvBytes = 0;
   char* content = 0;
 #if ENABLE_WIFI
-  if (wifi.connected())
+  if (m_useWifi)
   {
     content = wifi.receive(cell.getBuffer(), RECV_BUF_SIZE - 1, &recvBytes);
   }
@@ -641,11 +670,35 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     return false;
   }
 #if ENABLE_WIFI
-  int responseCode = wifi.connected() ? wifi.code() : cell.code();
+  int responseCode = m_useWifi ? wifi.code() : cell.code();
 #else
   int responseCode = cell.code();
 #endif
   bool accepted = responseCode == 200;
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+  if (accepted) {
+    // A proxy or captive portal can answer 200 without ingesting telemetry.
+    // The collector returns the exact number of non-timestamp fields stored.
+    unsigned int expected = 0;
+    for (unsigned int at = 0; at < packetSize;) {
+      unsigned int end = at;
+      while (end < packetSize && packetBuffer[end] != ',' && packetBuffer[end] != '*') end++;
+      if (end > at && !(end - at >= 2 && packetBuffer[at] == '0' && packetBuffer[at + 1] == ':')) expected++;
+      // The final '*' introduces a checksum, not another telemetry field.
+      if (end == packetSize || packetBuffer[end] == '*') break;
+      at = end + 1;
+    }
+    char* countEnd = 0;
+    unsigned long reported = !strncmp(content, "OK ", 3) ? strtoul(content + 3, &countEnd, 10) : 0;
+    accepted = expected > 0 && countEnd && countEnd != content + 3 && reported == expected;
+    if (!accepted) {
+      Serial.print("[HTTP] Collector acknowledgement mismatch; expected fields: ");
+      Serial.print(expected);
+      Serial.print(" | response: ");
+      Serial.println(content);
+    }
+  }
+#endif
   if (accepted) {
     if (!strncmp(content, "OK ", 3)) {
       Serial.print("[HTTP] Server accepted ");
@@ -656,7 +709,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
       Serial.println(content);
     }
     // successful
-    lastSyncTime = millis();
+    lastDataSyncTime = lastSyncTime = millis();
     rxBytes += recvBytes;
   } else {
     Serial.print("[HTTP] Server rejected request (status ");
@@ -705,9 +758,14 @@ bool TeleClientHTTP::connect(bool quick)
   bool success = false;
 
 #if ENABLE_WIFI
-  if (wifi.connected()) success = wifi.open(SERVER_HOST, SERVER_PORT);
+  if (wifi.connected()) {
+    success = wifi.open(SERVER_HOST, SERVER_PORT);
+    m_useWifi = success;
+    if (!success) Serial.println("[NET] Wi-Fi HTTPS failed; trying cellular");
+  }
 #endif
   if (!success) {
+    m_useWifi = false;
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
       success = cell.open(SERVER_HOST, SERVER_PORT);
       if (!success) {
@@ -718,7 +776,7 @@ bool TeleClientHTTP::connect(bool quick)
     }
   }
   if (!success) {
-    Serial.println("[CELL] Unable to connect");
+    Serial.println("[NET] Unable to open HTTPS on either transport");
     return false;
   }
   if (quick) return true;
@@ -762,10 +820,10 @@ void TeleClientHTTP::shutdown()
   if (wifi.connected()) {
     wifi.end();
     Serial.println("[WIFI] Deactivated");
-    return;
   }
 #endif
   cell.close();
   cell.end();
   Serial.println("[CELL] Deactivated");
+  m_useWifi = false;
 }

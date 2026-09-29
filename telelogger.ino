@@ -18,12 +18,17 @@
 #include <FreematicsPlus.h>
 #include <httpd.h>
 #include <esp_sleep.h>
+#include <sys/time.h>
+#include <time.h>
 #include "config.h"
 #ifndef PREFER_CELLULAR
 #define PREFER_CELLULAR 0
 #endif
 #include "telestore.h"
 #include "teleclient.h"
+#include "telequeue.h"
+#include "sdexport.h"
+#include "sdaccess.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
 #endif
@@ -78,6 +83,9 @@ DTC_POLLING_INFO dtcData[] = {
 };
 
 CBufferManager bufman;
+#if STORAGE == STORAGE_SD
+DurableQueue durableQueue;
+#endif
 Task subtask;
 #if ENABLE_NETWORK_STATUS_SIGNALS
 Task statusTask;
@@ -122,6 +130,7 @@ char isoTime[32] = {0};
 
 // stats data
 uint32_t lastMotionTime = 0;
+volatile uint32_t lastCollectionTime = 0;
 uint32_t lastOBDDistanceTime = 0;
 uint32_t lastGPSDistanceTime = 0;
 uint32_t timeoutsOBD = 0;
@@ -332,6 +341,15 @@ void beepTone(unsigned int frequency, int duration)
     sys.buzzer(0);
 }
 
+void recordingAlert(const char* message)
+{
+  Serial.println(message);
+  for (uint8_t tone = 0; tone < 3; tone++) {
+    beepTone(1600, 120);
+    if (tone < 2) delay(100);
+  }
+}
+
 #if ENABLE_NETWORK_STATUS_SIGNALS
 void statusSignals(void* inst)
 {
@@ -341,6 +359,13 @@ void statusSignals(void* inst)
   bool restoreChirpPending = false;
   uint32_t offlineSince = 0;
   uint32_t lastAlertAt = 0;
+  uint32_t activeSince = 0;
+  uint32_t observedServerResponse = 0;
+  uint32_t lastServerResponse = 0;
+  bool monitoringServer = false;
+  bool serverAlerted = false;
+  bool recordingFaultAlerted = false;
+  uint32_t recordingFaultSince = 0;
 
   for (;;) {
     const uint32_t now = millis();
@@ -349,6 +374,49 @@ void statusSignals(void* inst)
     const bool cellOnline = state.check(STATE_NET_READY | STATE_CELL_CONNECTED);
     const bool wifiOnline = state.check(STATE_NET_READY | STATE_WIFI_CONNECTED);
     const bool networkOnline = cellOnline || wifiOnline;
+
+#if ENABLE_AUDIBLE_SERVER_ALERTS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+    // Only an accepted telemetry batch updates lastDataSyncTime. A login or
+    // ping cannot silence this alarm while recording remains unavailable.
+    const uint32_t responseAt = teleClient.lastDataSyncTime;
+    if (standbyMode) {
+      monitoringServer = false;
+      observedServerResponse = responseAt;
+      serverAlerted = false;
+    } else {
+      if (!monitoringServer) {
+        monitoringServer = true;
+        activeSince = now;
+        lastServerResponse = 0;
+      }
+      if (responseAt && responseAt != observedServerResponse) {
+        observedServerResponse = responseAt;
+        lastServerResponse = responseAt;
+        if (serverAlerted) Serial.println("[STATUS] Server response restored");
+        serverAlerted = false;
+      }
+      const uint32_t contactSince = lastServerResponse ? lastServerResponse : activeSince;
+      if (!serverAlerted && now - contactSince >= SERVER_RESPONSE_ALERT_MS) {
+        serverAlerted = true;
+        recordingAlert("[STATUS] No accepted telemetry for 60 seconds; three audible beeps");
+      }
+    }
+#if STORAGE == STORAGE_SD
+    const bool recordingFault = !standbyMode && working &&
+      ((!durableQueue.healthy() || !logger.healthy()) ||
+       (lastCollectionTime && now - lastCollectionTime >= SERVER_RESPONSE_ALERT_MS));
+    if (!recordingFault) {
+      recordingFaultSince = 0;
+      recordingFaultAlerted = false;
+    } else {
+      if (!recordingFaultSince) recordingFaultSince = now;
+      if (!recordingFaultAlerted && now - recordingFaultSince >= NETWORK_ALERT_GRACE_MS) {
+        recordingFaultAlerted = true;
+        recordingAlert("[STATUS] Local recording or SD journal failed; three audible beeps");
+      }
+    }
+#endif
+#endif
 
     if (networkOnline) {
       if (!hadNetwork) {
@@ -719,6 +787,50 @@ bool processGPS(CBuffer* buffer)
     return false;
   }
 
+  // On some mobile networks NITZ and modem NTP are unavailable. A valid GNSS
+  // position also supplies UTC; seed the ESP32 clock so the modem can use it
+  // on its next HTTPS attempt without disabling certificate date checks.
+  time_t currentUtc;
+  time(&currentUtc);
+  if (gd->date && gd->sat >= 4 &&
+      gd->hdop > 0 && gd->hdop <= 5 &&
+      isfinite(gd->lat) && isfinite(gd->lng) &&
+      fabsf(gd->lat) <= 90 && fabsf(gd->lng) <= 180) {
+    struct tm utc = {};
+    utc.tm_year = (gd->date % 100) + 100;
+    utc.tm_mon = ((gd->date / 100) % 100) - 1;
+    utc.tm_mday = gd->date / 10000;
+    utc.tm_hour = gd->time / 1000000;
+    utc.tm_min = (gd->time / 10000) % 100;
+    utc.tm_sec = (gd->time / 100) % 100;
+    if (utc.tm_year >= 124 && utc.tm_year <= 137 &&
+        utc.tm_mon >= 0 && utc.tm_mon < 12 && utc.tm_mday >= 1 && utc.tm_mday <= 31 &&
+        utc.tm_hour < 24 && utc.tm_min < 60 && utc.tm_sec < 60) {
+      const struct tm supplied = utc;
+      // Newlib on this ESP32 toolchain exposes mktime but not timegm.
+      setenv("TZ", "UTC0", 1);
+      tzset();
+      time_t seconds = mktime(&utc);
+      struct tm check;
+      if (seconds >= 1704067200 && gmtime_r(&seconds, &check) &&
+          check.tm_year == supplied.tm_year && check.tm_mon == supplied.tm_mon &&
+          check.tm_mday == supplied.tm_mday) {
+        // A saved clock has no knowledge of time spent powered off. Refine it
+        // from GNSS as well as seeding a previously unset clock.
+        if (currentUtc < 1704067200 || llabs((long long)seconds - currentUtc) >= 2) {
+          struct timeval tv = {seconds, 0};
+          if (settimeofday(&tv, nullptr) == 0) Serial.println("[TIME] ESP32 clock synchronised from validated GNSS fix");
+        }
+        static uint32_t lastClockCheckpoint = 0;
+        if (!lastClockCheckpoint || millis() - lastClockCheckpoint >= 3600000UL) {
+          nvs_set_u32(nvs, "last_utc", seconds);
+          nvs_commit(nvs);
+          lastClockCheckpoint = millis();
+        }
+      }
+    }
+  }
+
   float kph = gd->speed * 1.852f;
   if ((lastGPSLat || lastGPSLng) && kph >= 1) {
     float latDelta = (gd->lat - lastGPSLat) * DEG_TO_RAD;
@@ -884,6 +996,21 @@ void printTime()
   }
 }
 
+float readVehicleVoltage()
+{
+#if ENABLE_OBD
+  if (sys.devType > 12) return (float)(analogRead(A0) * 45) / 4095;
+  return obd.getVoltage();
+#else
+  return 0;
+#endif
+}
+
+bool vehiclePowerPresent()
+{
+  return readVehicleVoltage() >= 6.0f;
+}
+
 #if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
 bool passiveCanCaptureComplete = false;
 
@@ -924,8 +1051,7 @@ void capturePassiveCAN()
 *******************************************************************************/
 void initialize()
 {
-  // dump buffer data
-  bufman.purge();
+  // Keep readings queued before standby or a component reinitialisation.
   tripDistanceKm = 0;
   lastOBDSpeed = 0;
   lastOBDDistanceTime = 0;
@@ -953,7 +1079,7 @@ void initialize()
     timeoutsOBD = 0;
     lastOBDInitAttempt = millis();
     clearOBDReadings();
-    if (obd.init()) {
+    if (vehiclePowerPresent() && obd.init()) {
       Serial.println("[OBD] ECU connected");
       state.set(STATE_OBD_READY);
       lastOBDInitAttempt = millis();
@@ -974,6 +1100,9 @@ void initialize()
     // init storage
     if (logger.init()) {
       state.set(STATE_STORAGE_READY);
+#if STORAGE == STORAGE_SD
+      durableQueue.begin();
+#endif
     }
   }
   if (state.check(STATE_STORAGE_READY)) {
@@ -1056,15 +1185,40 @@ void showStats()
 
 bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confirmationSamples = 1)
 {
-#if ENABLE_MEMS
   unsigned long t = millis();
-  if (state.check(STATE_MEMS_READY)) {
     uint8_t motionHits = 0;
+    uint8_t ignitionHits = 0;
+    const bool initiallyPowered = vehiclePowerPresent();
+    uint32_t lastOBDProbe = t;
     do {
+      const float voltage = readVehicleVoltage();
+      if (voltage >= IGNITION_WAKE_VOLTAGE || (!initiallyPowered && voltage >= 6.0f)) {
+        if (++ignitionHits >= IGNITION_WAKE_CONFIRM_SAMPLES) {
+          Serial.println("[POWER] Vehicle power or ignition confirmed; waking recorder");
+          return true;
+        }
+      } else {
+        ignitionHits = 0;
+      }
+#if ENABLE_OBD
+      // Charging voltage is not universal on cars with smart alternators.
+      // A bounded read-only ECU probe also detects ignition while stationary.
+      if (voltage >= 6.0f && millis() - lastOBDProbe >= OBD_WAKE_POLL_MS) {
+        lastOBDProbe = millis();
+        obd.leaveLowPowerMode();
+        int rpm = 0;
+        if (obd.readPID(PID_RPM, rpm)) {
+          Serial.println("[POWER] ECU responded; waking recorder");
+          return true;
+        }
+        obd.enterLowPowerMode();
+      }
+#endif
       // calculate relative movement
       float motion = 0;
       float acc[3];
-      if (!mems->read(acc)) continue;
+#if ENABLE_MEMS
+      if (mems && state.check(STATE_MEMS_READY) && mems->read(acc)) {
       if (accCount == 10) {
         accCount = 0;
         accSum[0] = 0;
@@ -1079,6 +1233,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
         float m = (acc[i] - accBias[i]);
         motion += m * m;
       }
+      }
+#endif
 #if ENABLE_HTTPD
       serverProcess(100);
 #endif
@@ -1104,10 +1260,6 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       esp_light_sleep_start();
     } while (state.check(STATE_STANDBY) && ((long)(millis() - t) < timeout || timeout == -1));
     return false;
-  }
-#endif
-  serverProcess(timeout);
-  return false;
 }
 
 /*******************************************************************************
@@ -1119,6 +1271,16 @@ void process()
   uint32_t startTime = millis();
 
   CBuffer* buffer = bufman.getFree();
+  if (!buffer) {
+    bufman.recordMissedReading();
+    static uint32_t lastWarning = 0;
+    if (!lastWarning || millis() - lastWarning >= 10000UL) {
+      Serial.println("[CRITICAL] No RAM slot or durable storage; new readings cannot be captured");
+      lastWarning = millis();
+    }
+    delay(50);
+    return;
+  }
   buffer->state = BUFFER_STATE_FILLING;
 
 #if ENABLE_OBD
@@ -1140,7 +1302,7 @@ void process()
         reportOBDCapabilities();
       }
     }
-  } else if (obdInitDue) {
+  } else if (obdInitDue && vehiclePowerPresent()) {
     lastOBDInitAttempt = obdNow;
     clearOBDReadings();
     if (obd.init(PROTO_AUTO, true)) {
@@ -1177,11 +1339,7 @@ void process()
     (state.check(STATE_WIFI_CONNECTED) ? 1 : 0);
   buffer->add(PID_NETWORK_TRANSPORT, ELEMENT_UINT8, &networkTransport, sizeof(networkTransport));
 #if ENABLE_OBD
-  if (sys.devType > 12) {
-    batteryVoltage = (float)(analogRead(A0) * 45) / 4095;
-  } else {
-    batteryVoltage = obd.getVoltage();
-  }
+  batteryVoltage = readVehicleVoltage();
   if (batteryVoltage) {
     uint16_t v = batteryVoltage * 100;
     buffer->add(PID_BATTERY_VOLTAGE, ELEMENT_UINT16, &v, sizeof(v));
@@ -1223,9 +1381,16 @@ void process()
   uint32_t queuedBytes = bufman.pendingBytes();
   buffer->add(PID_QUEUE_READINGS, ELEMENT_UINT16, &queuedReadings, sizeof(queuedReadings));
   buffer->add(PID_QUEUE_BYTES, ELEMENT_UINT32, &queuedBytes, sizeof(queuedBytes));
+  uint32_t missedReadings = bufman.missedReadings();
+  buffer->add(PID_MISSED_READINGS, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));
+#if STORAGE == STORAGE_SD
+  uint32_t durableBytes = durableQueue.pendingBytes();
+  buffer->add(PID_DURABLE_QUEUE_BYTES, ELEMENT_UINT32, &durableBytes, sizeof(durableBytes));
+  uint8_t queueHealthy = durableQueue.healthy() ? 1 : 0;
+  buffer->add(PID_DURABLE_QUEUE_HEALTH, ELEMENT_UINT8, &queueHealthy, sizeof(queueHealthy));
+#endif
 
   buffer->timestamp = millis();
-  buffer->state = BUFFER_STATE_FILLED;
 
   // display file buffer stats
   if (startTime - lastStatsTime >= 3000) {
@@ -1235,6 +1400,7 @@ void process()
 
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
+    logger.timestamp(buffer->timestamp);
     buffer->serialize(logger);
 #if STORAGE == STORAGE_SPIFFS
     if (logger.size() >= SPIFFS_MAX_FILE_BYTES) {
@@ -1254,6 +1420,28 @@ void process()
   }
 #endif
 
+#if STORAGE == STORAGE_SD
+  bool journaled = false;
+  if (durableQueue.ready()) {
+    static char sampleFrame[1536];
+    CStorageRAM sampleStore;
+    sampleStore.init(sampleFrame, sizeof(sampleFrame));
+    sampleStore.timestamp(buffer->timestamp);
+    buffer->serialize(sampleStore);
+    if (!sampleStore.overflowed() &&
+        durableQueue.append(sampleStore.buffer(), sampleStore.length())) {
+      // The SD journal owns this reading. Keep RAM as the fallback if the
+      // card write fails.
+      journaled = true;
+      bufman.free(buffer);
+    }
+  }
+  if (!journaled) buffer->state = BUFFER_STATE_FILLED;
+#else
+  buffer->state = BUFFER_STATE_FILLED;
+#endif
+  lastCollectionTime = millis();
+
   const int dataIntervals[] = DATA_INTERVAL_TABLE;
 #if ENABLE_OBD || ENABLE_MEMS
   // motion adaptive data interval control
@@ -1268,13 +1456,32 @@ void process()
     }
   }
   if (stationary) {
-    // stationery timeout
-    Serial.print("Stationary for ");
-    Serial.print(motionless);
-    Serial.println(" secs");
-    // trip ended, go into standby
-    state.clear(STATE_WORKING);
-    return;
+    const uint16_t volatileReadings = bufman.unpersistedReadings();
+    bool usbBacklog = false;
+#if STORAGE == STORAGE_SD
+    // USB bench power must allow the existing backlog to finish uploading.
+    // Vehicle standby still follows the normal parked power policy.
+    usbBacklog = !vehiclePowerPresent() && durableQueue.pendingBytes() != 0;
+#endif
+    if (!volatileReadings && !usbBacklog) {
+      Serial.print("Stationary for ");
+      Serial.print(motionless);
+      Serial.println(" secs");
+      // The SD journal survives the standby wake reboot; RAM does not.
+      state.clear(STATE_WORKING);
+      return;
+    }
+    static uint32_t lastRetentionWarning = 0;
+    if (!lastRetentionWarning || millis() - lastRetentionWarning >= 30000UL) {
+      if (volatileReadings) {
+        Serial.print("[POWER] Keeping active until ");
+        Serial.print(volatileReadings);
+        Serial.println(" RAM-only readings are uploaded or journaled");
+      } else {
+        Serial.println("[POWER] USB powered; keeping active to upload the SD backlog");
+      }
+      lastRetentionWarning = millis();
+    }
   }
 #else
   dataInterval = dataIntervals[0];
@@ -1396,7 +1603,6 @@ void telemetry(void* inst)
       }
       state.clear(STATE_NET_READY | STATE_CELL_CONNECTED | STATE_WIFI_CONNECTED);
       teleClient.reset();
-      bufman.purge();
       // Stay entirely off-network until the MEMS wake path clears standby.
       // This avoids recurring SIM traffic and makes parked power draw stable.
       while (state.check(STATE_STANDBY)) delay(1000);
@@ -1508,10 +1714,47 @@ void telemetry(void* inst)
       // only one sample is waiting but avoids a request storm after an outage.
       CBuffer* batch[HTTP_BATCH_MAX_SAMPLES];
       uint8_t batchCount = 0;
+      bool replaying = false;
       store.purge();
 #if SERVER_PROTOCOL == PROTOCOL_UDP
       store.header(devid);
 #endif
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+      // A sample held in RAM after an SD write failure must not starve behind
+      // a journal that keeps receiving fresh samples indefinitely.
+      replaying = durableQueue.pendingBytes() != 0 && bufman.pendingReadings() == 0;
+      if (replaying) {
+        uint32_t batchStarted = millis();
+        char frame[1536];
+        while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
+          uint32_t position = durableQueue.readPosition();
+          uint16_t length = 0;
+          if (!durableQueue.peek(frame, sizeof(frame), &length)) {
+            if (batchCount && millis() - batchStarted < HTTP_BATCH_MAX_WAIT_MS) {
+              delay(25);
+              continue;
+            }
+            break;
+          }
+          store.checkpoint();
+          if (!store.appendRaw(frame, length)) {
+            store.rollback();
+            durableQueue.rewind(position);
+            break;
+          }
+          batchCount++;
+        }
+        if (batchCount) {
+          store.tailer();
+        } else if (!durableQueue.healthy()) {
+          // Keep sending RAM-backed readings when a damaged journal cannot
+          // advance. The journal stays intact for recovery and health alerts.
+          replaying = false;
+        }
+      }
+      if (!replaying)
+#endif
+      {
       while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
         CBuffer* buffer = bufman.getOldest();
         if (!buffer) {
@@ -1542,6 +1785,7 @@ void telemetry(void* inst)
         break;
 #endif
       }
+      }
       if (!batchCount) {
         store.purge();
         delay(50);
@@ -1551,10 +1795,22 @@ void telemetry(void* inst)
       Serial.print(batchCount);
       Serial.print(" readings | payload: ");
       Serial.print(store.length());
-      Serial.print(" bytes | oldest reading: ");
-      Serial.print(millis() - batch[0]->timestamp);
-      Serial.print(" ms | transport: ");
+      if (replaying) {
+#if STORAGE == STORAGE_SD
+        Serial.print(" bytes | SD backlog: ");
+        Serial.print(durableQueue.pendingBytes());
+#endif
+      } else {
+        Serial.print(" bytes | oldest reading: ");
+        Serial.print(millis() - batch[0]->timestamp);
+        Serial.print(" ms");
+      }
+      Serial.print(" | transport: ");
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+      Serial.println(teleClient.usingWifi() ? "Wi-Fi" : "cellular");
+#else
       Serial.println(state.check(STATE_CELL_CONNECTED) ? "cellular" : "Wi-Fi");
+#endif
 
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = true;
@@ -1565,15 +1821,23 @@ void telemetry(void* inst)
 #endif
       if (sent) {
         // Free the entire batch only after the server accepts it.
-        for (uint8_t i = 0; i < batchCount; i++) bufman.free(batch[i]);
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+        if (replaying) durableQueue.acknowledge();
+        else
+#endif
+          for (uint8_t i = 0; i < batchCount; i++) bufman.free(batch[i]);
         connErrors = 0;
         showStats();
       } else {
         // Retain the whole batch for an at-least-once ordered retry after the
         // connection recovers instead of silently dropping outage data.
-        for (uint8_t i = 0; i < batchCount; i++) {
-          batch[i]->state = BUFFER_STATE_FILLED;
-        }
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+        if (replaying) durableQueue.retry();
+        else
+#endif
+          for (uint8_t i = 0; i < batchCount; i++) {
+            batch[i]->state = BUFFER_STATE_FILLED;
+          }
         timeoutsNet++;
         connErrors++;
         printTimeoutStats();
@@ -1619,7 +1883,8 @@ void telemetry(void* inst)
         // device too hot, cool down by pause transmission
         Serial.print("HIGH DEVICE TEMP: ");
         Serial.println(deviceTemp);
-        bufman.purge();
+        // A thermal pause must never erase the pending readings.
+        delay(1000);
       }
 
     }
@@ -1657,8 +1922,10 @@ void standby()
   Serial.println("[POWER] Standby: radios off; tracking paused until serious motion");
   obd.enterLowPowerMode();
 #if ENABLE_MEMS
-  calibrateMEMS();
-  mems->setLowPower(true);
+  if (mems && state.check(STATE_MEMS_READY)) {
+    calibrateMEMS();
+    mems->setLowPower(true);
+  }
   waitMotion(-1, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES);
 #elif ENABLE_OBD
   do {
@@ -1770,6 +2037,9 @@ void loadConfig()
 
 void processBLE(int timeout)
 {
+#if STORAGE == STORAGE_SD
+  processSDExport();
+#endif
 #if ENABLE_BLE
   static byte echo = 0;
   char* cmd;
@@ -1950,6 +2220,13 @@ void setup()
   if (ledMode == 0) digitalWrite(PIN_LED, HIGH);
 #endif
 
+  uint32_t savedUTC = 0;
+  if (nvs_get_u32(nvs, "last_utc", &savedUTC) == ESP_OK && savedUTC >= 1704067200UL) {
+    struct timeval tv = {(time_t)savedUTC, 0};
+    settimeofday(&tv, nullptr);
+    Serial.println("[TIME] Restored last known UTC; cellular/GNSS can correct it");
+  }
+
   // generate unique device ID
   genDeviceID(devid);
 
@@ -2038,13 +2315,21 @@ if (!state.check(STATE_MEMS_READY)) do {
 #endif
 
   // initialize components
+#if ENABLE_NETWORK_STATUS_SIGNALS
+  // Start the alarm before GNSS, OBD and storage setup can block.
+  if (!statusTask.create(statusSignals, "status", 1, 3072)) {
+    Serial.println("[CRITICAL] Status task creation failed");
+    beepTone(1600, 500);
+  }
+#endif
   initialize();
 
   // initialize network and maintain connection
-  subtask.create(telemetry, "telemetry", 2, 8192);
-#if ENABLE_NETWORK_STATUS_SIGNALS
-  statusTask.create(statusSignals, "status", 1, 2048);
-#else
+  if (!subtask.create(telemetry, "telemetry", 2, 12288)) {
+    Serial.println("[CRITICAL] Upload task creation failed; retaining local recordings");
+    beepTone(1600, 500);
+  }
+#if !ENABLE_NETWORK_STATUS_SIGNALS
 #ifdef PIN_LED
   digitalWrite(PIN_LED, LOW);
 #endif
@@ -2066,6 +2351,37 @@ void loop()
     return;
   }
 
+#if STORAGE == STORAGE_SD
+  // A failed boot mount otherwise leaves the device on its finite RAM queue
+  // for the entire active session. Retry at a bounded rate; an already-open
+  // logger must not be reopened just because the journal was unavailable.
+  static uint32_t lastSDRetry = 0;
+  if ((!state.check(STATE_STORAGE_READY) || !logger.healthy() || !durableQueue.healthy()) &&
+      (lastSDRetry == 0 || millis() - lastSDRetry >= 30000UL)) {
+    lastSDRetry = millis();
+    Serial.println("[STORAGE] Retrying SD storage");
+    SDGuard recovery;
+    if (recovery) {
+      // Recovery can replay an already accepted batch. It cannot advance past
+      // the saved cursor or discard a RAM sample while the card is unavailable.
+      logger.end();
+      durableQueue.suspend();
+      state.clear(STATE_STORAGE_READY);
+      SD.end();
+      SPI.end();
+      delay(100);
+      if (logger.init()) {
+        if (durableQueue.begin()) Serial.println("[STORAGE] SD journal recovered; replay enabled");
+        fileid = logger.begin();
+        if (fileid) state.set(STATE_STORAGE_READY);
+      }
+    }
+  }
+#endif
+
   // collect and log data
+#if STORAGE == STORAGE_SD
+  logger.maintain();
+#endif
   process();
 }

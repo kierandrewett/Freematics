@@ -4,9 +4,9 @@
 #define ENABLE_OBD 1
 #define ENABLE_MEMS 1
 #define GNSS GNSS_STANDALONE
-#define STORAGE STORAGE_SPIFFS
+#define STORAGE STORAGE_SD
 
-#define ENABLE_WIFI 1
+#define ENABLE_WIFI 0
 #define PREFER_CELLULAR 1
 #define WIFI_SSID "your-wifi-ssid"
 #define WIFI_PASSWORD "your-wifi-password"

@@ -53,11 +53,15 @@ public:
     CBuffer* getNewest();
     void printStats();
     uint16_t pendingReadings() const;
+    uint16_t unpersistedReadings() const;
     uint32_t pendingBytes() const;
+    void recordMissedReading() { missed++; }
+    uint32_t missedReadings() const { return missed; }
 private:
     CBuffer** slots = 0;
     CBuffer* last = 0;
     uint32_t total = 0;
+    uint32_t missed = 0;
 };
 
 class TeleClient
@@ -78,7 +82,8 @@ public:
     uint32_t txCount = 0;
     uint32_t txBytes = 0;
     uint32_t rxBytes = 0;
-    uint32_t lastSyncTime = 0;
+    volatile uint32_t lastSyncTime = 0;
+    volatile uint32_t lastDataSyncTime = 0;
     uint16_t feedid = 0;
     uint32_t startTime = 0;
     uint8_t packets = 0;
@@ -109,8 +114,13 @@ public:
     bool transmit(const char* packetBuffer, unsigned int packetSize);
     bool ping();
     void shutdown();
+    // A connected Wi-Fi station does not imply that its HTTPS socket opened.
+    // Remember the transport that actually owns this HTTP session.
+    bool usingWifi() const { return m_useWifi; }
 #if ENABLE_WIFI
     WifiHTTP wifi;
 #endif
     CellHTTP cell;
+private:
+    bool m_useWifi = false;
 };

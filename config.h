@@ -70,7 +70,7 @@
 **************************************/
 #if BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 512 /* bytes per slot */
+#define BUFFER_LENGTH 1024 /* bytes per slot; retain complete rich samples */
 #define SERIALIZE_BUFFER_SIZE 4096 /* bytes */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
@@ -102,7 +102,7 @@
 * Networking configurations
 **************************************/
 #ifndef ENABLE_WIFI
-#define ENABLE_WIFI 1
+#define ENABLE_WIFI 0
 // WiFi settings
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
@@ -221,11 +221,12 @@
 **************************************/
 // motion threshold for waking up
 #define MOTION_THRESHOLD 0.4f /* vehicle motion threshold in G */
-// Parked wake requires stronger movement and three consecutive samples. This
-// avoids waking the radios for a single bump or vibration while still catching
-// a meaningful vehicle movement.
-#define STANDBY_MOTION_THRESHOLD 0.5f /* parked wake threshold in G */
+// Confirm normal driving acceleration, rather than requiring a sustained shock.
+#define STANDBY_MOTION_THRESHOLD 0.08f /* parked wake threshold in G */
 #define STANDBY_MOTION_CONFIRM_SAMPLES 3
+#define IGNITION_WAKE_VOLTAGE 13.2f
+#define IGNITION_WAKE_CONFIRM_SAMPLES 3
+#define OBD_WAKE_POLL_MS 15000UL
 // engine jumpstart voltage for waking up (when MEMS unavailable) 
 #define JUMPSTART_VOLTAGE 14 /* V */
 // reset device after waking up
@@ -240,10 +241,11 @@
 // The onboard LED is single-colour. Distinct cadences communicate transport
 // and power state without requiring a display.
 #define ENABLE_NETWORK_STATUS_SIGNALS 1
-// Keep the buzzer silent in normal production operation. The host-side
-// notifier reports state changes; a local sound is reserved for an explicit
-// future critical-alarm policy rather than routine coverage changes.
+// Routine transport changes remain silent. A missing accepted server response
+// for a full minute while actively collecting gets three local beeps.
 #define ENABLE_AUDIBLE_NETWORK_ALERTS 0
+#define ENABLE_AUDIBLE_SERVER_ALERTS 1
+#define SERVER_RESPONSE_ALERT_MS 60000UL
 // Ignore short cellular handovers before announcing a genuine outage.
 #define NETWORK_ALERT_GRACE_MS 15000UL
 // Do not turn a flapping modem into a repeating audible alarm.
