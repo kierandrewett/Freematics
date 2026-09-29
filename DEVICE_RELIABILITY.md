@@ -153,26 +153,29 @@ parked idle cutoff. Parked motion checks use the normal light-sleep policy.
 
 ## Final installed image
 
-The production logger is installed without USB SD export.
+The production logger is installed with faster OBD polling and without USB SD export.
 
-- Firmware source revision: `451a5d9`, with the existing production configuration.
-- Build identity: `cell-local-only-20260929`.
-- Image size: 632,992 bytes.
-- SHA-256: `c4a135ceb782f37448b74f593d905ff9f764247585b2608ea252330ad6b0cf9e`.
+- Firmware source revision: `ac15b98`, with the existing production configuration.
+- Build identity: `obd-fast-20260929`.
+- Image size: 633,712 bytes.
+- SHA-256: `f19f0d7a103e9c147ea4b09f47aa6af69e5d12bbf5c34c335cdb7d73adfee4e6`.
 - PlatformIO upload completed and esptool verified the written image hash.
 - The image has no FSD request parser, SD export responses or USB clock command.
-- Twenty focused lifecycle/alarm checks passed after removal.
+- Twenty lifecycle/alarm checks passed after the polling changes.
 - Wi-Fi remains disabled. No formatting branch is present in the normal image.
-- The first live check received cellular acknowledgements. SD recording still
-  failed after the flash, and the independent warning continued every five seconds.
-  After a full USB power disconnect, the final 180-second log capture received
-  57 acknowledgements for 28,538 values. The CSV counter grew from
-  4 KB to 6 KB. The capture had zero SD errors, recording warnings or resets.
-  The remaining backlog was 1,254,435 bytes, and the collector file
-  `20260929-112334.txt` grew from 59,705 to 287,463 bytes.
-  This confirmed bench recording after a cold power cycle. A later three-cycle
-  check also passed as detailed below. The previously observed software-only
-  reset fault remains unresolved, and in-car OBD collection is unverified.
+- The moving target is 250 ms: RPM is requested every cycle, two other core PIDs
+  rotate each cycle, and one auxiliary PID is interleaved each cycle. The upload
+  batch wait is capped at one second. ECU response latency limits real rates.
+- USB bench boot confirmed the build identity and SD journal. One SD mount attempt
+  failed at boot and correctly triggered the repeating alarm; local recording
+  recovered and the alarm stopped. This is a recorded transient fault, not a clean
+  mount on every boot.
+- The same boot established cellular TLS/login and received repeated collector
+  acknowledgements. It drained the prior SD backlog from 18,846 bytes to 107 bytes;
+  new journal files were retained locally under the 14-day policy.
+- No vehicle ECU was connected during this check, so actual OBD cadence, ECU load,
+  and in-car collection remain unverified. The earlier three cold-power cycles
+  and software-only reset caveat are recorded below.
 
 ### Three-cycle cold-power check
 
