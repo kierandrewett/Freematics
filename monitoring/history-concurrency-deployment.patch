@@ -1,0 +1,34 @@
+--- a/machines/bsociety/freematics/compose.yml
++++ b/machines/bsociety/freematics/compose.yml
+@@ -192,3 +192,3 @@
+             - ./mechanic_report.schema.json:/app/mechanic_report.schema.json:ro
+-            - /config/apps/freematics/history:/history:ro
++            - /config/apps/freematics/history:/history
+             - /config/apps/freematics/intelligence:/state
+@@ -215,3 +215,3 @@
+             - ./trip_intelligence.py:/app/trip_intelligence.py:ro
+-            - /config/apps/freematics/history:/history:ro
++            - /config/apps/freematics/history:/history
+             - /config/apps/freematics/intelligence:/state
+@@ -241,3 +241,3 @@
+             - ./trip_intelligence.py:/app/trip_intelligence.py:ro
+-            - /config/apps/freematics/history:/history:ro
++            - /config/apps/freematics/history:/history
+             - /config/apps/freematics/intelligence:/state:ro
+@@ -271,3 +271,3 @@
+             - ./ui:/app/ui:ro
+-            - /config/apps/freematics/history:/history:ro
++            - /config/apps/freematics/history:/history
+             - /config/apps/freematics/intelligence:/state
+--- a/machines/bsociety/metrics/compose.yml
++++ b/machines/bsociety/metrics/compose.yml
+@@ -96,3 +96,3 @@
+             - /config/apps/nextdns:/var/lib/nextdns:ro
+-            - /config/apps/freematics/history:/var/lib/freematics-history:ro
++            - /config/apps/freematics/history:/var/lib/freematics-history
+         networks:
+--- a/machines/bsociety/metrics/datasources.yml
++++ b/machines/bsociety/metrics/datasources.yml
+@@ -89 +89,2 @@
+           path: /var/lib/freematics-history/history.sqlite
++          pathOptions: "mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(10000)"

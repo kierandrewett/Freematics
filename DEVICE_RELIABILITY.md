@@ -20,10 +20,6 @@
 - Uploaded data disappears from the local archive.
 - An unbounded archive retention scan stalls fresh collection for seconds as the directory grows.
 - Retention removes recent data, data of unknown age, the active file, or unacknowledged journal data.
-- A computer reads while the device writes. Export complete bounded responses and do not expose writes.
-- USB disconnects, a serial response is damaged, or the firmware restarts. Return an I/O error and reconnect.
-- ESP32 light sleep loses incoming USB serial requests while parked. Keep serial input available on USB power.
-- A malformed export path accesses credentials or changes device configuration.
 - An SD failure produces only one warning and then remains silent. Repeat three
   beeps every five seconds until fresh local recording recovers.
 - Accepted cellular data, disabled server alerts or a different upload protocol
@@ -34,6 +30,8 @@
   Warn after 15 seconds without progress, and continue the alarm.
 - An SD remount reports healthy before a fresh sample is recorded. Do not clear
   the alarm until storage is healthy and a new sample has completed.
+- Removing USB SD export must preserve local journal writes, 14-day retention,
+  cellular transport and the independent repeating alarm.
 
 ## Current evidence
 
@@ -103,16 +101,16 @@ because the card failed to mount first. The earlier physical archive check passe
 The dashboard displayed "Starting" for a device with no recent telemetry.
 It now displays "No recent telemetry". That label was verified in live Grafana.
 
-## USB filesystem requirement
+## USB SD feature removed
 
-The existing USB socket terminates at a CH340 serial bridge. The attached
-ESP32-D0WDQ6 has no native USB device controller. ESP32-S2/S3 USB mass-storage
-examples cannot change the descriptors or function of this bridge.
-A real mass-storage filesystem through this socket requires a hardware change.
-See [Espressif USB support](https://docs.espressif.com/projects/esp-faq/en/latest/software-framework/peripherals/usb.html).
+Kieran withdrew the USB SD request on 29 September. The firmware SD export
+module, FSD command parser, USB clock/beep commands, diagnostic host reader
+and export command test are removed. The final image contains none of the
+export command or response strings. No filesystem mount is installed.
 
-`tools/freematics_sd.py` is a serial diagnostic reader. It is not USB mass
-storage. No FUSE mount or automatic host mount is installed.
+USB still supplies power and supports firmware flashing and ordinary serial
+logs. Local SD recording, cellular upload, 14-day retention and the repeated
+recording fault warning remain enabled.
 
 ## Recovery and retention behaviour
 
@@ -133,8 +131,7 @@ Unacknowledged data is never removed by retention. A failed existence check
 cannot truncate an existing journal because creation uses `O_EXCL`.
 
 On USB power, an existing backlog keeps the upload task active beyond the
-parked idle cutoff. USB serial input also remains available during parked
-idle. Vehicle power retains the normal parked sleep policy.
+parked idle cutoff. Parked motion checks use the normal light-sleep policy.
 
 ## Acceptance gates
 
@@ -150,9 +147,69 @@ idle. Vehicle power retains the normal parked sleep policy.
 - [x] Final installed build identity and image hash recorded below.
 - [ ] Repeated reboot and sustained SD recording/upload remain healthy.
 - [ ] Physical ignition/OBD collection verified in the car (USB only available).
-- [ ] Real USB mass storage available (requires different hardware).
+- [x] USB SD export removed at the user request; local SD retention preserved.
 
 ## Final installed image
+
+The production logger is installed without USB SD export.
+
+- Firmware source revision: `451a5d9`, with the existing production configuration.
+- Build identity: `cell-local-only-20260929`.
+- Image size: 632,992 bytes.
+- SHA-256: `c4a135ceb782f37448b74f593d905ff9f764247585b2608ea252330ad6b0cf9e`.
+- PlatformIO upload completed and esptool verified the written image hash.
+- The image has no FSD request parser, SD export responses or USB clock command.
+- Twenty focused lifecycle/alarm checks passed after removal.
+- Wi-Fi remains disabled. No formatting branch is present in the normal image.
+- The first live check received cellular acknowledgements. SD recording still
+  failed after the flash, and the independent warning continued every five seconds.
+  After a full USB power disconnect, the final 180-second log capture received
+  57 acknowledgements for 28,538 values. The CSV counter grew from
+  4 KB to 6 KB. The capture had zero SD errors, recording warnings or resets.
+  The remaining backlog was 1,254,435 bytes, and the collector file
+  `20260929-112334.txt` grew from 59,705 to 287,463 bytes.
+  This confirms current bench recording. The recurring warm-reset fault remains
+  unresolved, so repeated-reboot and in-car acceptance gates remain open.
+
+## Cold-power recovery evidence before export removal
+
+A complete USB power disconnect restored the existing card. The original
+journal header and CRC were read successfully; the card was not formatted.
+The 300-second observation received 105 acknowledgements for 52,461 values,
+with zero SD driver failures, fault warnings or resets. The backlog fell from
+3,152,323 to 2,725,164 bytes and the collector archive grew to 606,450 bytes.
+
+A subsequent full directory check stalled collection. The export reader
+rescanned prefixes and command retries delayed the collection loop. These
+export paths are now removed. The card failed again after a later warm flash;
+its underlying physical or driver fault remains unconfirmed. The previous
+healthy interval does not establish long-term or in-car reliability.
+
+## Grafana database-lock correction
+
+The history database used DELETE journal mode while the indexer rewrote
+active archives every five seconds. Grafana failed those reads immediately
+with SQLITE_BUSY. The live plugin logs confirmed the reported failure.
+
+The deployed schema now uses WAL. Reader connections remain read-only;
+the directory mounts allow SQLite to create its WAL/shared-memory sidecars.
+Grafana path options set `mode=ro`, `query_only(1)` and a 10-second busy timeout.
+The history database was backed up and passed `PRAGMA quick_check` before the
+change (478,121,984 bytes). Deployment used targeted `/srv/up.sh` updates.
+
+The concurrency check failed before the change and passed after it. It checks
+writer commits during an existing read, stable old-reader data, fresh new-reader
+data, reopening after the writer exits, and rejection of SQL writes by readers.
+The actual Trips dashboard refreshed with archive rows, and the plugin completed
+128 history queries with zero database-lock errors after deployment.
+
+The existing history test suite has one unrelated GNSS fixture failure: its
+YYMMDD fixture disagrees with the firmware DDMMYY decoder. The committed
+baseline produces the same timestamp mismatch. It was not changed here.
+Some empty-data time-series panels still report a plugin conversion error;
+that is separate from the corrected SQLite lock failure.
+
+## Previous repeating-alarm image
 
 The normal production logger is installed with the repeating fault alarm.
 
@@ -191,7 +248,8 @@ from the device. The modem radio was restored with `AT+CFUN=1` before upload.
   not be opened. It does not establish that the real journal is empty. Its
   last successful physical size check was 3,681,396 bytes.
 
-Remaining physical checks are a full power disconnect, another cable or USB
-port, and a known-good SD card. The car ignition/OBD check remains unavailable
+The final cold-power check passed for three minutes. Remaining physical checks
+are another cable or USB port, and a known-good SD card to isolate the recurring
+warm-reset fault. The car ignition/OBD check remains unavailable
 because Kieran can use USB only. No card format or deletion of the original
 journal was performed.
