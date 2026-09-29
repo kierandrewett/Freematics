@@ -2219,7 +2219,9 @@ void processBLE(int timeout)
   buf[n] = 0;
   ble_send_response(buf, n, cmd);
 #else
-  if (timeout) delay(timeout);
+  // Keep USB requests responsive throughout a long stationary sample interval.
+  // process() continues this wait until the original collection deadline.
+  if (timeout) delay(min(timeout, 25));
 #endif
 }
 
