@@ -168,8 +168,8 @@ The normal production logger is installed with the repeating fault alarm.
 - The installed image does not include the format-provisioning branch or its
   message. The live log has no format-provisioning message. The SD card was not
   formatted during this review.
-- The buzzer waveform was already heard on the previous image. Confirmation
-  that Kieran hears the new repeated warning is pending.
+- Kieran confirmed that the warning on this image keeps repeating. The alarm
+  cadence and physical audibility are both verified.
 
 ## Previous production image evidence
 
