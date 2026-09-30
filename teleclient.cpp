@@ -19,6 +19,9 @@
 #include "telestore.h"
 #include "teleclient.h"
 #include "config.h"
+#if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+#include "esp32/rom/miniz.h"
+#endif
 
 extern int16_t rssi;
 extern char devid[];
@@ -649,7 +652,44 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
   }
 }
 
+#if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+// zlib-compress one batch with the ESP32 ROM deflate. Full-rate samples repeat
+// most PIDs and values, so a 40-sample batch shrinks about 6x. Returns 0 when
+// compression fails; the caller then sends the batch as it is.
+size_t deflateBatch(const char* input, size_t length, uint8_t* output, size_t capacity)
+{
+  // About 100 KB of compressor state, allocated once in PSRAM.
+  static tdefl_compressor* compressor =
+    (tdefl_compressor*)heap_caps_malloc(sizeof(tdefl_compressor), MALLOC_CAP_SPIRAM);
+  if (!compressor || !input || !output) return 0;
+  if (tdefl_init(compressor, nullptr, nullptr, TDEFL_WRITE_ZLIB_HEADER | HTTP_COMPRESS_PROBES) != TDEFL_STATUS_OKAY) {
+    return 0;
+  }
+  size_t consumed = length;
+  size_t produced = capacity;
+  const tdefl_status status = tdefl_compress(compressor, input, &consumed, output, &produced, TDEFL_FINISH);
+  return status == TDEFL_STATUS_DONE && consumed == length ? produced : 0;
+}
+#endif
+
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
+{
+#if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+  static uint8_t* packed = (uint8_t*)heap_caps_malloc(SERIALIZE_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+  const size_t packedSize = packed ? deflateBatch(packetBuffer, packetSize, packed, SERIALIZE_BUFFER_SIZE) : 0;
+  if (packedSize && packedSize < packetSize) {
+    if (transmitBody(packetBuffer, packetSize, (const char*)packed, packedSize)) return true;
+    // A collector without inflate support, or a compression fault, must not
+    // make the device set readings aside. Resend the batch as it is.
+    if (lastStatus != 400) return false;
+    Serial.println("[HTTP] Compressed batch refused; resending uncompressed");
+  }
+#endif
+  return transmitBody(packetBuffer, packetSize, nullptr, 0);
+}
+
+bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetSize,
+                                  const char* packed, unsigned int packedSize)
 {
   lastStatus = 0;
 #if ENABLE_WIFI
@@ -691,21 +731,24 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
     success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, path);
   }
 #else
-  len = snprintf(path, sizeof(path), "%s/post/%s", SERVER_PATH, devid);
+  len = snprintf(path, sizeof(path), packed ? "%s/post/%s?z=1" : "%s/post/%s", SERVER_PATH, devid);
+  // The field count check below always uses the uncompressed batch.
+  const char* body = packed ? packed : packetBuffer;
+  const unsigned int bodySize = packed ? packedSize : packetSize;
 #if ENABLE_WIFI
   if (m_useWifi) {
     Serial.print("[HTTP] POST via Wi-Fi: ");
     Serial.println(path);
-    success = wifi.send(METHOD_POST, path, packetBuffer, packetSize);
+    success = wifi.send(METHOD_POST, path, body, bodySize);
   }
   else
 #endif
   {
     Serial.print("[HTTP] POST via cellular: ");
     Serial.println(path);
-    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, packetBuffer, packetSize);
+    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, body, bodySize);
   }
-  len += packetSize;
+  len += bodySize;
 #endif
   if (!success) {
     Serial.println("[HTTP] Connection closed");

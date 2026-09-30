@@ -129,5 +129,8 @@ public:
 #endif
     CellHTTP cell;
 private:
+    // One POST. packed, when set, is the zlib form of packetBuffer (?z=1).
+    bool transmitBody(const char* packetBuffer, unsigned int packetSize,
+                      const char* packed, unsigned int packedSize);
     bool m_useWifi = false;
 };

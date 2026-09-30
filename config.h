@@ -206,6 +206,11 @@
 // Batch size adapts to the link: halve after a failed request, grow by
 // HTTP_BATCH_GROW_STEP after each accepted one. A weak signal resends less.
 #define HTTP_BATCH_MIN_SAMPLES 4
+// zlib-compress POST bodies (collector 2026-10-01 or later inflates ?z=1).
+// A refused compressed batch is resent uncompressed, so older collectors work.
+#define HTTP_COMPRESS_UPLOADS 1
+// Deflate effort: dictionary probes per match search (ROM miniz, max 4095).
+#define HTTP_COMPRESS_PROBES 32
 #define HTTP_BATCH_GROW_STEP 4
 // Bound live latency while allowing normal samples to share a request.
 #define HTTP_BATCH_MAX_WAIT_MS 1000UL
