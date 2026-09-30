@@ -9,7 +9,7 @@ uint32_t simulationTime = 0;
 void runJournalScenarios();
 void runMEMSScenarios();
 int runJournalDrive();
-int runRebootDrive();
+int runRebootDrive(bool strictServer);
 
 class DummyBridge : public CLink
 {
@@ -49,7 +49,8 @@ int main(int argc, char** argv)
 {
     std::cout << std::setprecision(17);
     if (argc == 2 && std::string(argv[1]) == "--drive") return runJournalDrive();
-    if (argc == 2 && std::string(argv[1]) == "--drive-reboot") return runRebootDrive();
+    if (argc == 2 && std::string(argv[1]) == "--drive-reboot") return runRebootDrive(false);
+    if (argc == 2 && std::string(argv[1]) == "--drive-reboot-strict") return runRebootDrive(true);
     DummyBridge bridge;
     COBD obd;
     obd.begin(&bridge);

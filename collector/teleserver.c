@@ -1502,6 +1502,89 @@ static void keepRejectedPayload(CHANNEL_DATA* pld, const char* payload, unsigned
 	fclose(fp);
 }
 
+/* Count fields the way the firmware does before it accepts "OK <n>": every
+ * non-empty comma-separated token before the '*' checksum, except PID 0
+ * timestamps. */
+static int deviceFieldCount(const char* text)
+{
+	int count = 0;
+	const char* at = text;
+	for (;;) {
+		const char* end = at;
+		while (*end && *end != ',' && *end != '*') end++;
+		if (end > at && !(end - at >= 2 && at[0] == '0' && at[1] == ':')) count++;
+		if (!*end || *end == '*') break;
+		at = end + 1;
+	}
+	return count;
+}
+
+/* One sample never blocks the rest of a batch. A sample that breaks the
+ * validation rules is kept in rejected.txt with its reason. A clock reset
+ * (the device rebooted) splits the batch into segments, and each segment
+ * goes through processPayload(), which already starts a new trip archive at
+ * a reset between POSTs. The reply counts every field handled, stored or
+ * set aside, so the firmware releases the batch instead of resending it
+ * forever. Only an empty or oversized body is refused (-1). */
+static int processTelemetryBatch(CHANNEL_DATA* pld, char* payload)
+{
+	if (!payload) return -1;
+	size_t length = strnlen(payload, MAX_TELEMETRY_RECORD_SIZE + 1);
+	if (!length || length > MAX_TELEMETRY_RECORD_SIZE) {
+		rejectReason = "payload size";
+		return -1;
+	}
+	/* The checksum covers the whole body; samples are handled on their own. */
+	char* checksum = strrchr(payload, '*');
+	if (checksum) *checksum = 0;
+	char* segment = malloc(length + 2);
+	if (!segment) return -2;
+	size_t segmentLength = 0;
+	uint32_t segmentLast = 0;
+	int handled = 0;
+	int result = 0;
+	char* sample = payload;
+	while (sample && *sample && result >= 0) {
+		/* A sample runs from its PID 0 timestamp to the next one. Values never
+		 * contain commas, so ",0:" only ever starts a new timestamp field. */
+		char* next = strstr(sample + 1, ",0:");
+		if (next) *next = 0;
+		uint32_t first = 0, last = 0;
+		if (!validatePayload(sample, &first, &last)) {
+			keepRejectedPayload(pld, sample, (unsigned int)strlen(sample));
+			handled += deviceFieldCount(sample);
+		} else {
+			if (segmentLength && (int32_t)(first - segmentLast) < 0) {
+				segment[segmentLength] = 0;
+				int stored = processPayload(segment, pld, 0);
+				if (stored < 0) result = stored;
+				else handled += stored;
+				segmentLength = 0;
+			}
+			if (result >= 0) {
+				if (segmentLength) segment[segmentLength++] = ',';
+				size_t sampleLength = strlen(sample);
+				memcpy(segment + segmentLength, sample, sampleLength);
+				segmentLength += sampleLength;
+				segmentLast = last;
+			}
+		}
+		sample = next ? next + 1 : NULL;
+	}
+	if (result >= 0 && segmentLength) {
+		segment[segmentLength] = 0;
+		int stored = processPayload(segment, pld, 0);
+		if (stored < 0) result = stored;
+		else handled += stored;
+	}
+	free(segment);
+	if (result >= 0 && !handled) {
+		rejectReason = "no telemetry fields";
+		return -1;
+	}
+	return result < 0 ? result : handled;
+}
+
 int uhPost(UrlHandlerParam* param)
 {
 	param->contentLength = 0;
@@ -1535,7 +1618,7 @@ int uhPost(UrlHandlerParam* param)
 	printf("POST from %u.%u.%u.%u | ",
 		param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0]);
 
-	int count = processPayload(param->pucPayload, pld, 0);
+	int count = processTelemetryBatch(pld, param->pucPayload);
 	if (count == -2) {
 		param->hs->response.statusCode = 503;
 		int responseLength = snprintf(param->pucBuffer, param->bufSize, "Telemetry archive unavailable");
@@ -1545,7 +1628,7 @@ int uhPost(UrlHandlerParam* param)
 		return FLAG_DATA_RAW;
 	}
 	if (count < 0) {
-		keepRejectedPayload(pld, param->pucPayload, param->payloadSize);
+		fprintf(stderr, "[REJECT] %s: %s (%u bytes)\n", pld->devid, rejectReason, param->payloadSize);
 		param->hs->response.statusCode = 400;
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "Invalid telemetry payload");
 		if (param->contentLength >= param->bufSize) param->contentLength = 0;

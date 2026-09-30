@@ -59,18 +59,33 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
             assert list((root / 'data' / 'BATCHED').rglob('*.txt')) == batch_files
             archived_batch = batch_files[0].read_text()
             assert all(f'0:{1000+250*i},' in archived_batch for i in range(8))
-            # Reject a malformed later frame before writing any part of it.
+            # A malformed sample is set aside with its reason; the valid sample
+            # in the same batch is stored, and the reply counts both, so the
+            # device releases the batch instead of resending it forever.
             text = '0:3000,10C:1,0:4294967296,10C:2'
-            invalid = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            mixed = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            assert request(base, '/api/post/BATCHED', mixed).strip() == b'OK 2'
+            archive = ''.join(path.read_text() for path in (root / 'data' / 'BATCHED').rglob('*.txt')
+                              if path.name != 'rejected.txt')
+            assert '0:3000,10C:1' in archive and '4294967296' not in archive
+            rejected = (root / 'data' / 'BATCHED' / 'rejected.txt').read_text()
+            assert ' invalid timestamp 0:4294967296,10C:2' in rejected, rejected
+            # A reboot inside one batch restarts the device clock. Both halves
+            # are stored; the older-clock half starts a new trip archive.
+            text = '0:9000,10C:5,40C:0,0:1000,10C:6,40C:0'
+            reboot = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            assert request(base, '/api/post/BATCHED', reboot).strip() == b'OK 4'
+            files = list((root / 'data' / 'BATCHED').rglob('*.txt'))
+            archive = ''.join(path.read_text() for path in files if path.name != 'rejected.txt')
+            assert '0:9000,10C:5,40C:0' in archive and '0:1000,10C:6,40C:0' in archive
             from urllib.error import HTTPError
             try:
-                request(base, '/api/post/BATCHED', invalid)
+                request(base, '/api/post/BATCHED', b'*00')
             except HTTPError as error:
                 assert error.code == 400
             else:
-                raise AssertionError('Malformed batch accepted')
-            assert batch_files[0].read_text() == archived_batch
-            print('PASS: eight-sample HTTP batch, lost-response retry stays in one archive, invalid later timestamp rejected atomically')
+                raise AssertionError('Empty body accepted')
+            print('PASS: eight-sample HTTP batch, lost-response retry stays in one archive, malformed sample set aside, reboot inside a batch stored')
             # A disconnected ECU must retain explicitly aged values while
             # legacy firmware without ages must still clear stale live data.
             text = '0:2000,10C:900,40C:1000,89:0'

@@ -105,8 +105,17 @@ def drive(executable, collector):
             return results, packets, (root / "collector.log").read_text()
 
 
-def drive_reboot(executable):
-    """Replay a journal spanning a reboot, plus one malformed frame, into a real collector."""
+def strict_status(packet):
+    """The collector's pre-1 October rule: refuse a whole batch for one bad field or a clock reset."""
+    body = packet.split("*")[0]
+    ticks = [int(field[2:]) for field in body.split(",") if field.startswith("0:")]
+    if any(field.endswith(":") for field in body.split(",")) or ticks != sorted(ticks):
+        return 400, b"Invalid telemetry payload"
+    return 200, b"OK %d" % sum(1 for field in body.split(",") if field and not field.startswith("0:"))
+
+
+def drive_reboot(executable, strict=False):
+    """Replay a journal spanning a reboot, plus one malformed frame, into a collector."""
     with tempfile.TemporaryDirectory(prefix="freematics-reboot-") as directory:
         root = Path(directory)
         (root / "data").mkdir()
@@ -129,7 +138,8 @@ def drive_reboot(executable):
                     except OSError:
                         time.sleep(0.05)
                 request(base, "/api/notify/EMULATOR?EV=1&TS=1000")
-                child = subprocess.Popen([str(executable), "--drive-reboot"], stdin=subprocess.PIPE,
+                child = subprocess.Popen([str(executable), "--drive-reboot-strict" if strict else "--drive-reboot"],
+                                         stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 for line in child.stdout:
                     event = json.loads(line)
@@ -139,26 +149,31 @@ def drive_reboot(executable):
                     requests += 1
                     if requests > 200:
                         raise RuntimeError("Reboot replay exceeded its request limit")
-                    try:
-                        body = request(base, "/api/post/EMULATOR", event["packet"].encode())
-                        status = 200
-                    except urllib.error.HTTPError as error:
-                        status, body = error.code, error.read()
+                    if strict:
+                        status, body = strict_status(event["packet"])
+                    else:
+                        try:
+                            body = request(base, "/api/post/EMULATOR", event["packet"].encode())
+                            status = 200
+                        except urllib.error.HTTPError as error:
+                            status, body = error.code, error.read()
                     statuses.append(status)
                     child.stdin.write(f"{status} {body.decode().strip()}\n")
                     child.stdin.flush()
                 child.wait(timeout=5)
-                archive = "".join(path.read_text() for path in (root / "data").rglob("*.txt"))
-                expected = [f"0:{900000 + index * 250}," for index in range(40) if index != 20]
-                expected += [f"0:{1000 + index * 250}," for index in range(40)]
-                missing = [tick for tick in expected if tick not in archive]
-                results.append({"scenario": "journal spanning a reboot reaches the collector without a stuck batch",
-                                "status": "PASS" if not missing else "ERROR", "observed": len(expected) - len(missing)})
-                kept = "".join(path.read_text() for path in (root / "data").rglob("rejected.txt"))
-                results.append({"scenario": "collector keeps the refused payload with its reason",
-                                "status": "PASS" if " empty value 0:905000,10C:," in kept else "ERROR",
-                                "observed": kept.count("\n")})
-                results.append({"scenario": "reboot replay requests and HTTP statuses",
+                if not strict:
+                    archive = "".join(path.read_text() for path in (root / "data").rglob("*.txt")
+                                      if path.name != "rejected.txt")
+                    expected = [f"0:{900000 + index * 250}," for index in range(40) if index != 20]
+                    expected += [f"0:{1000 + index * 250}," for index in range(40)]
+                    missing = [tick for tick in expected if tick not in archive]
+                    results.append({"scenario": "journal spanning a reboot reaches the collector without a stuck batch",
+                                    "status": "PASS" if not missing else "ERROR", "observed": len(expected) - len(missing)})
+                    kept = "".join(path.read_text() for path in (root / "data").rglob("rejected.txt"))
+                    results.append({"scenario": "collector keeps the refused payload with its reason",
+                                    "status": "PASS" if " empty value 0:905000,10C:," in kept else "ERROR",
+                                    "observed": kept.count("\n")})
+                results.append({"scenario": ("strict server" if strict else "collector") + " reboot replay requests and HTTP statuses",
                                 "status": "PASS", "observed": requests, "statuses": statuses})
             finally:
                 for process in (child, server):
@@ -295,6 +310,7 @@ class MEMS_I2C {};
         drive_results, packets, collector_log = drive(executable, args.collector)
         if args.collector:
             drive_results += drive_reboot(executable)
+            drive_results += drive_reboot(executable, strict=True)
     results = [json.loads(line) for line in output.splitlines()]
     results.extend(drive_results)
     sources = [client, ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp",

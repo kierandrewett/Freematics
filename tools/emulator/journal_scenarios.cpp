@@ -294,7 +294,7 @@ int runJournalDrive()
 // Boot B restarts the device clock at 1000 ms and records 40 more. Replay uses
 // the production batch builder and acknowledgement policy against a real
 // collector, whose answers arrive on stdin as "<status> <body>".
-int runRebootDrive()
+int runRebootDrive(bool strictServer)
 {
     resetCard();
     DurableQueue recording;
@@ -331,8 +331,18 @@ int runRebootDrive()
         settleReplayBatch(upload, isolation, sent, status, count, frame, lastLength);
     }
     const bool rejectKept = SD.exists("/QUEUE.REJ") && cardFiles.at("/QUEUE.REJ")->size() > 12;
-    report("reboot replay accepts every valid frame and keeps the refused one on the card",
-           frames == 79 && upload.rejectedCount() == 1 && rejectKept && upload.pendingBytes() == 0, false, frames);
-    report("reboot replay batches", batches < 20, false, batches);
+    if (strictServer) {
+        // A server that refuses whole batches: the device must isolate the bad
+        // frame, keep it on the card and deliver every other frame.
+        report("strict server: every valid frame delivered, refused frame kept on the card",
+               frames == 79 && upload.rejectedCount() == 1 && rejectKept && upload.pendingBytes() == 0, false, frames);
+        report("strict server: requests to isolate the refused frame", batches < 20, false, batches);
+    } else {
+        // The collector sets malformed samples aside itself and acknowledges
+        // the whole batch, so the device never needs its reject file.
+        report("collector acknowledges every frame; device keeps nothing aside",
+               frames == 80 && upload.rejectedCount() == 0 && upload.pendingBytes() == 0, false, frames);
+        report("collector reboot replay requests", batches < 8, false, batches);
+    }
     return 0;
 }
