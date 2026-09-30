@@ -16,7 +16,7 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While moving, the device targets 250 ms samples: RPM is read every cycle, two other core PIDs rotate each cycle, and one auxiliary PID is interleaved each cycle. This continuously reports every ECU-advertised Mode 01 PID over a rotating scan; the ECU's serial diagnostic link and response latency bound the actual per-PID rate. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
+Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While powered, the sampler records a row every 250 ms from background sensor snapshots. Each held value includes its acquisition age. The OBD worker targets a 250 ms cycle for RPM, speed and rotating core PIDs, with one auxiliary PID interleaved per cycle. This continuously reports every ECU-advertised Mode 01 PID over a rotating scan; the ECU's serial diagnostic link and response latency bound the actual per-PID rate. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
   
 Data Transmission
 -----------------
@@ -40,13 +40,17 @@ Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi,
 
 HTTPS requires the configured bearer token for the Caddy-protected collector. The token is injected at build time and is never stored in the repository. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
 
-The collector refuses to start without a non-empty HTTP password (`-w`). If
-UDP is enabled, it also requires a server key (`-k`). Keep the collector
+The collector requires a non-empty HTTP password (`-w`) by default. An
+installation behind an authenticated HTTP reverse proxy can instead use
+`-x -u 0`; this mode disables built-in HTTP authentication and the UDP listener.
+If UDP is enabled, it requires a server key (`-k`). Keep the collector
 listener behind the authenticated Caddy service; do not expose its HTTP or
 UDP ports directly.
 The collector acknowledges a telemetry POST only after the raw archive batch
 has been flushed and synced to disk. If the archive cannot be opened, written,
 or synced, it returns HTTP 503 so the device retains and retries the batch.
+The collector validates every timestamp in a multi-sample POST before writing it.
+Retrying a batch that ends at the last accepted timestamp keeps the same trip archive.
 Replay can still duplicate a batch after a lost response, and older queued
 readings can inherit a later collector trip. The reading-identity and durable
 inbox migration is specified in

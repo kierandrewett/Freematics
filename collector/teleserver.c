@@ -84,6 +84,7 @@ char dataDir[256] = "data";
 char logDir[256] = "log";
 char serverKey[256] = { 0 };
 int noGUI = 0;
+int trustedHTTPProxy = 0;
 
 CHANNEL_DATA ld[MAX_CHANNELS];
 
@@ -748,7 +749,7 @@ static int parsePayloadTimestamp(const char* value, size_t length, uint32_t* tim
 	return 1;
 }
 
-static int validatePayload(const char* payload, uint32_t* timestamp)
+static int validatePayload(const char* payload, uint32_t* timestamp, uint32_t* finalTimestamp)
 {
 	if (!payload) return 0;
 	size_t payloadLength = strnlen(payload, MAX_TELEMETRY_RECORD_SIZE + 1);
@@ -756,6 +757,7 @@ static int validatePayload(const char* payload, uint32_t* timestamp)
 	const char* field = payload;
 	const char* payloadEnd = payload + payloadLength;
 	int timestampFound = 0;
+	uint32_t previousTimestamp = 0;
 	for (;;) {
 		const char* fieldEnd = strchr(field, ',');
 		if (!fieldEnd) fieldEnd = payloadEnd;
@@ -778,7 +780,13 @@ static int validatePayload(const char* payload, uint32_t* timestamp)
 		const char* value = separator + 1;
 		if (value >= fieldEnd) return 0;
 		if (pid == 0) {
-			if (timestampFound || !parsePayloadTimestamp(value, (size_t)(fieldEnd - value), timestamp)) return 0;
+			uint32_t parsedTimestamp;
+			if (!parsePayloadTimestamp(value, (size_t)(fieldEnd - value), &parsedTimestamp)) return 0;
+			/* Batches retain every sample timestamp, including clock rollover. */
+			if (timestampFound && (int32_t)(parsedTimestamp - previousTimestamp) < 0) return 0;
+			if (!timestampFound && timestamp) *timestamp = parsedTimestamp;
+			previousTimestamp = parsedTimestamp;
+			if (finalTimestamp) *finalTimestamp = parsedTimestamp;
 			timestampFound = 1;
 		}
 		if (fieldEnd == payloadEnd) break;
@@ -799,9 +807,12 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 {
 	if (!payload || !pld) return -1;
 	uint64_t tick = GetTickCount64();
-	uint32_t payloadTs = 0;
-	if (eventID == 0 && !validatePayload(payload, &payloadTs)) return -1;
-	int newTrip = payloadTs && pld->deviceTick &&
+	uint32_t payloadTs = 0, finalPayloadTs = 0;
+	if (eventID == 0 && !validatePayload(payload, &payloadTs, &finalPayloadTs)) return -1;
+	/* A lost response resends a complete batch ending at the same tick.
+	 * It must remain in the existing archive instead of looking like reboot. */
+	int repeatedBatch = eventID == 0 && finalPayloadTs == pld->deviceTick;
+	int newTrip = !repeatedBatch && payloadTs && pld->deviceTick &&
 		((payloadTs < pld->deviceTick && pld->deviceTick - payloadTs > PROXY_MAX_TIME_BEHIND) ||
 		 (payloadTs > pld->deviceTick && payloadTs - pld->deviceTick > SESSION_GAP));
 	if (eventID == 0) {
@@ -839,6 +850,7 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 
 	char *p = payload;
 	uint32_t ts = 0;
+	int haveTimestamp = 0;
 	int count = 0;
 	do {
 		int pid = hex2uint16(p);
@@ -859,10 +871,11 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 		// now we have pid and value
 		if (pid == 0) {
 			// special PID 0 for timestamp
-			ts = atol(value);
+			ts = strtoul(value, NULL, 10);
+			haveTimestamp = 1;
 			continue;
 		}
-		if (ts == 0) {
+		if (!haveTimestamp) {
 			// no valid timestamp yet
 			continue;
 		}
@@ -916,9 +929,9 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 			pld->data[i].ts = 0;
 		}
 	}
-	if (ts == 0) ts = pld->deviceTick;
+	if (!haveTimestamp) ts = pld->deviceTick;
 	int64_t interval = (int64_t)ts - (int64_t)pld->deviceTick;
-	if (ts) pld->deviceTick = ts;
+	if (haveTimestamp) pld->deviceTick = ts;
 
 	if (pld->flags & FLAG_RUNNING) {
 		// normal
@@ -1982,7 +1995,8 @@ int main(int argc,char* argv[])
 						"	-m	: specifiy max clients [default 256]\n"
 						"	-M	: specifiy max clients per IP\n"
 						"	-n	: specifiy HTTP authentication user name for remote access [default: admin]\n"
-						"	-w	: specifiy HTTP authentication password for remote access\n"
+						"	-x	: trust an authenticated HTTP reverse proxy (requires -u 0)\n"
+						"	-w	: specify HTTP authentication password for remote access\n"
 						"	-g	: do not launch GUI\n\n");
 					fflush(stderr);
 					exit(1);
@@ -2026,6 +2040,9 @@ int main(int argc,char* argv[])
 						return -1;
 					}
 					break;
+				case 'x':
+					trustedHTTPProxy = 1;
+					break;
 				case 'w':
 					if (++i >= argc || !copyArgument(password, sizeof(password), argv[i])) {
 						fprintf(stderr, "Invalid -w argument\n");
@@ -2037,15 +2054,19 @@ int main(int argc,char* argv[])
 		}
 	}
 
-	if (!password[0]) {
+	if (!password[0] && !trustedHTTPProxy) {
 		fprintf(stderr, "HTTP authentication password required; use -w\n");
+		return -1;
+	}
+	if (trustedHTTPProxy && httpParam.udpPort) {
+		fprintf(stderr, "Trusted HTTP proxy mode requires UDP disabled; use -u 0\n");
 		return -1;
 	}
 	if (httpParam.udpPort && !serverKey[0]) {
 		fprintf(stderr, "UDP server key required when UDP is enabled; use -k\n");
 		return -1;
 	}
-	httpParam.pxAuthHandler = authHandlerList;
+	if (password[0]) httpParam.pxAuthHandler = authHandlerList;
 
 	printf("Server Host: %s:%u\n", GetLocalAddrString(), httpParam.httpPort);
 	if (httpParam.udpPort) {

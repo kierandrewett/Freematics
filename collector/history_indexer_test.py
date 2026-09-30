@@ -279,10 +279,14 @@ class HistoryIndexerTest(unittest.TestCase):
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0].device_monotonic_ms, 100)
 
-    def test_parser_rejects_sentinel_device_tick(self) -> None:
+    def test_parser_keeps_maximum_valid_device_tick(self) -> None:
         frames = parse_frames("0:4294967295,10C:1,0:100,10C:2", include_final=True)
-        self.assertEqual(len(frames), 1)
-        self.assertEqual(frames[0].device_monotonic_ms, 100)
+        self.assertEqual([frame.device_monotonic_ms for frame in frames], [4294967295, 100])
+
+    def test_display_timeline_preserves_clock_rollover_interval(self) -> None:
+        frames = [Frame(0xFFFFFF00, {}, ()), Frame(0xFFFFFFFF, {}, ()), Frame(0, {}, ())]
+        timelines, _ = display_timestamps(frames, [None] * 3, ["unknown"] * 3, 1_000_000)
+        self.assertEqual(timelines, [1_000_000, 1_000_255, 1_000_256])
 
     def test_display_timeline_stays_monotonic_after_clock_reset(self) -> None:
         frames = [

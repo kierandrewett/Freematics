@@ -91,13 +91,42 @@ Further scenarios reproduced truncated voltage and oxygen reads, newest-entry ro
 reported as successful. These decoder, queue and ICM-42627 error-handling faults are now fixed. Signed queue comparisons
 assume queued timestamps span less than half the clock period, about 24.9 days.
 
-Remaining risks:
+Additional gap checks:
 
-- A partial or corrupt journal record stops replay. Mount recovery resets the flags but does not repair or quarantine
-  the damaged bytes. This preserves evidence, but the same record can stop replay again and leave new samples in finite RAM.
+```sh
+python3 tools/check-gps-coverage.py
+python3 tools/check-mems-recovery.py
+python3 tools/check-sampling-boundary.py
+python3 tools/check-collector-sampling.py
+FREEMATICS_TEST_PROXY=1 python3 tools/check-collector-sampling.py
+```
+
+The GPS check runs the production serializer and processor. It verifies a resumed position after an outage,
+held-fix ages, receiver time and quality before the first position fix, and callers without a sample buffer.
+The MEMS check runs the production acquisition worker through persistent read failures, a failed initialisation
+attempt, and successful recovery. These checks use controlled host clocks and hardware substitutes.
+
+The collector HTTP check sends eight samples in one POST, retries the batch, and rejects a malformed later
+timestamp before any archive write. It also checks legacy channel-state loading after a restart. The history
+indexer keeps the maximum valid clock value and uses signed elapsed time across a 32-bit clock rollover.
+
+The journal now recovers intact unacknowledged records around damaged bytes. It writes and verifies a replacement,
+then retains the original under `/RECOVERY`. These originals are outside normal log retention. Read, write or rename
+failures retain the source and permit another attempt. Recovery needs enough free SD space for the replacement.
+A reset between quarantine and promotion resumes the verified replacement. Accepted journal rotation removes old
+checkpoints before changing journal identity. This prevents a reset from applying an old offset to a new journal.
+
+Remaining limits:
+
+- Bytes that fail the record CRC remain in the original recovery archive. The firmware cannot reconstruct an
+  unknown measurement. The recovery log reports the number of damaged bytes.
+- An abrupt power loss destroys samples still in RAM while they wait for the recorder. The simulator does not
+  measure this persistence window. A failed or full SD card plus a network outage can exhaust the finite RAM queue.
+  Large journal repairs also use the storage worker and SD lock; sampling continues into that finite queue.
 - The MEMS worker replaces one snapshot about every 20 ms. The sampler records the latest snapshot every 250 ms.
   This does not preserve every sensor acquisition. A short acceleration peak can occur between recorded snapshots.
+- Cached fields carry their acquisition ages. A continuous graph does not prove that the ECU or sensor responded
+  on every sample. Firmware changes cannot fill old trip gaps or record while the device has no power.
 
-The simulator verifies that a damaged record cannot be skipped. It does not repair the damaged journal.
-An abrupt power loss also destroys samples that are still in RAM while they wait for the recorder.
-This simulator does not measure that persistence window.
+The ESP32 image still needs a physical SD failure/recovery check and a drive with recorded sensor ages and missed
+sample counts. The host checks do not execute the ESP32 scheduler or physical SD controller.

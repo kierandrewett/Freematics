@@ -134,7 +134,7 @@ def parse_frames(raw: str, include_final: bool = False) -> list[Frame]:
             fields[pid] = value
             ordered_fields.append((pid, value))
         timestamp = int(match.group(1))
-        if timestamp >= 0xFFFFFFFF:
+        if timestamp > 0xFFFFFFFF:
             continue
         frames.append(Frame(timestamp, fields, tuple(ordered_fields)))
     return frames
@@ -180,6 +180,11 @@ def gnss_capture_ms(fields: dict[str, str]) -> int | None:
     return int(parsed.timestamp() * 1_000) + int(age)
 
 
+def monotonic_delta(current: int, previous: int) -> int:
+    """Signed elapsed milliseconds across a 32-bit clock rollover."""
+    return (current - previous + 0x80000000) % 0x100000000 - 0x80000000
+
+
 def frame_timestamps(frames: list[Frame]) -> tuple[list[int | None], list[str]]:
     """Return capture timestamps and evidence quality for each frame.
 
@@ -205,11 +210,11 @@ def frame_timestamps(frames: list[Frame]) -> tuple[list[int | None], list[str]]:
         anchor = previous if previous is not None else following
         if anchor is None or captures[anchor] is None:
             continue
-        delta = frame.device_monotonic_ms - frames[anchor].device_monotonic_ms
+        delta = monotonic_delta(frame.device_monotonic_ms, frames[anchor].device_monotonic_ms)
         # A reboot/reset invalidates monotonic interpolation across the reset.
-        if previous is not None and frame.device_monotonic_ms < frames[previous].device_monotonic_ms:
+        if previous is not None and monotonic_delta(frame.device_monotonic_ms, frames[previous].device_monotonic_ms) < 0:
             continue
-        if following is not None and frame.device_monotonic_ms > frames[following].device_monotonic_ms:
+        if following is not None and monotonic_delta(frame.device_monotonic_ms, frames[following].device_monotonic_ms) > 0:
             continue
         captures[index] = captures[anchor] + delta
         qualities[index] = "anchored"
@@ -240,8 +245,10 @@ def display_timestamps(
             candidate = capture if capture is not None else login_ms
             offset = candidate - tick
         else:
-            if tick < previous_tick:
+            if monotonic_delta(tick, previous_tick) < 0:
                 offset = previous_timeline - tick
+            elif tick < previous_tick:
+                offset += 0x100000000
             candidate = capture if capture is not None else tick + offset
             if candidate < previous_timeline:
                 candidate = previous_timeline
@@ -509,7 +516,7 @@ class HistoryIndexer:
         timelines, time_bases = display_timestamps(frames, captures, qualities, login_ms)
         gap_count = sum(
             1 for previous_frame, frame in zip(frames, frames[1:])
-            if frame.device_monotonic_ms - previous_frame.device_monotonic_ms > GAP_THRESHOLD_MS
+            if monotonic_delta(frame.device_monotonic_ms, previous_frame.device_monotonic_ms) > GAP_THRESHOLD_MS
         )
         gps_fix_count, gps_poor_quality_count, speed_disagreement_count = tracking_quality(frames)
 

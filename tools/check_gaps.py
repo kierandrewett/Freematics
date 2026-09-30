@@ -4,6 +4,10 @@ import argparse
 import json
 from pathlib import Path
 import sqlite3
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "collector"))
+from history_indexer import monotonic_delta
 
 
 def report(connection, device, trip, required=(), max_gap_ms=375):
@@ -21,18 +25,18 @@ def report(connection, device, trip, required=(), max_gap_ms=375):
     for sequence, pid, value in fields:
         by_pid.setdefault(pid, {})[sequence] = value
     times = dict(samples)
-    intervals = [b[1] - a[1] for a, b in zip(samples, samples[1:])]
+    intervals = [monotonic_delta(b[1], a[1]) for a, b in zip(samples, samples[1:])]
     resets = sum(delta < 0 for delta in intervals)
     max_sample_gap = max([0, *intervals])
     metric_rows = []
     for pid in sorted(set(by_pid) | set(required)):
         values = by_pid.get(pid, {})
         present = [sequence for sequence, _ in samples if sequence in values]
-        gaps = [times[b] - times[a] for a, b in zip(present, present[1:])]
+        gaps = [monotonic_delta(times[b], times[a]) for a, b in zip(present, present[1:])]
         if present:
-            gaps += [times[present[0]] - samples[0][1], samples[-1][1] - times[present[-1]]]
+            gaps += [monotonic_delta(times[present[0]], samples[0][1]), monotonic_delta(samples[-1][1], times[present[-1]])]
         else:
-            gaps = [samples[-1][1] - samples[0][1]]
+            gaps = [monotonic_delta(samples[-1][1], samples[0][1])]
         number = int(pid, 16)
         age_pid = f'0x{0x400 | (number & 0xFF):03X}' if 0x100 <= number <= 0x1FF else {
             0x0A: '0x093', 0x0B: '0x093', 0x0C: '0x093', 0x0D: '0x093', 0x0E: '0x093',

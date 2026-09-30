@@ -1,0 +1,60 @@
+{
+  "date": "2026-09-30",
+  "firmware": {
+    "build_id": "gaps-20260930",
+    "path": ".pio/build/esp32dev/firmware.bin",
+    "bytes": 637936,
+    "sha256": "21c4b2219638ca43d30b6e2f62248cc67cf12946549c9c7dc0bcee5c9a59eaa1",
+    "flashed": false
+  },
+  "sources": {
+    "telelogger.ino": "5c7afb57ec6b443e2b94504d69ff4537bcc5fc993c557a9bddf7df14656101cd",
+    "telequeue.cpp": "5cd6eb5b3cda18b48af43d245df4b7091e164c721afe0482b2545d359a56cdd5",
+    "telequeue.h": "f31ce56694cf2b7920761378e8888f9800f41b58697e85a811d354ef47b56dfb",
+    "collector/teleserver.c": "d6b04f560c27d21edcbdfcdb5cff5bc2c9b1394aee4588ef7f93e4568874ae53",
+    "collector/teleserver.h": "09238b1e75c1a4ff95606edac867dc69af622aca3ab77d09a045132e7cde32af",
+    "collector/logdata.h": "ec56009682613f4f59ae01e69ad1a95ccb0df4c706402044dce89abd11373abc",
+    "collector/history_indexer.py": "783481ffd575530a8c117fec9dfef20087dd89e8b419887d5c491440c0faba1e",
+    "tools/check-gps-coverage.py": "148363e9743bae314816336f57511839ccb520b135c830d76cfd839807f4cdd7",
+    "tools/check-mems-recovery.py": "a0f941435e7450e24b05701d7ee10746f1766007ae2e3525caaeca0654fb4aa9",
+    "tools/check-collector-sampling.py": "3407ba434d45451f0041c2fd6d244475e7a613fd2ba3911ac900891c81ddb3a3",
+    "tools/check_gaps.py": "3058021d21ab62f627d27fffcc56feff10951952009416266fa8d9bb06d6c8f8"
+  },
+  "checks": {
+    "emulator": {
+      "command": "/usr/bin/python3 tools/emulator/run.py --strict --collector --sanitize --compiler clang++ --report .pio/build/esp32dev/gap-validation.json",
+      "passed": 40,
+      "total": 40,
+      "report": ".pio/build/esp32dev/gap-validation.json"
+    },
+    "sampling_boundary": "PASS: complete 261-field sample fits; 2400 fixed deadlines; overload counted; exclusive recorder/uploader custody",
+    "gps_coverage": "PASS: resumed position, no-position time and quality, held ages, null-buffer caller",
+    "mems_recovery": "PASS: repeated I2C failures, failed reinitialisation, successful resumption",
+    "history_indexer": "PASS: 16 tests, including maximum valid device tick and rollover interval",
+    "collector_http": "PASS: eight-sample batch, repeated batch stays in one archive, malformed later timestamp rejects the whole batch, held fields and legacy channel state",
+    "lifecycle_and_retention": "PASS: tools/check-device-lifecycle.py and tools/check-sd-retention.py",
+    "gap_report_rollover": "PASS: in-memory 250ms rollover trace reports zero resets",
+    "similarity": "similarity-py tools collector: existing validators, test fixtures and source extractors; no refactor required"
+  },
+  "deployment": {
+    "host": "bsociety",
+    "collector_image": "sha256:b6ad03b959fa8b2775e8942fa4db0a368c24f223b8bd94a3ac348ab1955036f1",
+    "history_image": "sha256:f876dfdcbfb142374c9f0420b85982c3a3b608a7021c86bb11bd6a7d9004e58c",
+    "collector_health": "running, healthy, zero restarts",
+    "history_health": "running, zero restarts",
+    "vehicle_trips": 152,
+    "vehicle_samples": 82279,
+    "startup": "Authenticated Caddy HTTP proxy mode -x -u 0; no built-in HTTP password required in this explicit mode",
+    "isolated_production_image_check": "PASS: real HTTP batch, retry, stale-age handling and legacy channel restart using the deployed image with temporary storage; no dummy device sent to production"
+  },
+  "limits": [
+    "No USB device is present; no firmware flash, drive or physical SD fault test was performed.",
+    "Power loss can destroy samples still awaiting persistence in RAM.",
+    "Failed/full SD plus a network outage or a large repair can exhaust finite RAM.",
+    "Damaged bytes remain in a recovery archive; unknown measurements cannot be reconstructed.",
+    "Held values include age; fresh ECU and sensor responses are not guaranteed at 250ms.",
+    "MEMS snapshots do not preserve every 20ms acquisition.",
+    "Old journal data crossing a reboot can still be assigned to a later collector trip; capture UTC fields remain in the archive.",
+    "The broader collector test suite hit three errors at git config user.name in unchanged Git mirror tests; four optional-dependency tests were skipped."
+  ]
+}

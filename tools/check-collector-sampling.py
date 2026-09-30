@@ -2,6 +2,7 @@
 """Exercise the real collector HTTP ingestion/API/archive with held readings."""
 from pathlib import Path
 import json
+import os
 import socket
 import subprocess
 import tempfile
@@ -9,6 +10,8 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+BINARY = Path(os.environ.get('FREEMATICS_COLLECTOR_BINARY', ROOT / 'collector/teleserver'))
+AUTH_ARGS = ['-x'] if os.environ.get('FREEMATICS_TEST_PROXY') == '1' else ['-w', 'sampling-fixture-only']
 
 
 def request(base, path, data=None):
@@ -26,11 +29,11 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
         port = s.getsockname()[1]
     base = f'http://127.0.0.1:{port}'
     with (root / 'server.log').open('wb') as log:
-        command = [str(ROOT / 'collector/teleserver'), '-g', '-p', str(port), '-u', '0', '-w', 'sampling-fixture-only',
+        command = [str(BINARY), '-g', '-p', str(port), '-u', '0', *AUTH_ARGS,
                    '-d', str(root / 'data'), '-l', str(root / 'log')]
         server = subprocess.Popen(command, cwd=root, stdout=log, stderr=log)
         try:
-            for _ in range(50):
+            for _ in range(120):
                 try:
                     request(base, '/api/test')
                     break
@@ -44,6 +47,30 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
                 packet = (text + f'*{sum(text.encode()) & 255:X}').encode()
                 result = request(base, '/api/post/FULLRATE', packet)
                 assert b'OK' in result, result
+            # Real firmware batches repeat PID 0. A lost response retries the
+            # same batch; neither acceptance nor retry may split the trip.
+            request(base, '/api/notify/BATCHED?EV=1&TS=1000')
+            text = ','.join(f'0:{1000+250*i},10C:{900+i},40C:0' for i in range(8))
+            packet = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            assert request(base, '/api/post/BATCHED', packet).strip() == b'OK 16'
+            batch_files = list((root / 'data' / 'BATCHED').rglob('*.txt'))
+            assert len(batch_files) == 1, batch_files
+            assert request(base, '/api/post/BATCHED', packet).strip() == b'OK 16'
+            assert list((root / 'data' / 'BATCHED').rglob('*.txt')) == batch_files
+            archived_batch = batch_files[0].read_text()
+            assert all(f'0:{1000+250*i},' in archived_batch for i in range(8))
+            # Reject a malformed later frame before writing any part of it.
+            text = '0:3000,10C:1,0:4294967296,10C:2'
+            invalid = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            from urllib.error import HTTPError
+            try:
+                request(base, '/api/post/BATCHED', invalid)
+            except HTTPError as error:
+                assert error.code == 400
+            else:
+                raise AssertionError('Malformed batch accepted')
+            assert batch_files[0].read_text() == archived_batch
+            print('PASS: eight-sample HTTP batch, lost-response retry stays in one archive, invalid later timestamp rejected atomically')
             # A disconnected ECU must retain explicitly aged values while
             # legacy firmware without ages must still clear stale live data.
             text = '0:2000,10C:900,40C:1000,89:0'
@@ -75,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
             legacy = b''.join(current[i*stride:i*stride+prefix] + current[i*stride+prefix+extension:(i+1)*stride] for i in range(16))
             state.write_bytes(legacy)
             server = subprocess.Popen(command, cwd=root, stdout=log, stderr=log)
-            for _ in range(50):
+            for _ in range(120):
                 try:
                     request(base, '/api/test'); break
                 except OSError:
