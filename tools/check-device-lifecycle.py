@@ -79,9 +79,8 @@ bool moving = false, speedKnown = true;
 int motionMode = 0;
 #define PID_SPEED 13
 struct Reading { byte pid; float value; uint32_t ts; };
-Reading obdData[1] = {{PID_SPEED,0,0}};
 using PID_POLLING_INFO = Reading;
-struct OBDSnapshot { Reading readings[1]; uint8_t status; } obdSnapshot;
+struct VehicleSignals { Reading rpm; Reading speed; uint32_t lastResponse; uint8_t status; } vehicleSignals;
 struct GPS_DATA { uint32_t ts; float speed,lat,lng; byte sat,hdop; } gpsSnapshot;
 
 uint32_t lastCollectionTime = 0;
@@ -116,8 +115,8 @@ void onTick() {
  if (motionMode==2) moving=tick<10000 || tick>=120000;
  if (motionMode==3 && tick>=10000) speedKnown=false;
  if (motionMode==4) voltage=tick<5000 ? 12.4 : 14.2;
- obdSnapshot.status=speedKnown;
- obdSnapshot.readings[0]={PID_SPEED,moving ? 20.f : 0.f,speedKnown ? tick : 0};
+ vehicleSignals.status=speedKnown;
+ vehicleSignals.speed={PID_SPEED,moving ? 20.f : 0.f,speedKnown ? tick : 0};
  if (loginReplies) teleClient.lastSyncTime=tick;
  if (dataReplies) teleClient.lastDataSyncTime=tick;
  if (collectReplies) lastCollectionTime=tick;

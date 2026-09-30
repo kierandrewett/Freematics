@@ -119,6 +119,16 @@ struct OBDSnapshot {
   uint8_t status;
 };
 OBDSnapshot obdSnapshot = {};
+// The few OBD values other tasks decide on. Copying the full 1.2 KB snapshot
+// every 25 ms in the 3 KB status task risked its stack and kept interrupts
+// off for longer than needed.
+struct VehicleSignals {
+  PID_POLLING_INFO rpm;
+  PID_POLLING_INFO speed;
+  uint32_t lastResponse; // latest successful OBD read, 0 before the first
+  uint8_t status;
+};
+VehicleSignals vehicleSignals = {};
 
 // After HTTP 400 on a batch, the refused frame is somewhere in the next
 // `suspect` frames. Halving the batch finds it in about 2 * log2(n) requests.
@@ -397,22 +407,18 @@ void beepTone(unsigned int frequency, int duration)
 // Unknown speed suppresses warnings but does not manufacture a trip end.
 bool readTripMotion(bool& moving)
 {
-  OBDSnapshot snapshot;
+  VehicleSignals signals;
   GPS_DATA fix;
   portENTER_CRITICAL(&sensorMux);
-  snapshot = obdSnapshot;
+  signals = vehicleSignals;
   fix = gpsSnapshot;
   portEXIT_CRITICAL(&sensorMux);
   const uint32_t now = millis();
-  if (snapshot.status) {
-    for (unsigned i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
-      const PID_POLLING_INFO& speed = snapshot.readings[i];
-      if (speed.pid == PID_SPEED && speed.ts && now - speed.ts <= TRIP_SPEED_FRESH_MS &&
-          isfinite(speed.value) && speed.value >= 0) {
-        moving = speed.value >= TRIP_MOVING_SPEED_KPH;
-        return true;
-      }
-    }
+  const PID_POLLING_INFO& speed = signals.speed;
+  if (signals.status && speed.ts && now - speed.ts <= TRIP_SPEED_FRESH_MS &&
+      isfinite(speed.value) && speed.value >= 0) {
+    moving = speed.value >= TRIP_MOVING_SPEED_KPH;
+    return true;
   }
   if (fix.ts && now - fix.ts <= TRIP_SPEED_FRESH_MS && fix.sat >= 4 &&
       fix.hdop > 0 && fix.hdop <= 5 && isfinite(fix.speed) && fix.speed >= 0 &&
@@ -750,8 +756,16 @@ void publishOBDSnapshot()
   snapshot.protocol = obd.getProtocol();
   snapshot.failures = fastOBDFailureCycles;
   snapshot.status = state.check(STATE_OBD_READY) ? (fastOBDFailureCycles ? 2 : 1) : 0;
+  VehicleSignals signals = {};
+  signals.status = snapshot.status;
+  for (auto& item : obdData) {
+    if (item.pid == PID_RPM) signals.rpm = item;
+    if (item.pid == PID_SPEED) signals.speed = item;
+    if (item.ts && (!signals.lastResponse || (int32_t)(item.ts - signals.lastResponse) > 0)) signals.lastResponse = item.ts;
+  }
   portENTER_CRITICAL(&sensorMux);
   obdSnapshot = snapshot;
+  vehicleSignals = signals;
   portEXIT_CRITICAL(&sensorMux);
 }
 
@@ -1451,20 +1465,17 @@ void collectSample()
 // latest successful OBD response (0 when the ECU has not answered).
 bool vehicleActivityNow(uint32_t now, uint32_t* lastOBDResponse)
 {
-  OBDSnapshot snapshot;
+  VehicleSignals signals;
   GPS_DATA fix;
   portENTER_CRITICAL(&sensorMux);
-  snapshot = obdSnapshot;
+  signals = vehicleSignals;
   fix = gpsSnapshot;
   portEXIT_CRITICAL(&sensorMux);
-  bool active = false;
-  *lastOBDResponse = 0;
-  for (auto& item : snapshot.readings) {
-    if (!item.ts) continue;
-    if (!*lastOBDResponse || (int32_t)(item.ts - *lastOBDResponse) > 0) *lastOBDResponse = item.ts;
-    if (!snapshot.status || now - item.ts > 1500 || !isfinite(item.value)) continue;
-    if ((item.pid == PID_RPM && item.value >= 100) || (item.pid == PID_SPEED && item.value >= 2)) active = true;
-  }
+  *lastOBDResponse = signals.lastResponse;
+  auto fresh = [&](const PID_POLLING_INFO& item, float minimum) {
+    return signals.status && item.ts && now - item.ts <= 1500 && isfinite(item.value) && item.value >= minimum;
+  };
+  bool active = fresh(signals.rpm, 100) || fresh(signals.speed, 2);
   if (fix.ts && now - fix.ts <= 1500 && fix.sat >= 4 && fix.hdop > 0 && fix.hdop <= 5 &&
       isfinite(fix.speed) && fix.speed * 1.852f >= 2) active = true;
   return active;
