@@ -240,10 +240,14 @@
 // and power state without requiring a display.
 #define ENABLE_NETWORK_STATUS_SIGNALS 1
 // Routine transport changes remain silent. A missing accepted server response
-// for a full minute while actively collecting gets three local beeps.
+// for a full minute during a trip gets three beeps only while moving.
 #define ENABLE_AUDIBLE_NETWORK_ALERTS 0
 #define ENABLE_AUDIBLE_SERVER_ALERTS 1
 #define SERVER_RESPONSE_ALERT_MS 60000UL
+// Rising start chime; falling stop chime after 90 seconds stationary.
+#define TRIP_STOP_DELAY_MS 90000UL
+#define TRIP_SPEED_FRESH_MS 3000UL
+#define TRIP_MOVING_SPEED_KPH 3.0f
 // Local recording failure remains audible even when cellular uploads succeed.
 #define RECORDING_ALERT_REPEAT_MS 5000UL
 #define RECORDING_STALL_ALERT_MS 15000UL

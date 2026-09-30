@@ -5,13 +5,14 @@ import re
 import subprocess
 from pathlib import Path
 
-from production_config import validate_production_config
+from production_config import load_build_environment, validate_production_config
 
 Import("env")
 
 
-token = os.environ.get("FREEMATICS_TOKEN", "")
-production = os.environ.get("PRODUCTION_BUILD") == "1"
+settings = load_build_environment(Path(env.subst("$PROJECT_DIR")) / ".env", os.environ)
+token = settings.get("FREEMATICS_TOKEN", "")
+production = settings.get("PRODUCTION_BUILD") == "1"
 format_sd_once = os.environ.get("FREEMATICS_FORMAT_SD_ONCE") == "1"
 if format_sd_once and os.environ.get("FREEMATICS_FORMAT_SD_CONFIRM") != "ERASE_UNFORMATTED_CARD":
     raise RuntimeError("SD provisioning requires FREEMATICS_FORMAT_SD_CONFIRM=ERASE_UNFORMATTED_CARD")
@@ -39,7 +40,7 @@ if format_sd_once:
     env.Append(CPPDEFINES=["FREEMATICS_FORMAT_SD_ONCE"])
 # Stamp every image with the source revision visible in the boot log. This is
 # deliberately metadata only; credentials remain injected through SERVER_TOKEN.
-build_id = os.environ.get("FREEMATICS_BUILD_ID", "").strip()
+build_id = settings.get("FREEMATICS_BUILD_ID", "").strip()
 if not build_id:
     try:
         build_id = subprocess.check_output(

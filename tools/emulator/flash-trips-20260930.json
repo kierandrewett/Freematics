@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-30",
+  "build_id": "trips-20260930-prod",
+  "device_id": "ZKUCALJ0",
+  "port": "/dev/ttyUSB0",
+  "firmware_sha256": "03ace67c06af275e28b17c0d4c477764da7b4d409f23656a99701eb2facaf1a5",
+  "flashed": true,
+  "flash_checksum_verified": true,
+  "production_credential_in_image_verified": true,
+  "installed_build_and_identity_verified": true,
+  "sd_journal_ready": true,
+  "trip_stop_delay_ms": 90000,
+  "moving_speed_kph": 3,
+  "local_validation": {
+    "lifecycle_scenarios": 26,
+    "build_environment_and_production_config_tests": 15
+  },
+  "limitations": [
+    "Driving chimes and movement-gated warning sounds require a vehicle test.",
+    "This 45-second USB boot capture did not verify a new accepted cellular upload."
+  ],
+  "boot_evidence": [
+    "[BOOT] Freematics TeleLogger starting",
+    "[BOOT] Build: trips-20260930-prod",
+    "[BOOT] Release: 1.0.0",
+    "[BOOT] CPU: 160 MHz | flash: 16 MB",
+    "[BOOT] RAM: 320 KB | PSRAM: 8 MB",
+    "[BOOT] Device ID: ZKUCALJ0",
+    "[BOOT] Hardware type: 14",
+    "[QUEUE] SD journal ready | pending bytes: 14183"
+  ]
+}

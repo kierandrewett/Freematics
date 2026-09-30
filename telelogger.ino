@@ -364,6 +364,46 @@ void beepTone(unsigned int frequency, int duration)
     sys.buzzer(0);
 }
 
+// Use fresh speed, not engine RPM or vibration, to detect a driving trip.
+// Unknown speed suppresses warnings but does not manufacture a trip end.
+bool readTripMotion(bool& moving)
+{
+  OBDSnapshot snapshot;
+  GPS_DATA fix;
+  portENTER_CRITICAL(&sensorMux);
+  snapshot = obdSnapshot;
+  fix = gpsSnapshot;
+  portEXIT_CRITICAL(&sensorMux);
+  const uint32_t now = millis();
+  if (snapshot.status) {
+    for (unsigned i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
+      const PID_POLLING_INFO& speed = snapshot.readings[i];
+      if (speed.pid == PID_SPEED && speed.ts && now - speed.ts <= TRIP_SPEED_FRESH_MS &&
+          isfinite(speed.value) && speed.value >= 0) {
+        moving = speed.value >= TRIP_MOVING_SPEED_KPH;
+        return true;
+      }
+    }
+  }
+  if (fix.ts && now - fix.ts <= TRIP_SPEED_FRESH_MS && fix.sat >= 4 &&
+      fix.hdop > 0 && fix.hdop <= 5 && isfinite(fix.speed) && fix.speed >= 0 &&
+      isfinite(fix.lat) && isfinite(fix.lng) && (fix.lat || fix.lng) &&
+      fabsf(fix.lat) <= 90 && fabsf(fix.lng) <= 180) {
+    moving = fix.speed * 1.852f >= TRIP_MOVING_SPEED_KPH;
+    return true;
+  }
+  moving = false;
+  return false;
+}
+
+void tripChime(bool started)
+{
+  Serial.println(started ? "[TRIP] Started" : "[TRIP] Stopped");
+  beepTone(started ? 1200 : 1000, 90);
+  delay(60);
+  beepTone(started ? 1800 : 700, 140);
+}
+
 void recordingAlert(const char* message)
 {
   Serial.println(message);
@@ -376,6 +416,8 @@ void recordingAlert(const char* message)
 #if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
 void statusSignals(void* inst)
 {
+  bool tripActive = false;
+  uint32_t stoppedSince = 0;
   bool hadNetwork = false;
   bool everOnline = false;
   bool outageAnnounced = false;
@@ -403,19 +445,38 @@ void statusSignals(void* inst)
     const bool cellOnline = state.check(STATE_NET_READY | STATE_CELL_CONNECTED);
     const bool wifiOnline = state.check(STATE_NET_READY | STATE_WIFI_CONNECTED);
     const bool networkOnline = cellOnline || wifiOnline;
+    bool moving = false;
+    const bool speedKnown = readTripMotion(moving);
+    moving = moving && working && !standbyMode;
+    if (moving) {
+      stoppedSince = 0;
+      if (!tripActive) {
+        tripActive = true;
+        tripChime(true);
+      }
+    } else if (tripActive) {
+      if (speedKnown && !stoppedSince) stoppedSince = now;
+      if (!speedKnown) stoppedSince = 0;
+      if (standbyMode || (stoppedSince && now - stoppedSince >= TRIP_STOP_DELAY_MS)) {
+        tripActive = false;
+        stoppedSince = 0;
+        tripChime(false);
+      }
+    }
 
 #if ENABLE_AUDIBLE_SERVER_ALERTS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
     // Only an accepted telemetry batch updates lastDataSyncTime. A login or
     // ping cannot silence this alarm while recording remains unavailable.
     const uint32_t responseAt = teleClient.lastDataSyncTime;
-    if (standbyMode) {
+    const uint32_t serverNow = millis();
+    if (!tripActive) {
       monitoringServer = false;
       observedServerResponse = responseAt;
       serverAlerted = false;
     } else {
       if (!monitoringServer) {
         monitoringServer = true;
-        activeSince = now;
+        activeSince = serverNow;
         lastServerResponse = 0;
       }
       if (responseAt && responseAt != observedServerResponse) {
@@ -425,7 +486,7 @@ void statusSignals(void* inst)
         serverAlerted = false;
       }
       const uint32_t contactSince = lastServerResponse ? lastServerResponse : activeSince;
-      if (!serverAlerted && now - contactSince >= SERVER_RESPONSE_ALERT_MS) {
+      if (moving && !serverAlerted && serverNow - contactSince >= SERVER_RESPONSE_ALERT_MS) {
         serverAlerted = true;
         recordingAlert("[STATUS] No accepted telemetry for 60 seconds; three audible beeps");
       }
@@ -435,7 +496,7 @@ void statusSignals(void* inst)
 #if STORAGE == STORAGE_SD
     // A known mount/write failure warns immediately. A blocked startup or
     // stopped collector gets 15 seconds. Upload acknowledgements cannot clear
-    // this alarm, and standby cannot silence an existing recording failure.
+    // this alarm. Warnings sound only while fresh speed shows movement.
     const uint32_t capturedAt = lastCollectionTime;
     // Read time after the cross-core capture timestamp, including time spent
     // sounding a server warning above. Unsigned subtraction must not see a
@@ -457,7 +518,7 @@ void statusSignals(void* inst)
         Serial.println("[STATUS] Fresh local recording restored; fault alarm stopped");
       }
     }
-    if (recordingFaultActive &&
+    if (moving && recordingFaultActive &&
         (!lastRecordingAlertAt || recordingNow - lastRecordingAlertAt >= RECORDING_ALERT_REPEAT_MS)) {
       lastRecordingAlertAt = recordingNow;
       recordingAlert("[STATUS] Local recording failed; three beeps, repeating every five seconds");
@@ -478,7 +539,7 @@ void statusSignals(void* inst)
       // it behind the rate limit used for repeated outage alerts.
       if (restoreChirpPending) {
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
-        beepTone(2400, 80);
+        if (moving) beepTone(2400, 80);
         Serial.println("[STATUS] Network restored (audible alert)");
 #else
         Serial.println("[STATUS] Network restored");
@@ -499,7 +560,7 @@ void statusSignals(void* inst)
         Serial.println("[STATUS] Network offline for 15 seconds");
         const bool rateLimited = lastAlertAt &&
           now - lastAlertAt < NETWORK_ALERT_MIN_INTERVAL_MS;
-        if (!rateLimited) {
+        if (!rateLimited && moving) {
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
           beepTone(900, 140);
           delay(120);
@@ -520,7 +581,7 @@ void statusSignals(void* inst)
         // Only emit a matching restore chirp when the outage alert itself was
         // audible; rate-limited flaps stay silent in both directions.
 #if ENABLE_AUDIBLE_NETWORK_ALERTS
-        restoreChirpPending = !rateLimited;
+        restoreChirpPending = !rateLimited && moving;
 #else
         restoreChirpPending = false;
 #endif
@@ -2446,7 +2507,6 @@ if (!state.check(STATE_MEMS_READY)) do {
   // Start the alarm before GNSS, OBD and storage setup can block.
   if (!statusTask.create(statusSignals, "status", 1, 3072)) {
     Serial.println("[CRITICAL] Status task creation failed");
-    beepTone(1600, 500);
   }
 #endif
   coprocessorMutex = xSemaphoreCreateMutex();
@@ -2463,14 +2523,12 @@ if (!state.check(STATE_MEMS_READY)) do {
       !gpsTask.create(acquireGPS, "gnss", 1, 4096) ||
       !memsTask.create(acquireMEMS, "mems", 1, 4096)) {
     Serial.println("[CRITICAL] Acquisition/recorder task creation failed");
-    beepTone(1600, 500);
     ESP.restart();
   }
 
   // initialize network and maintain connection
   if (!subtask.create(telemetry, "telemetry", 2, 24576)) {
     Serial.println("[CRITICAL] Upload task creation failed; retaining local recordings");
-    beepTone(1600, 500);
   }
 #if !ENABLE_NETWORK_STATUS_SIGNALS
 #ifdef PIN_LED

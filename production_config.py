@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from collections.abc import Mapping
 
 _DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+?)\s*$")
 _ENDIF_RE = re.compile(r"^#endif(?:\s*//.*)?$")
@@ -106,4 +108,31 @@ def validate_production_config(text: str) -> None:
         raise ValueError("local_config.h: CELL_APN still uses an example value")
 
 
-__all__ = ["validate_production_config"]
+__all__ = ["validate_production_config", "load_build_environment"]
+
+
+def load_build_environment(path: Path, environ: Mapping[str, str]) -> dict[str, str]:
+    """Load local firmware settings without shell evaluation or secret output."""
+    values: dict[str, str] = {}
+    if path.exists():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = re.fullmatch(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)", line)
+            if not match:
+                raise ValueError(f".env:{number}: expected KEY=VALUE")
+            key, value = match.groups()
+            if key.startswith("FREEMATICS_FORMAT_SD_"):
+                raise ValueError(f".env:{number}: card formatting must be a one-time process option")
+            if key not in {"FREEMATICS_TOKEN", "PRODUCTION_BUILD", "FREEMATICS_BUILD_ID"}:
+                continue
+            if key in values:
+                raise ValueError(f".env:{number}: duplicate {key}")
+            if value.startswith(("'", '\"')):
+                if len(value) < 2 or value[-1] != value[0]:
+                    raise ValueError(f".env:{number}: unmatched quotes")
+                value = value[1:-1]
+            values[key] = value
+    values.update(environ)  # Explicit process settings take precedence.
+    return values

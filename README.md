@@ -63,9 +63,14 @@ the same 64-character bearer format and are not accepted from browsers.
 The onboard LED shows network state and pulses only during an active telemetry
 upload when the network is online. Routine network changes stay silent, but
 the device sounds three short beeps once it has gone 60 seconds without an
-accepted Freematics server response while actively collecting. A successful
-response rearms the alert for a later outage; intentional parked standby stays
-quiet. The optional host-side notifier can send state changes to the separate
+accepted Freematics server response during a driving trip. Warning beeps sound
+only while fresh speed shows movement at 3 km/h or more. Engine idle and
+vibration do not count. Fresh OBD speed takes priority; a fresh GPS fix with
+at least four satellites and HDOP at most five supplies the fallback.
+A rising two-note chime marks the trip start. A falling two-note chime marks
+90 seconds stationary, or entry into standby. Short stops do not split the
+trip. Missing speed data suppresses warnings and does not end the trip.
+A successful server response rearms the alert for a later outage. The optional host-side notifier can send state changes to the separate
 `freematics-device` topic on `ntfy.drewett.dev`.
 After approximately three minutes without motion, the new fork firmware shuts
 down the radios and OBD link, puts the Model B's ICM-42627 accelerometer into
@@ -152,33 +157,26 @@ cadence:
 * `OBD_AUX_INTERVAL_MS=250UL`, with one interleaved auxiliary PID per cycle
 * `STANDBY_POLL_INTERVAL_MS=250UL`
 
-Build the production image, record its hash, then flash it. Before running
-this block, manually confirm that `local_config.h` contains the intended
-deployment server and APN without printing credentials:
+Copy `.env.example` to the ignored `.env` file once. Set `PRODUCTION_BUILD=1`
+and put the collector's existing 64-character token in `FREEMATICS_TOKEN`.
+Use `chmod 600 .env`. PlatformIO reads this file automatically for builds
+and uploads. Explicit process environment values take priority. The loader
+reads values without executing shell commands.
+
+With the intended server and APN in `local_config.h`, build and flash:
 
 ```sh
-set -eu
-test -f local_config.h || { printf '%s\n' 'local_config.h is required'; exit 1; }
-device_token="${FREEMATICS_TOKEN:-}"
-test "${#device_token}" -eq 64 || { printf '%s\n' 'FREEMATICS_TOKEN must contain 64 hexadecimal characters'; exit 1; }
-case "$device_token" in
-  *[!0123456789abcdefABCDEF]*) printf '%s\n' 'FREEMATICS_TOKEN contains a non-hexadecimal character'; exit 1 ;;
-esac
-PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
+pio run -e esp32dev
 sha256sum .pio/build/esp32dev/firmware.bin
-PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
+pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
 pio device monitor --port /dev/ttyUSB0 --baud 115200
 ```
 
-`FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. When
-`PRODUCTION_BUILD=1` is set, `build_secrets.py` stops before creating the image
-if the token is missing or malformed. The ignored `local_config.h` must also
-contain this deployment's server and APN settings; without it, the firmware
-falls back to the upstream UDP endpoint and an empty APN. Stop before flashing
-when either input is absent. Do not use a bench-only build or a placeholder
-token as an installable fallback. Do not store the real token in the
-repository or a shared shell script. Record the image SHA-256 and both boot
-values after every production flash.
+Production builds reject missing or malformed tokens and invalid deployment
+settings before creating an image. Keep the real `.env` local; it must remain
+outside Git. Card formatting options are rejected in `.env` because they must
+be explicit one-time process options. Record the image SHA-256 and the boot
+build ID and device ID after each flash.
 
 Repository layout
 -----------------
