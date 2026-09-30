@@ -168,6 +168,8 @@
 // idling in traffic. Parked standby starts only after this long without fresh
 // RPM >= 100, OBD speed >= 2 km/h or good-quality GNSS movement.
 #define SAMPLE_INTERVAL_MS 250UL
+// Above the upload task (2) and the acquisition and recorder tasks (1).
+#define SAMPLER_TASK_PRIORITY 3
 #define STANDBY_AFTER_STATIONARY_MS 180000UL
 // Trip lifecycle (README "Trip lifecycle"). A wake is confirmed as a trip by
 // engine RPM, road speed or GNSS movement; until then the modem stays off.

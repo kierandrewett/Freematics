@@ -2659,6 +2659,11 @@ void processBLE(int timeout)
 
 void setup()
 {
+  // The sampler runs in this Arduino loop task. On 30 September a 250 ms slot
+  // was missed while the upload task (priority 2) compressed and read the SD
+  // card. The sampler does a few milliseconds of work per slot and then
+  // sleeps, so it takes the highest priority and nothing can delay a reading.
+  vTaskPrioritySet(nullptr, SAMPLER_TASK_PRIORITY);
   delay(500);
 
   // Initialize NVS
