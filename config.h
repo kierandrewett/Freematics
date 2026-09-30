@@ -209,9 +209,9 @@
 // zlib-compress POST bodies (collector 2026-10-01 or later inflates ?z=1).
 // A refused compressed batch is resent uncompressed, so older collectors work.
 // The encoder is teledeflate.cpp (compiled into the app, so it gets the PSRAM
-// workaround); the ROM deflate failed on this revision 1 chip. Off until the
-// app encoder has been checked on the device.
-#define HTTP_COMPRESS_UPLOADS 0
+// workaround); the ROM deflate failed on this revision 1 chip. Checked on the
+// device on 30 September: 40-reading batches of about 47 KB post as 7.5-8 KB.
+#define HTTP_COMPRESS_UPLOADS 1
 #define HTTP_BATCH_GROW_STEP 4
 // Bound live latency while allowing normal samples to share a request.
 #define HTTP_BATCH_MAX_WAIT_MS 1000UL
