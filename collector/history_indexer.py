@@ -172,7 +172,12 @@ def gnss_capture_ms(fields: dict[str, str]) -> int | None:
         parsed = datetime(year, month, day, hour, minute, second, centisecond * 10_000, tzinfo=timezone.utc)
     except (TypeError, ValueError):
         return None
-    return int(parsed.timestamp() * 1_000)
+    # PID 0x93 is elapsed time since the held GNSS fix. Repeated UTC fields
+    # identify that fix, while each sample still has its own capture time.
+    age = numeric(fields.get("93")) if "93" in fields else 0
+    if age is None or age < 0 or age > 0xFFFFFFFF or age != int(age):
+        return None
+    return int(parsed.timestamp() * 1_000) + int(age)
 
 
 def frame_timestamps(frames: list[Frame]) -> tuple[list[int | None], list[str]]:
@@ -185,7 +190,10 @@ def frame_timestamps(frames: list[Frame]) -> tuple[list[int | None], list[str]]:
     collector-created trip filename.
     """
     captures: list[int | None] = [gnss_capture_ms(frame.fields) for frame in frames]
-    qualities = ["gnss" if capture is not None else "unknown" for capture in captures]
+    qualities = [
+        ("anchored" if numeric(frame.fields.get("93")) else "gnss") if capture is not None else "unknown"
+        for frame, capture in zip(frames, captures)
+    ]
     anchors = [index for index, capture in enumerate(captures) if capture is not None]
     if not anchors:
         return captures, qualities
@@ -342,6 +350,7 @@ class HistoryIndexer:
         self.database = database
         self.now_ms = now_ms or (lambda: int(time.time() * 1_000))
         self.rebuild = rebuild
+        self._initialized = False
     @staticmethod
     def _schema_issue(connection: sqlite3.Connection) -> str | None:
         tables = {
@@ -389,11 +398,13 @@ class HistoryIndexer:
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self._prepare_database()
         with closing(sqlite3.connect(self.database)) as connection:
+            connection.execute("PRAGMA busy_timeout = 30000")
             self._ensure_sample_columns(connection)
             self._ensure_trip_columns(connection)
             connection.executescript((Path(__file__).with_name("history_schema.sql")).read_text())
             self._populate_catalogue(connection)
             connection.commit()
+        self._initialized = True
 
     @staticmethod
     def _ensure_sample_columns(connection: sqlite3.Connection) -> None:
@@ -448,16 +459,20 @@ class HistoryIndexer:
             )
 
     def index_once(self) -> int:
-        self.initialise()
+        if not self._initialized:
+            self.initialise()
         files = sorted(self.archive_root.glob("*/????/??/??/*.txt"))
         indexed = 0
         with closing(sqlite3.connect(self.database)) as connection:
-            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA busy_timeout = 30000")
             connection.execute("PRAGMA foreign_keys = ON")
             for archive in files:
                 if self._index_file(connection, archive):
+                    # Each archive is an independent projection. Commit it
+                    # before hashing/scanning the next file so read-only UI
+                    # and MCP clients are blocked for the shortest interval.
+                    connection.commit()
                     indexed += 1
-            connection.commit()
         return indexed
 
     def _index_file(self, connection: sqlite3.Connection, archive: Path) -> bool:
@@ -647,7 +662,12 @@ def main() -> None:
     args = parser.parse_args()
     indexer = HistoryIndexer(args.archive_root, args.database, rebuild=args.rebuild)
     while True:
-        print(f"[HISTORY] indexed {indexer.index_once()} archive files", flush=True)
+        try:
+            print(f"[HISTORY] indexed {indexer.index_once()} archive files", flush=True)
+        except sqlite3.OperationalError as error:
+            print(f"[HISTORY] SQLite busy; retrying: {error}", flush=True)
+            if args.once:
+                raise
         if args.once:
             return
         time.sleep(max(1.0, args.interval))

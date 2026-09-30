@@ -22,8 +22,10 @@
 #include <math.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "data2kml.h"
 #include "httpd.h"
 #include "teleserver.h"
@@ -304,6 +306,12 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_queue_readings gauge\n"
 		"# HELP freematics_device_queue_bytes Encoded telemetry bytes waiting for upload.\n"
 		"# TYPE freematics_device_queue_bytes gauge\n"
+		"# HELP freematics_device_durable_queue_bytes Unacknowledged bytes retained on microSD.\n"
+		"# TYPE freematics_device_durable_queue_bytes gauge\n"
+		"# HELP freematics_device_missed_readings Collection cycles without a free RAM slot.\n"
+		"# TYPE freematics_device_missed_readings gauge\n"
+		"# HELP freematics_device_durable_queue_healthy Whether the microSD journal accepted its latest write.\n"
+		"# TYPE freematics_device_durable_queue_healthy gauge\n"
 		"# HELP freematics_device_sample_rate_per_minute Samples received per minute.\n"
 		"# TYPE freematics_device_sample_rate_per_minute gauge\n"
 		"# HELP freematics_device_rssi_dbm Cellular or Wi-Fi received signal strength.\n"
@@ -402,6 +410,9 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_network_transport", pld->devid, pld->tripid, pld->data + PID_NETWORK_TRANSPORT, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_queue_readings", pld->devid, pld->tripid, pld->data + PID_QUEUE_READINGS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_queue_bytes", pld->devid, pld->tripid, pld->data + PID_QUEUE_BYTES, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_bytes", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_BYTES, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_missed_readings", pld->devid, pld->tripid, pld->data + PID_MISSED_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_healthy", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_HEALTH, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_protocol", pld->devid, pld->tripid, pld->data + PID_OBD_PROTOCOL, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_supported_pids", pld->devid, pld->tripid, pld->data + PID_OBD_SUPPORTED_PIDS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_timeouts", pld->devid, pld->tripid, pld->data + PID_OBD_TIMEOUTS, 1);
@@ -814,10 +825,15 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 			pld->flags |= FLAG_RUNNING;
 			pld->flags &= ~(FLAG_SLEEPING | FLAG_PINGED);
 		}
-		// save data to log file
-		if (pld->fp) {
-			fprintf(pld->fp, "%s\n", payload);
-			fflush(pld->fp);
+		// The device releases its journal only after our OK response. Do not
+		// acknowledge a batch that could still be sitting in stdio or the OS
+		// page cache, or one for which opening the archive failed.
+		if (!pld->fp || fprintf(pld->fp, "%s\n", payload) < 0 ||
+			fflush(pld->fp) != 0 || fsync(fileno(pld->fp)) != 0) {
+			if (pld->fp) clearerr(pld->fp);
+			fprintf(stderr, "[STORAGE] telemetry archive write or sync failed for %s: %s\n",
+				pld->devid, strerror(errno));
+			return -2;
 		}
 	}
 
@@ -892,7 +908,13 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 	double obdState;
 	if (pld->data[PID_OBD_STATE].ts && parseFiniteNumber(pld->data[PID_OBD_STATE].value, &obdState)
 		&& obdState == 0.0) {
-		for (int i = 0x100; i < 0x200; i++) pld->data[i].ts = 0;
+		for (int i = 0x100; i < 0x200; i++) {
+			/* Full-rate firmware explicitly pairs held values with their
+			 * acquisition ages. Legacy values without a matching age still
+			 * disappear on disconnect instead of pretending to be fresh. */
+			if (PID_MODES > 4 && pld->data[i].ts == pld->data[PID_OBD_AGE_BASE | (i & 0xFF)].ts) continue;
+			pld->data[i].ts = 0;
+		}
 	}
 	if (ts == 0) ts = pld->deviceTick;
 	int64_t interval = (int64_t)ts - (int64_t)pld->deviceTick;
@@ -955,6 +977,23 @@ int LoadChannels()
 	fseek(fp, 0, SEEK_SET);
 	if (len == MAX_CHANNELS * sizeof(CHANNEL_DATA)) {
 		fread(ld, MAX_CHANNELS, sizeof(CHANNEL_DATA), fp);
+	}
+	else if (PID_MODES == 5 && len == MAX_CHANNELS * (sizeof(CHANNEL_DATA) - 256 * sizeof(PID_DATA))) {
+		/* The four-range channel file has identical fields except for the
+		 * smaller data array. Restore its identity and stats; the normal
+		 * validation below clears process-local handles and live readings. */
+		const size_t prefix = offsetof(CHANNEL_DATA, data);
+		const size_t legacyData = 4 * 256 * sizeof(PID_DATA);
+		const size_t tail = sizeof(CHANNEL_DATA) - offsetof(CHANNEL_DATA, cache);
+		for (int i = 0; i < MAX_CHANNELS; i++) {
+			if (fread(ld + i, 1, prefix, fp) != prefix ||
+				fread(ld[i].data, 1, legacyData, fp) != legacyData ||
+				fread((unsigned char*)(ld + i) + offsetof(CHANNEL_DATA, cache), 1, tail, fp) != tail) {
+				memset(ld, 0, sizeof(ld));
+				fprintf(stderr, "Legacy channel file read failed\n");
+				break;
+			}
+		}
 	}
 	else {
 		fprintf(stderr, "Channel data file size mismatch (expected %u, actual %u)\n", (unsigned int)(MAX_CHANNELS * sizeof(CHANNEL_DATA)), len);
@@ -1455,6 +1494,14 @@ int uhPost(UrlHandlerParam* param)
 		param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0]);
 
 	int count = processPayload(param->pucPayload, pld, 0);
+	if (count == -2) {
+		param->hs->response.statusCode = 503;
+		int responseLength = snprintf(param->pucBuffer, param->bufSize, "Telemetry archive unavailable");
+		param->contentLength = responseLength >= 0 && (unsigned int)responseLength < param->bufSize
+			? (unsigned int)responseLength : 0;
+		param->contentType = HTTPFILETYPE_TEXT;
+		return FLAG_DATA_RAW;
+	}
 	if (count < 0) {
 		param->hs->response.statusCode = 400;
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "Invalid telemetry payload");

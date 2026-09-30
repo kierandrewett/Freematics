@@ -68,6 +68,13 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x8A, "obd_fast_failures", "OBD core failures", "Consecutive failed core OBD cycles.", "count", "freematics/obd", decoder="integer"),
     MetricDefinition(0x8B, "queue_readings", "Queued readings", "Number of filled telemetry readings waiting for upload.", "count", "freematics/transport", decoder="integer"),
     MetricDefinition(0x8C, "queue_bytes", "Queued bytes", "Encoded bytes waiting for upload.", "byte", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x8D, "durable_queue_bytes", "Durable queue bytes", "Unacknowledged journal bytes on microSD.", "byte", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x8E, "missed_readings", "Missed readings", "Collection cycles without a free RAM slot or skipped sampling deadlines; captured readings are never overwritten.", "count", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x8F, "durable_queue_healthy", "Durable queue healthy", "One when the microSD journal accepted its latest write.", "boolean", "freematics/transport", decoder="integer"),
+    MetricDefinition(0x93, "gps_age", "GNSS value age", "Elapsed time since the held GNSS fix; UTC fields remain the fix time.", "millisecond", "freematics/gnss", decoder="integer"),
+    MetricDefinition(0x94, "voltage_age", "Voltage value age", "Elapsed time since the last successful voltage measurement.", "millisecond", "freematics/power", decoder="integer"),
+    MetricDefinition(0x95, "mems_age", "Motion sensor value age", "Elapsed time since the last successful motion sensor measurement.", "millisecond", "freematics/mems", decoder="integer"),
+    MetricDefinition(0x96, "signal_age", "Network signal value age", "Elapsed time since the last signal-strength measurement; 4294967295 means not measured yet.", "millisecond", "freematics/transport", decoder="integer"),
     MetricDefinition(0x92, "can_frame", "Passive CAN frame", "Raw CAN monitor line encoded as hexadecimal bytes.", "hex", "freematics/can", decoder="string"),
     MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
     MetricDefinition(0x330, "pending_dtc_read_status", "Pending DTC read status", "Pending DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
@@ -122,7 +129,21 @@ def _standard_definitions() -> dict[int, MetricDefinition]:
 
 def metric_catalog() -> dict[int, MetricDefinition]:
     catalog = {definition.pid: definition for definition in _CUSTOM}
-    catalog.update(_standard_definitions())
+    standard = _standard_definitions()
+    catalog.update(standard)
+    for measured_pid, measured in standard.items():
+        age_pid = 0x400 | (measured_pid & 0xFF)
+        catalog[age_pid] = MetricDefinition(
+            age_pid, f"obd_age_{measured_pid & 0xFF:02X}", f"{measured.label} age",
+            "Elapsed time since this PID last responded; a held value is not a fresh measurement.",
+            "millisecond", "freematics/obd", decoder="integer",
+        )
+    for index, group in enumerate(("stored", "pending", "permanent")):
+        catalog[0x360 + index] = MetricDefinition(
+            0x360 + index, f"dtc_age_{index}", f"{group.title()} diagnostic scan age",
+            "Elapsed time since the last diagnostic scan attempt; read status indicates success.",
+            "millisecond", "freematics/diagnostics", decoder="integer",
+        )
     return catalog
 
 
@@ -195,6 +216,17 @@ def _definition(pid_text: str) -> MetricDefinition:
     definition = CATALOG.get(pid)
     if definition is not None:
         return definition
+    if 0x400 <= pid <= 0x4FF:
+        measured_pid = 0x100 | (pid & 0xFF)
+        measured = CATALOG.get(measured_pid)
+        label = measured.label if measured else f"OBD PID 0x{measured_pid:03X}"
+        return MetricDefinition(pid, f"obd_age_{pid & 0xFF:02X}", f"{label} age",
+                                "Elapsed time since this PID last responded; a held value is not a fresh measurement.",
+                                "millisecond", "freematics/obd", decoder="integer")
+    if 0x360 <= pid <= 0x362:
+        return MetricDefinition(pid, f"dtc_age_{pid - 0x360}", "Diagnostic scan age",
+                                "Elapsed time since the last diagnostic scan attempt; read status indicates success.",
+                                "millisecond", "freematics/diagnostics", decoder="integer")
     return MetricDefinition(
         pid,
         f"pid_{pid:03X}" if pid >= 0 else "pid_unknown",

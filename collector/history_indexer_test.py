@@ -10,6 +10,25 @@ from history_indexer import DTC_CODE_SLOTS, DTC_GROUPS, Frame, HistoryIndexer, d
 
 
 class HistoryIndexerTest(unittest.TestCase):
+    def test_held_gnss_fix_preserves_250ms_capture_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "ZKUCALJ0/2026/09/29/20260929-121013.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("".join(
+                f"0:{1000 + i * 250},11:290926,10:12101300,93:{i * 250},10C:900,40C:{i * 250},"
+                for i in range(5)
+            ))
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: int(archive.stat().st_mtime * 1000) + 1000)
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                rows = connection.execute("SELECT capture_utc_ms, timestamp_quality FROM sample ORDER BY sequence").fetchall()
+                self.assertEqual(len(rows), 4)
+                self.assertEqual([row[0] - rows[0][0] for row in rows], [0, 250, 500, 750])
+                self.assertEqual([row[1] for row in rows], ["gnss", "anchored", "anchored", "anchored"])
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample_metric WHERE pid='0x40C'").fetchone()[0], 4)
+
     def test_replay_is_idempotent_and_preserves_capture_timeline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"
@@ -62,7 +81,7 @@ class HistoryIndexerTest(unittest.TestCase):
             archive = root / "ZKUCALJ0/2026/08/27/20260827-001247.txt"
             archive.parent.mkdir(parents=True)
             archive.write_text(
-                "0:100,11:260827,10:00124700,A:51.0,B:-1.0,0:600,10C:1200,A:51.1,B:-1.1,0:1100,11:260827,10:00124800,A:51.2,B:-1.2\n"
+                "0:100,11:270826,10:00124700,A:51.0,B:-1.0,0:600,10C:1200,A:51.1,B:-1.1,0:1100,11:270826,10:00124800,A:51.2,B:-1.2\n"
             )
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(
