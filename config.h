@@ -164,8 +164,14 @@
 #define DATA_RECEIVING_TIMEOUT 5000 /* ms */
 // expected maximum server sync signal interval
 #define SERVER_SYNC_INTERVAL 120 /* seconds, 0 to disable */
-// Always record at full rate while powered, including when stationary.
+// Record at full rate while the engine runs or the vehicle moves, including
+// idling in traffic. Parked standby starts only after this long without fresh
+// RPM >= 100, OBD speed >= 2 km/h or good-quality GNSS movement.
 #define SAMPLE_INTERVAL_MS 250UL
+#define STANDBY_AFTER_STATIONARY_MS 180000UL
+// Standby waits this long for the telemetry task to send the parked marker and
+// power the modem down before light sleep stops the modem UART.
+#define STANDBY_RADIO_OFF_WAIT_MS 45000UL
 #define SAMPLE_FRAME_SIZE 8192
 #define OBD_FAST_INTERVAL_MS 250UL /* target 4 Hz RPM and moving-sample cadence */
 #define OBD_AUX_INTERVAL_MS 250UL /* interleave auxiliary reads with core reads */

@@ -194,6 +194,8 @@ byte ledMode = 0;
 #if ENABLE_NETWORK_STATUS_SIGNALS
 volatile bool telemetryTransmitActive = false;
 #endif
+// Set by the telemetry task once the parked marker is sent and the modem is off.
+volatile bool telemetryParked = false;
 
 bool serverSetup(IPAddress& ip);
 void serverProcess(int timeout);
@@ -1012,7 +1014,9 @@ bool processGPS(CBuffer* buffer)
   lastGPSLng = gd->lng;
   lastGPSDistanceTime = millis();
 
-  if (kph >= 2) lastMotionTime = millis();
+  // A parked car can show GNSS speed jitter under a poor sky. Only a
+  // good-quality fix counts as movement for the standby timer.
+  if (kph >= 2 && gd->sat >= 4 && gd->hdop > 0 && gd->hdop <= 5) lastMotionTime = millis();
 
   state.set(STATE_GPS_ONLINE);
   lastGPStime = gd->time;
@@ -1403,9 +1407,48 @@ void collectSample()
 
 }
 
+// Full-rate recording follows engine and vehicle activity. Without this cutoff
+// the car battery feeds the modem, GNSS and ECU polling for the whole time the
+// car is parked. lastMotionTime tracks fresh RPM, OBD speed and GNSS speed.
+bool stationaryStandbyDue(uint32_t now)
+{
+  if (now - lastMotionTime < STANDBY_AFTER_STATIONARY_MS) return false;
+  static uint32_t lastRetentionWarning = 0;
+  const bool warn = !lastRetentionWarning || now - lastRetentionWarning >= 30000UL;
+  // Standby reboots on wake. A reading that exists only in RAM would be lost.
+  if (bufman.unpersistedReadings()) {
+    if (warn) {
+      Serial.println("[POWER] Stationary; keeping active until RAM-only readings are journaled or uploaded");
+      lastRetentionWarning = now;
+    }
+    return false;
+  }
+#if STORAGE == STORAGE_SD
+  // USB bench power has no car battery to protect. Let the SD backlog upload.
+  if (!vehiclePowerPresent() && durableQueue.cachedPendingBytes()) {
+    if (warn) {
+      Serial.println("[POWER] USB powered; keeping active to upload the SD backlog");
+      lastRetentionWarning = now;
+    }
+    return false;
+  }
+#endif
+  return true;
+}
+
 void process()
 {
   static TickType_t deadline = xTaskGetTickCount();
+  // Check before a new sample enters RAM. The recorder has had a full sample
+  // interval to journal the previous one.
+  const uint32_t now = millis();
+  if (stationaryStandbyDue(now)) {
+    Serial.print("[POWER] Stationary for ");
+    Serial.print((now - lastMotionTime) / 1000);
+    Serial.println(" s with engine off; entering standby");
+    state.clear(STATE_WORKING);
+    return;
+  }
   collectSample();
   dataInterval = SAMPLE_INTERVAL_MS;
   // Absolute deadlines avoid accumulating sensor/formatting time as drift.
@@ -1780,7 +1823,9 @@ void telemetry(void* inst)
       teleClient.reset();
       // Stay entirely off-network until the MEMS wake path clears standby.
       // This avoids recurring SIM traffic and makes parked power draw stable.
+      telemetryParked = true;
       while (state.check(STATE_STANDBY)) delay(1000);
+      telemetryParked = false;
       continue;
     }
 
@@ -1842,7 +1887,8 @@ void telemetry(void* inst)
           }
 #endif
           // avoid turning on/off cellular module too frequently to avoid operator banning
-          delay(60000 * 3);
+          // Standby must not wait behind this back-off; the modem is already off.
+          for (uint32_t started = millis(); millis() - started < 60000UL * 3 && state.check(STATE_WORKING);) delay(1000);
           break;
         }
         Serial.println("[CELL] In service");
@@ -2098,6 +2144,11 @@ void standby()
 #endif
 
   state.clear(STATE_WORKING | STATE_OBD_READY | STATE_STORAGE_READY);
+  // The telemetry task owns the modem UART. Let it send the parked marker and
+  // power the modem down before light sleep stops the UART mid-command and
+  // leaves the modem on for the whole park.
+  for (uint32_t started = millis(); !telemetryParked && millis() - started < STANDBY_RADIO_OFF_WAIT_MS;) delay(100);
+  if (!telemetryParked) Serial.println("[POWER] Modem shutdown not confirmed; entering standby anyway");
   // this will put co-processor into sleep mode
 #if ENABLE_OLED
   oled.print("STANDBY");

@@ -28,7 +28,8 @@ defines = "\n".join(line for line in config.splitlines() if line.startswith("#de
                         "NETWORK_ALERT_MIN_INTERVAL_MS", "RECORDING_ALERT_REPEAT_MS",
                         "RECORDING_STALL_ALERT_MS", "JUMPSTART_VOLTAGE", "IGNITION_WAKE_VOLTAGE",
                         "IGNITION_WAKE_CONFIRM_SAMPLES", "OBD_WAKE_POLL_MS",
-                        "TRIP_STOP_DELAY_MS", "TRIP_SPEED_FRESH_MS", "TRIP_MOVING_SPEED_KPH")))
+                        "TRIP_STOP_DELAY_MS", "TRIP_SPEED_FRESH_MS", "TRIP_MOVING_SPEED_KPH",
+                        "STANDBY_AFTER_STATIONARY_MS")))
 support = "\n".join(function(source, signature) for signature in (
     "float readVehicleVoltage()", "bool vehiclePowerPresent()") if signature in source)
 harness = r'''
@@ -127,8 +128,9 @@ void beepTone(unsigned frequency, int duration) {
  if (recoveryAt && tick>=recoveryAt) tonesAfterRecovery++;
  tones++; delay(duration);
 }
-struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedReadings() { return 0; } } bufman;
-struct Storage { bool healthy() {return storageHealthy;} } durableQueue, logger;
+uint32_t lastMotionTime = 0; unsigned ramOnly = 0; uint32_t sdBacklog = 0;
+struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedReadings() { return ramOnly; } } bufman;
+struct Storage { bool healthy() {return storageHealthy;} uint32_t cachedPendingBytes() {return sdBacklog;} } durableQueue, logger;
 '''
 harness += defines + "\n" + support + "\n"
 harness += function(source, "bool readTripMotion(bool& moving)") + "\n"
@@ -137,6 +139,7 @@ harness += function(source, "bool waitMotion(long timeout") + "\n"
 if "void recordingAlert(const char* message)" in source:
     harness += function(source, "void recordingAlert(const char* message)") + "\n"
 harness += function(source, "void statusSignals(void* inst)") + "\n"
+harness += function(source, "bool stationaryStandbyDue(uint32_t now)") + "\n"
 harness += r'''
 int main(int argc, char** argv) {
  std::string scenario=argv[1]; bool woke=false;
@@ -164,6 +167,28 @@ int main(int argc, char** argv) {
    gpsSnapshot={tick,10,51,-1,8,2}; pass &= readTripMotion(detected) && detected;
    gpsSnapshot.hdop=20; pass &= !readTripMotion(detected);
    moving=false; onTick(); pass &= readTripMotion(detected) && !detected;
+   std::cout<<scenario<<": "<<(pass?"PASS":"FAIL")<<"\n"; return !pass;
+ }
+ if(scenario.rfind("standby-",0)==0 && scenario!="standby-quiet") {
+   // Parked entry uses the real stationaryStandbyDue() decision.
+   const uint32_t after=STANDBY_AFTER_STATIONARY_MS;
+   voltage=12.4; lastMotionTime=1000; bool pass=true;
+   if(scenario=="standby-engine-off") {
+     pass=!stationaryStandbyDue(lastMotionTime+after-1) && stationaryStandbyDue(lastMotionTime+after);
+   } else if(scenario=="standby-engine-idle") {
+     // Fresh RPM refreshes lastMotionTime at the 250 ms sample rate for 10 minutes.
+     for(uint32_t t=1000; t<601000 && pass; t+=250) {lastMotionTime=t; pass=!stationaryStandbyDue(t+250);}
+   } else if(scenario=="standby-ram-only") {
+     ramOnly=1; pass=!stationaryStandbyDue(lastMotionTime+after);
+     ramOnly=0; pass&=stationaryStandbyDue(lastMotionTime+after);
+   } else if(scenario=="standby-usb-backlog") {
+     voltage=5; sdBacklog=4096; pass=!stationaryStandbyDue(lastMotionTime+after);
+     voltage=12.4; pass&=stationaryStandbyDue(lastMotionTime+after);
+     voltage=5; sdBacklog=0; pass&=stationaryStandbyDue(lastMotionTime+after);
+   } else if(scenario=="standby-clock-rollover") {
+     lastMotionTime=0xFFFFF000u; pass=!stationaryStandbyDue(lastMotionTime+1000) &&
+       stationaryStandbyDue(lastMotionTime+after);
+   } else pass=false;
    std::cout<<scenario<<": "<<(pass?"PASS":"FAIL")<<"\n"; return !pass;
  }
  if(scenario=="ignition") voltage=14.4;
@@ -217,7 +242,8 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
     failures = 0
     for scenario in ("ignition", "normal-motion", "sensor-failed", "sensor-absent", "parked", "ecu-probe-suppressed",
                      "motion-source", "trip-cycle", "traffic-light", "speed-lost", "parked-fault", "parked-server",
-                     "login-only", "standby-quiet", "sd-fault", "recording-stall",
+                     "login-only", "standby-quiet", "standby-engine-off", "standby-engine-idle",
+                     "standby-ram-only", "standby-usb-backlog", "standby-clock-rollover", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):
         failures += subprocess.run([str(binary), scenario], check=False).returncode
     # Moving recording failures remain audible without server alerts or POST.

@@ -19,19 +19,25 @@ signatures = ['void process()']
 if 'void collectSample()' in source:
     signatures += ['void collectSample()']
 # These are the sampling-side callees; workers own all blocking acquisition.
-signatures += ['bool processGPS(CBuffer* buffer)', 'void processMEMS(CBuffer* buffer)', 'float readVehicleVoltage()']
+signatures += ['bool processGPS(CBuffer* buffer)', 'void processMEMS(CBuffer* buffer)', 'float readVehicleVoltage()',
+               'bool stationaryStandbyDue(uint32_t now)']
 if 'void emitOBDSnapshot(CBuffer* buffer)' in source:
     signatures += ['void emitOBDSnapshot(CBuffer* buffer)']
 body = '\n'.join(function(s) for s in signatures)
 forbidden = [r'obd\.(?:readPID|init|getVoltage|readDTC)', r'processOBD\(',
              r'logger\.', r'durableQueue\.append', r'capturePassiveCAN\(',
              r'sys\.gps(?:GetData|End|Begin)', r'nvs_(?:commit|set)', r'durableQueue\.pendingBytes', r'initGPS\(',
-             r'cell\.getLocation', r'STATIONARY_TIME_TABLE',
-             r'state\.clear\(STATE_WORKING\)']
+             r'cell\.getLocation', r'STATIONARY_TIME_TABLE', r'dataInterval\s*=\s*dataIntervals']
 failures = [p for p in forbidden if re.search(p, body)]
 if failures:
     raise SystemExit('FAIL: blocking/adaptive sampler paths: ' + ', '.join(failures))
 assert 'vTaskDelayUntil' in function('void process()'), 'Sampler needs a fixed deadline'
+# The sampler never slows down. It may only stop, and only through the parked
+# standby decision (engine off and stationary), which lifecycle checks exercise.
+process_body = function('void process()')
+assert re.search(r'if \(stationaryStandbyDue\(now\)\) \{[^}]*state\.clear\(STATE_WORKING\);', process_body), \
+    'Sampler may leave full rate only through stationaryStandbyDue()'
+assert process_body.count('STATE_WORKING') == 1, 'Unexpected extra sampler state change'
 print('PASS: sampler boundary excludes OBD/GNSS acquisition, reconnect, storage and stationary throttling')
 
 # Run the actual snapshot serializer, queue handoff and absolute scheduler with
@@ -73,7 +79,7 @@ using portMUX_TYPE=int;
 #define BOARD_HAS_PSRAM 0
 #define pdMS_TO_TICKS(x) (x)
 #define heap_caps_free free
-struct SerialStub { template<class T> void println(T) {} void write(uint8_t*,byte) {} void write(char) {} } Serial;
+struct SerialStub { template<class T> void print(T) {} template<class T> void println(T) {} void write(uint8_t*,byte) {} void write(char) {} } Serial;
 uint32_t tick=1000;
 uint32_t millis() {return tick;}
 TickType_t xTaskGetTickCount() {return tick;}
@@ -117,6 +123,10 @@ code += extract(client, 'void CBufferManager::recordMissedReading(uint32_t count
 code += extract(client, 'uint32_t CBufferManager::missedReadings() const') + '\n'
 code += 'CBufferManager bufman;\n'
 code += function('void emitOBDSnapshot(CBuffer* buffer)') + '\n'
+# The real standby decision is covered by tools/check-device-lifecycle.py.
+# Here the car is always in use, so every deadline must produce a sample.
+code += '#define STATE_WORKING 256\nstruct { void clear(unsigned) {} } state;\n'
+code += 'bool stationaryStandbyDue(uint32_t) { return false; }\n'
 code += function('void process()') + '\n'
 code += r'''
 int main() {

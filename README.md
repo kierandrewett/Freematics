@@ -72,8 +72,11 @@ A rising two-note chime marks the trip start. A falling two-note chime marks
 trip. Missing speed data suppresses warnings and does not end the trip.
 A successful server response rearms the alert for a later outage. The optional host-side notifier can send state changes to the separate
 `freematics-device` topic on `ntfy.drewett.dev`.
-After approximately three minutes without motion, the new fork firmware shuts
-down the radios and OBD link, puts the Model B's ICM-42627 accelerometer into
+Recording runs every 250 ms while the engine runs or the car moves. After
+three minutes with no fresh RPM of 100 or more, no OBD speed of 2 km/h or more
+and no good-quality GNSS movement, the new fork firmware enters standby. It
+waits for the modem to send the parked marker and power off, then shuts down
+the OBD link, puts the Model B's ICM-42627 accelerometer into
 50 Hz low-power mode, turns the LED off, and light-sleeps between 250 ms motion
 checks. It sends one parked marker on entry, then performs no periodic
 cellular/GPS tracking while parked. Three consecutive samples above 0.08 g are

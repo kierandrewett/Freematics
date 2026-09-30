@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-30",
+  "change": "Restore stationary standby (180 s without fresh RPM >= 100, OBD speed >= 2 km/h or good-quality GNSS movement); wait for modem power-off before light sleep.",
+  "firmware_sha256_unflashed": "81b6424cbcf9d66534f8288b21d8d2fb95ac68ab7cf746b0c754ef89a585b6f7",
+  "flashed": false,
+  "commands": [
+    "pio run -e esp32dev -j 16",
+    "python3 tools/check-device-lifecycle.py",
+    "python3 tools/check-sampling-boundary.py",
+    "python3 tools/emulator/run.py --strict",
+    "python3 tools/check-mems-recovery.py",
+    "python3 tools/check-sd-retention.py",
+    "python3 tools/check-collector-sampling.py"
+  ],
+  "results": {
+    "esp32_build": "SUCCESS",
+    "lifecycle_scenarios_passed": 32,
+    "new_lifecycle_scenarios": ["standby-engine-off", "standby-engine-idle", "standby-ram-only", "standby-usb-backlog", "standby-clock-rollover"],
+    "sampling_boundary": "PASS (2400 fixed 250 ms deadlines, no throttle)",
+    "emulator": "PASS",
+    "other_checks": "PASS"
+  },
+  "installed_image_finding": "motion-20260930-prod never enters standby: commit d1e1578 removed the stationary cutoff, so the modem, GNSS and OBD polling stay on while parked.",
+  "sample_wire_bytes": 3453,
+  "limitations": [
+    "The standby() modem wait is checked by source review and build only; no harness runs standby().",
+    "Parked current draw and a real park/wake cycle in the car remain unmeasured."
+  ]
+}
