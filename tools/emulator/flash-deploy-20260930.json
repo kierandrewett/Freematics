@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-30",
+  "device_id": "ZKUCALJ0",
+  "flashed_build": "9ef7defa5751",
+  "flash_checksum_verified": true,
+  "power_during_checks": "USB bench (not the car battery)",
+  "boot_evidence": {
+    "previous_build_bec3d95_csv_log_opened_at_s": 108.9,
+    "build_9ef7defa5751_csv_log_opened_at_s": 6.9,
+    "phase_transition": "[POWER] confirming -> trip (USB power skips confirmation)",
+    "modem": "SIM7670E-LN, TLS verified, login accepted, RSSI -81 dBm",
+    "sd_backlog_bytes_at_boot": 9682483
+  },
+  "upload_evidence": {
+    "server_status_counts_after_flash": {"200": 14, "timeout": 1, "400": 0},
+    "stuck_batch_from_11_16": "accepted once batches stopped crossing reboot boundaries",
+    "upload_rate_bytes_per_s_after_deploy": 2900
+  },
+  "collector_deploy": {
+    "method": "scp collector/teleserver.c and telemetry_catalog.py to /config/apps/freematics, then BSOCIETY_COMPOSE_SERVICES=\"freematics freematics-history\" ./up.sh freematics",
+    "replaced_versions": {"teleserver.c": "03ff81e", "telemetry_catalog.py": "ccfffb3"},
+    "backups": "*.pre-20261001 next to each replaced file",
+    "deployed_commit": "1e4966e",
+    "verified": "running binary contains the new rejection reason text; freematics healthy; 13 x 200 and 1 x 502 (restart) in the next 3 minutes"
+  },
+  "limitations": [
+    "Chimes, the trip lifecycle and standby current are not yet checked in the car.",
+    "Upload throughput (about 3-5 KB/s over the SIM7670) is close to the 4.6 KB/s the device records while driving, so a large backlog drains mainly while parked within the 2-minute window or on later trips."
+  ]
+}
