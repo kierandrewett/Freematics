@@ -86,6 +86,23 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
             else:
                 raise AssertionError('Empty body accepted')
             print('PASS: eight-sample HTTP batch, lost-response retry stays in one archive, malformed sample set aside, reboot inside a batch stored')
+            # Compressed batches (?z=1) inflate to the same result. A body that
+            # does not inflate is refused, so the device resends it uncompressed.
+            import zlib
+            request(base, '/api/notify/PACKED?EV=1&TS=1000')
+            text = ','.join(f'0:{20000+250*i},10C:{900+i},40C:0,10D:{i % 90},40D:0,89:1' for i in range(40))
+            raw = (text + f'*{sum(text.encode()) & 255:X}').encode()
+            packed = zlib.compress(raw, 6)
+            assert request(base, '/api/post/PACKED?z=1', packed).strip() == b'OK 200'
+            archive = ''.join(path.read_text() for path in (root / 'data' / 'PACKED').rglob('*.txt'))
+            assert all(f'0:{20000+250*i},' in archive for i in range(40))
+            try:
+                request(base, '/api/post/PACKED?z=1', raw)
+            except HTTPError as error:
+                assert error.code == 400
+            else:
+                raise AssertionError('Uncompressed body accepted as compressed')
+            print(f'PASS: zlib batch accepted ({len(raw)} -> {len(packed)} bytes), corrupt compressed body refused')
             # A disconnected ECU must retain explicitly aged values while
             # legacy firmware without ages must still clear stale live data.
             text = '0:2000,10C:900,40C:1000,89:0'

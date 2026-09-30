@@ -14,6 +14,17 @@
 ******************************************************************************/
 
 #include <stdio.h>
+#if defined(__has_include)
+#if __has_include(<zlib.h>)
+#include <zlib.h>
+#define HAVE_ZLIB_HEADER 1
+#endif
+#endif
+#ifndef HAVE_ZLIB_HEADER
+/* The production image has libz.so.1 (apk-tools depends on it) but not the
+ * zlib-dev headers. uncompress() has kept this signature since zlib 1.0. */
+int uncompress(unsigned char* dest, unsigned long* destLen, const unsigned char* source, unsigned long sourceLen);
+#endif
 #include <string.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -1618,7 +1629,30 @@ int uhPost(UrlHandlerParam* param)
 	printf("POST from %u.%u.%u.%u | ",
 		param->hs->ipAddr.caddr[3], param->hs->ipAddr.caddr[2], param->hs->ipAddr.caddr[1], param->hs->ipAddr.caddr[0]);
 
-	int count = processTelemetryBatch(pld, param->pucPayload);
+	/* ?z=1 marks a zlib-compressed batch. Compression cuts cellular bytes by
+	 * about 6x on full-rate samples. A body that does not inflate is refused;
+	 * the device then resends the batch uncompressed. */
+	char* body = param->pucPayload;
+	char* inflated = NULL;
+	const char* compressed = mwGetVarValue(param->pxVars, "z", 0);
+	if (compressed && !strcmp(compressed, "1")) {
+		unsigned long size = MAX_TELEMETRY_RECORD_SIZE;
+		inflated = malloc(MAX_TELEMETRY_RECORD_SIZE + 1);
+		if (!inflated || uncompress((unsigned char*)inflated, &size, (const unsigned char*)param->pucPayload,
+				param->payloadSize) != 0) {
+			free(inflated);
+			fprintf(stderr, "[REJECT] %s: compressed body does not inflate (%u bytes)\n", pld->devid, param->payloadSize);
+			param->hs->response.statusCode = 400;
+			param->contentLength = snprintf(param->pucBuffer, param->bufSize, "Invalid compressed payload");
+			if (param->contentLength >= param->bufSize) param->contentLength = 0;
+			param->contentType = HTTPFILETYPE_TEXT;
+			return FLAG_DATA_RAW;
+		}
+		inflated[size] = 0;
+		body = inflated;
+	}
+	int count = processTelemetryBatch(pld, body);
+	free(inflated);
 	if (count == -2) {
 		param->hs->response.statusCode = 503;
 		int responseLength = snprintf(param->pucBuffer, param->bufSize, "Telemetry archive unavailable");

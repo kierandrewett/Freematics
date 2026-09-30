@@ -7,6 +7,10 @@ OBJS += teleserver.o udpserver.o teletrips.o telebroker.o data2kml.o processpil.
 CFLAGS+=-DMAX_CHANNELS=16
 CFLAGS+=-Ihttpd -Ilibb64 -IcJSON
 LDFLAGS = -lm
+# zlib inflates compressed device batches. The production image has only the
+# runtime library, so link the shared object directly when no dev symlink exists.
+ZLIB_LINK := $(firstword $(wildcard /usr/lib/libz.so /usr/lib64/libz.so /lib/libz.so /usr/lib/libz.so.1 /lib/libz.so.1 /usr/lib64/libz.so.1))
+LDFLAGS += $(if $(ZLIB_LINK),$(ZLIB_LINK),-lz)
 
 ifdef WINDIR
 CFLAGS+= -DWIN32
