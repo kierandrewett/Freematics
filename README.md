@@ -67,27 +67,45 @@ accepted Freematics server response during a driving trip. Warning beeps sound
 only while fresh speed shows movement at 3 km/h or more. Engine idle and
 vibration do not count. Fresh OBD speed takes priority; a fresh GPS fix with
 at least four satellites and HDOP at most five supplies the fallback.
-A rising two-note chime marks the trip start. A falling two-note chime marks
-90 seconds stationary, or entry into standby. Short stops do not split the
-trip. Missing speed data suppresses warnings and does not end the trip.
+A rising three-note chime (2.0, 2.6, 3.2 kHz) marks the trip start. A falling
+three-note chime marks the trip end: the car turning off, or 90 seconds
+stationary with the engine running. Short stops do not split the trip.
+Missing speed data suppresses warnings and does not end the trip.
 A successful server response rearms the alert for a later outage. The optional host-side notifier can send state changes to the separate
 `freematics-device` topic on `ntfy.drewett.dev`.
-Recording runs every 250 ms while the engine runs or the car moves. After
-three minutes with no fresh RPM of 100 or more, no OBD speed of 2 km/h or more
-and no good-quality GNSS movement, the new fork firmware enters standby. It
-waits for the modem to send the parked marker and power off, then shuts down
-the OBD link, puts the Model B's ICM-42627 accelerometer into
-50 Hz low-power mode, turns the LED off, and light-sleeps between 250 ms motion
-checks. It sends one parked marker on entry, then performs no periodic
-cellular/GPS tracking while parked. Three consecutive samples above 0.08 g are
-required to wake the active collection path, filtering a single bump or
-vibration. Motion returns the unit to the active collection path automatically.
-Standby does not poll OBD or wake the ECU. OBD speed is read after the motion
-sensor wakes the device. Only a failed or absent motion sensor permits the
-Model B's passive voltage input to wake it at charging voltage.
-If readings exist only in RAM, it stays active instead of rebooting into
-standby and losing them. This can increase parked power draw until storage or
-the server recovers.
+
+### Trip lifecycle
+
+| Phase | Recording | Modem | Leaves when |
+| --- | --- | --- | --- |
+| Confirming (after boot or wake) | 250 ms | Off | RPM >= 100, OBD speed >= 2 km/h or good-quality GNSS movement starts a trip. After 45 s without any, the device returns to standby and never powers the modem. |
+| Trip | 250 ms | On | Car off: the ECU stops answering for 10 s, nothing moves for 15 s and the voltage is below 13.2 V (not charging). Fallback: 3 minutes without activity. |
+| Wrap-up | Paused | Uploading | The SD backlog is empty, or 2 minutes pass. Any activity returns to Trip. |
+| Standby | None | Off | Motion, or charging voltage after a resting reading. |
+
+A red light keeps the ECU answering, so it never ends a trip, even with a
+stop-start engine. USB bench power skips confirmation and keeps uploading the
+backlog. Each sample carries `power_phase` (0x98) and `wake_reason` (0x99:
+0 power on, 1 motion, 2 charging voltage).
+
+In standby the firmware waits for the modem to send the parked marker and
+power off, then shuts down the OBD link, puts the Model B's ICM-42627
+accelerometer into 50 Hz low-power mode, turns the LED off, and light-sleeps
+between 250 ms checks. It performs no periodic cellular/GPS tracking while
+parked. Three consecutive samples above 0.08 g wake it, filtering a single
+bump or vibration. Standby does not poll OBD or wake the ECU. The Model B's
+passive voltage input also wakes it when the voltage rises from resting
+(12.9 V or below) to charging (13.2 V or above), which is an engine start. A
+battery maintainer holding the voltage up never shows a resting reading, so
+it cannot cause repeated wakes. OBD is read after the device wakes.
+If readings exist only in RAM (the SD card failed), standby keeps them through
+light sleep and resumes without the usual wake reboot.
+
+The collector refuses a payload with HTTP 400 when it is malformed. The device
+then halves the batch until it finds the refused record, moves it to
+`/QUEUE.REJ` on the card and continues; the collector logs the reason and keeps
+a copy in `<data>/<device>/rejected.txt`. A reboot boundary in the journal
+always starts a new upload batch, because the device clock restarts.
 The USB-connected Model B was flashed on 27 September 2026 with the normal
 `sd-retry-20260927` build (SHA-256
 `f1c697ef310b8b4a5e6d8fd7baf32c6791e4a2e5a34c3f14b06349c229c30fd0`).

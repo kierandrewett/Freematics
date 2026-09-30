@@ -169,6 +169,18 @@
 // RPM >= 100, OBD speed >= 2 km/h or good-quality GNSS movement.
 #define SAMPLE_INTERVAL_MS 250UL
 #define STANDBY_AFTER_STATIONARY_MS 180000UL
+// Trip lifecycle (README "Trip lifecycle"). A wake is confirmed as a trip by
+// engine RPM, road speed or GNSS movement; until then the modem stays off.
+#define CONFIRM_WINDOW_MS 45000UL
+// Ignition off: the ECU stops answering, nothing moves and the alternator is
+// not charging. A red light keeps the ECU answering, so it is not a trip end.
+#define OBD_SILENT_MS 10000UL
+#define CAR_OFF_CONFIRM_MS 15000UL
+// After the trip ends, upload for at most this long, then sleep.
+#define UPLOAD_WINDOW_MS 120000UL
+// A standby wake on charging voltage needs a resting reading first, so a
+// battery maintainer holding the voltage up cannot cause repeated wakes.
+#define RESTING_VOLTAGE_MAX 12.9f
 // Standby waits this long for the telemetry task to send the parked marker and
 // power the modem down before light sleep stops the modem UART.
 #define STANDBY_RADIO_OFF_WAIT_MS 45000UL

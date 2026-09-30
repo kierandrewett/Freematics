@@ -170,6 +170,25 @@ char isoTime[32] = {0};
 
 // stats data
 uint32_t lastMotionTime = 0;
+
+// Vehicle power lifecycle. CONFIRMING records with the modem off until the
+// car shows use; TRIP is full operation; WRAP_UP stops adding readings and
+// uploads the rest; STANDBY is parked (see standby()).
+#define PHASE_CONFIRMING 0
+#define PHASE_TRIP 1
+#define PHASE_WRAP_UP 2
+#define PHASE_STANDBY 3
+volatile uint8_t powerPhase = PHASE_CONFIRMING;
+uint32_t phaseSince = 0;
+bool vehicleActivitySeen = false;
+// Why this boot started. It survives the wake reboot in RTC memory; the magic
+// value rejects the random contents RTC memory has after a power cut.
+#define WAKE_POWER_ON 0
+#define WAKE_MOTION 1
+#define WAKE_CHARGING 2
+#define WAKE_MAGIC 0x57414B00UL
+RTC_NOINIT_ATTR uint32_t wakeRecord;
+uint8_t bootWakeReason = WAKE_POWER_ON;
 volatile uint32_t lastCollectionTime = 0;
 #if STORAGE == STORAGE_SD
 volatile bool storageCheckComplete = false;
@@ -409,9 +428,14 @@ bool readTripMotion(bool& moving)
 void tripChime(bool started)
 {
   Serial.println(started ? "[TRIP] Started" : "[TRIP] Stopped");
-  beepTone(started ? 1200 : 1000, 90);
-  delay(60);
-  beepTone(started ? 1800 : 700, 140);
+  // The Model B buzzer is driven at 2 kHz upstream; lower tones are too quiet
+  // to hear over road noise. Three rising notes start a trip, three falling
+  // notes end it, both distinct from the three equal warning beeps.
+  const unsigned int notes[3] = {2000, 2600, 3200};
+  for (uint8_t i = 0; i < 3; i++) {
+    beepTone(notes[started ? i : 2 - i], 150);
+    if (i < 2) delay(50);
+  }
 }
 
 void recordingAlert(const char* message)
@@ -467,7 +491,8 @@ void statusSignals(void* inst)
     } else if (tripActive) {
       if (speedKnown && !stoppedSince) stoppedSince = now;
       if (!speedKnown) stoppedSince = 0;
-      if (standbyMode || (stoppedSince && now - stoppedSince >= TRIP_STOP_DELAY_MS)) {
+      if (standbyMode || powerPhase == PHASE_WRAP_UP ||
+          (stoppedSince && now - stoppedSince >= TRIP_STOP_DELAY_MS)) {
         tripActive = false;
         stoppedSince = 0;
         tripChime(false);
@@ -600,8 +625,8 @@ void statusSignals(void* inst)
 
 #if ENABLE_NETWORK_STATUS_SIGNALS && defined(PIN_LED)
     bool ledOn;
-    if (standbyMode) {
-      // A parked device must be visually and electrically quiet. Motion
+    if (standbyMode || powerPhase == PHASE_CONFIRMING) {
+      // A parked or unconfirmed device must be visually and electrically quiet. Motion
       // wakes the loop; the normal online/upload indication resumes after
       // the active-mode restart.
       ledOn = false;
@@ -742,11 +767,7 @@ void emitOBDSnapshot(CBuffer* buffer)
     buffer->add(0x100 | item.pid, ELEMENT_FLOAT_D2, &item.value, sizeof(item.value));
     uint32_t age = now - item.ts;
     buffer->add(PID_OBD_AGE_BASE | item.pid, ELEMENT_UINT32, &age, sizeof(age));
-    if (age <= 1500 && snapshot.status && item.pid == PID_SPEED) {
-      updateOBDDistance(item.value);
-      if (item.value >= 2) lastMotionTime = now;
-    }
-    if (age <= 1500 && snapshot.status && item.pid == PID_RPM && item.value >= 100) lastMotionTime = now;
+    if (age <= 1500 && snapshot.status && item.pid == PID_SPEED) updateOBDDistance(item.value);
   }
   for (byte index = 0; index < sizeof(dtcData) / sizeof(dtcData[0]); index++) {
     auto& item = snapshot.diagnostics[index];
@@ -1022,26 +1043,10 @@ bool processGPS(CBuffer* buffer)
   lastGPSLng = gd->lng;
   lastGPSDistanceTime = millis();
 
-  // A parked car can show GNSS speed jitter under a poor sky. Only a
-  // good-quality fix counts as movement for the standby timer.
-  if (kph >= 2 && gd->sat >= 4 && gd->hdop > 0 && gd->hdop <= 5) lastMotionTime = millis();
-
   state.set(STATE_GPS_ONLINE);
   lastGPStime = gd->time;
   lastGPSdate = gd->date;
   return true;
-}
-
-bool waitMotionGPS(int timeout)
-{
-  unsigned long t = millis();
-  lastMotionTime = 0;
-  do {
-      serverProcess(100);
-    if (!processGPS(0)) continue;
-    if (lastMotionTime) return true;
-  } while (millis() - t < timeout);
-  return false;
 }
 
 #if ENABLE_MEMS
@@ -1217,6 +1222,9 @@ void initialize()
   printTime();
 
   lastMotionTime = millis();
+  powerPhase = PHASE_CONFIRMING;
+  phaseSince = millis();
+  vehicleActivitySeen = false;
   state.set(STATE_WORKING);
 
 #if ENABLE_OLED
@@ -1265,6 +1273,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
   unsigned long t = millis();
     uint8_t motionHits = 0;
     uint8_t ignitionHits = 0;
+    uint8_t chargeHits = 0;
+    bool restingSeen = false;
     const bool initiallyPowered = vehiclePowerPresent();
     do {
       // calculate relative movement
@@ -1290,20 +1300,32 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       }
       }
 #endif
-      // Never wake the ECU to check a parked vehicle. If MEMS is unavailable,
-      // use the passive voltage input as the fallback on the Model B.
+      // Never wake the ECU to check a parked vehicle. The Model B voltage input
+      // is a passive ADC read, so it costs the car nothing.
+      const float voltage = readVehicleVoltage();
+      if (voltage >= 6.0f && voltage <= RESTING_VOLTAGE_MAX) restingSeen = true;
       if (!motionSensorReady) {
-        const float voltage = readVehicleVoltage();
+        // Without MEMS, the voltage input is the only wake source.
         if (voltage >= IGNITION_WAKE_VOLTAGE || (!initiallyPowered && voltage >= 6.0f)) {
           if (++ignitionHits >= IGNITION_WAKE_CONFIRM_SAMPLES) {
             Serial.println("[POWER] Motion sensor unavailable; passive ignition wake");
+            wakeRecord = WAKE_MAGIC | WAKE_CHARGING;
             return true;
           }
         } else {
           ignitionHits = 0;
         }
+      } else if (restingSeen && voltage >= IGNITION_WAKE_VOLTAGE) {
+        // Resting to charging voltage means the engine has started, even if
+        // the car has not moved yet. A charger holding the voltage up never
+        // shows a resting reading, so it cannot cause repeated wakes.
+        if (++chargeHits >= IGNITION_WAKE_CONFIRM_SAMPLES) {
+          Serial.println("[POWER] Charging voltage after rest; engine started");
+          wakeRecord = WAKE_MAGIC | WAKE_CHARGING;
+          return true;
+        }
       } else {
-        ignitionHits = 0;
+        chargeHits = 0;
       }
 #if ENABLE_HTTPD
       serverProcess(100);
@@ -1317,6 +1339,7 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
           //lastMotionTime = millis();
           Serial.print("[POWER] Motion confirmed; wake score: ");
           Serial.println(motion);
+          wakeRecord = WAKE_MAGIC | WAKE_MOTION;
           return true;
         }
       } else {
@@ -1409,6 +1432,11 @@ void collectSample()
   uint32_t rejected = durableQueue.rejectedCount();
   buffer->add(PID_REJECTED_READINGS, ELEMENT_UINT32, &rejected, sizeof(rejected));
 #endif
+  {
+    uint8_t phase = powerPhase;
+    buffer->add(PID_POWER_PHASE, ELEMENT_UINT8, &phase, sizeof(phase));
+    buffer->add(PID_WAKE_REASON, ELEMENT_UINT8, &bootWakeReason, sizeof(bootWakeReason));
+  }
 
   buffer->timestamp = startTime;
 
@@ -1417,46 +1445,103 @@ void collectSample()
 
 }
 
-// Full-rate recording follows engine and vehicle activity. Without this cutoff
-// the car battery feeds the modem, GNSS and ECU polling for the whole time the
-// car is parked. lastMotionTime tracks fresh RPM, OBD speed and GNSS speed.
-bool stationaryStandbyDue(uint32_t now)
+// Engine or wheels in use, from the latest acquired values. Engine RPM counts,
+// so idling in traffic keeps full-rate recording. GNSS needs a good fix, so
+// parked jitter cannot hold the device awake. Also reports the time of the
+// latest successful OBD response (0 when the ECU has not answered).
+bool vehicleActivityNow(uint32_t now, uint32_t* lastOBDResponse)
 {
-  if (now - lastMotionTime < STANDBY_AFTER_STATIONARY_MS) return false;
-  static uint32_t lastRetentionWarning = 0;
-  const bool warn = !lastRetentionWarning || now - lastRetentionWarning >= 30000UL;
-  // Standby reboots on wake. A reading that exists only in RAM would be lost.
-  if (bufman.unpersistedReadings()) {
-    if (warn) {
-      Serial.println("[POWER] Stationary; keeping active until RAM-only readings are journaled or uploaded");
-      lastRetentionWarning = now;
-    }
-    return false;
+  OBDSnapshot snapshot;
+  GPS_DATA fix;
+  portENTER_CRITICAL(&sensorMux);
+  snapshot = obdSnapshot;
+  fix = gpsSnapshot;
+  portEXIT_CRITICAL(&sensorMux);
+  bool active = false;
+  *lastOBDResponse = 0;
+  for (auto& item : snapshot.readings) {
+    if (!item.ts) continue;
+    if (!*lastOBDResponse || (int32_t)(item.ts - *lastOBDResponse) > 0) *lastOBDResponse = item.ts;
+    if (!snapshot.status || now - item.ts > 1500 || !isfinite(item.value)) continue;
+    if ((item.pid == PID_RPM && item.value >= 100) || (item.pid == PID_SPEED && item.value >= 2)) active = true;
   }
-#if STORAGE == STORAGE_SD
-  // USB bench power has no car battery to protect. Let the SD backlog upload.
-  if (!vehiclePowerPresent() && durableQueue.cachedPendingBytes()) {
-    if (warn) {
-      Serial.println("[POWER] USB powered; keeping active to upload the SD backlog");
-      lastRetentionWarning = now;
-    }
-    return false;
+  if (fix.ts && now - fix.ts <= 1500 && fix.sat >= 4 && fix.hdop > 0 && fix.hdop <= 5 &&
+      isfinite(fix.speed) && fix.speed * 1.852f >= 2) active = true;
+  return active;
+}
+
+// The trip lifecycle as one decision on plain values, so
+// tools/check-device-lifecycle.py can drive it. Returns the next phase.
+uint8_t nextPowerPhase(uint8_t phase, uint32_t now, uint32_t since, uint32_t lastActivity,
+                       bool activitySeen, uint32_t lastOBDResponse, float voltage,
+                       uint32_t backlogBytes, uint16_t ramOnly)
+{
+  const bool vehiclePower = voltage >= 6.0f;
+  if (phase == PHASE_CONFIRMING) {
+    // USB bench power has no car battery to protect: behave as a trip.
+    if (!vehiclePower || activitySeen) return PHASE_TRIP;
+    // A wake with no engine or movement goes back to sleep without ever
+    // powering the modem.
+    return now - since >= CONFIRM_WINDOW_MS ? PHASE_STANDBY : phase;
   }
-#endif
-  return true;
+  if (phase == PHASE_TRIP) {
+    const uint32_t idle = now - lastActivity;
+    // Ignition off: the ECU has gone quiet, nothing moves, and the alternator
+    // is not charging. At a red light the ECU keeps answering.
+    const bool ecuQuiet = lastOBDResponse && now - lastOBDResponse >= OBD_SILENT_MS;
+    if (vehiclePower && ecuQuiet && idle >= CAR_OFF_CONFIRM_MS && voltage < IGNITION_WAKE_VOLTAGE) {
+      return PHASE_WRAP_UP;
+    }
+    // Fallback for an ECU that keeps answering with the engine off, or a car
+    // without OBD data.
+    if (idle < STANDBY_AFTER_STATIONARY_MS) return phase;
+    // On the bench, keep uploading the backlog instead.
+    if (!vehiclePower && (backlogBytes || ramOnly)) return phase;
+    return PHASE_WRAP_UP;
+  }
+  if (phase == PHASE_WRAP_UP) {
+    // Activity after the trip ended (a stop-start engine, or pulling away):
+    // the trip continues and recording resumes.
+    if ((int32_t)(lastActivity - since) > 0) return PHASE_TRIP;
+    if (!backlogBytes && !ramOnly) return PHASE_STANDBY;
+    return now - since >= UPLOAD_WINDOW_MS ? PHASE_STANDBY : phase;
+  }
+  return phase;
 }
 
 void process()
 {
   static TickType_t deadline = xTaskGetTickCount();
-  // Check before a new sample enters RAM. The recorder has had a full sample
-  // interval to journal the previous one.
   const uint32_t now = millis();
-  if (stationaryStandbyDue(now)) {
-    Serial.print("[POWER] Stationary for ");
-    Serial.print((now - lastMotionTime) / 1000);
-    Serial.println(" s with engine off; entering standby");
-    state.clear(STATE_WORKING);
+  uint32_t lastOBDResponse = 0;
+  if (vehicleActivityNow(now, &lastOBDResponse)) {
+    lastMotionTime = now;
+    vehicleActivitySeen = true;
+  }
+  uint32_t backlogBytes = 0;
+#if STORAGE == STORAGE_SD
+  backlogBytes = durableQueue.cachedPendingBytes();
+#endif
+  const uint8_t next = nextPowerPhase(powerPhase, now, phaseSince, lastMotionTime, vehicleActivitySeen,
+                                      lastOBDResponse, readVehicleVoltage(), backlogBytes,
+                                      bufman.unpersistedReadings());
+  if (next != powerPhase) {
+    static const char* const names[] = {"confirming", "trip", "wrap-up", "standby"};
+    Serial.print("[POWER] ");
+    Serial.print(names[powerPhase]);
+    Serial.print(" -> ");
+    Serial.println(names[next]);
+    if (next == PHASE_STANDBY) {
+      state.clear(STATE_WORKING);
+      return;
+    }
+    powerPhase = next;
+    phaseSince = now;
+  }
+  if (powerPhase == PHASE_WRAP_UP) {
+    // The trip is over. Stop adding readings so the upload window can empty
+    // the backlog; the acquisition tasks keep watching for a resumed trip.
+    vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
     return;
   }
   collectSample();
@@ -1967,6 +2052,13 @@ void telemetry(void* inst)
       continue;
     }
 
+    // A wake is not a trip until the engine or wheels show it. Keep the modem
+    // off until then, so a false wake costs no network registration.
+    if (powerPhase == PHASE_CONFIRMING && state.check(STATE_WORKING)) {
+      delay(250);
+      continue;
+    }
+
 #if ENABLE_WIFI
     if (wifiSSID[0] && (!PREFER_CELLULAR || wifiFallback) && !state.check(STATE_WIFI_CONNECTED)) {
       Serial.print("[WIFI] Joining SSID:");
@@ -2300,11 +2392,18 @@ void standby()
   Serial.println("[POWER] Restarting active mode");
   sys.resetLink();
 #if RESET_AFTER_WAKEUP
+  // Light sleep keeps RAM. Reboot only when no reading exists solely in RAM;
+  // otherwise resume in place so the reading can still be journaled or sent.
+  if (!bufman.unpersistedReadings()) {
 #if ENABLE_MEMS
-  if (mems) mems->end();  
+    if (mems) mems->end();
 #endif
-  ESP.restart();
-#endif  
+    ESP.restart();
+  }
+  Serial.println("[POWER] RAM-only readings held; resuming without reboot");
+  bootWakeReason = (wakeRecord & 0xFFFFFF00UL) == WAKE_MAGIC ? (uint8_t)(wakeRecord & 0xFF) : WAKE_POWER_ON;
+  wakeRecord = 0;
+#endif
   state.clear(STATE_STANDBY);
   xSemaphoreGive(coprocessorMutex);
 }
@@ -2587,6 +2686,8 @@ void setup()
 
   // generate unique device ID
   genDeviceID(devid);
+  bootWakeReason = (wakeRecord & 0xFFFFFF00UL) == WAKE_MAGIC ? (uint8_t)(wakeRecord & 0xFF) : WAKE_POWER_ON;
+  wakeRecord = 0;
 
 #if CONFIG_MODE_TIMEOUT
   configMode();

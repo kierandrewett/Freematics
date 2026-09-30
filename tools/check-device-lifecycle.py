@@ -29,7 +29,8 @@ defines = "\n".join(line for line in config.splitlines() if line.startswith("#de
                         "RECORDING_STALL_ALERT_MS", "JUMPSTART_VOLTAGE", "IGNITION_WAKE_VOLTAGE",
                         "IGNITION_WAKE_CONFIRM_SAMPLES", "OBD_WAKE_POLL_MS",
                         "TRIP_STOP_DELAY_MS", "TRIP_SPEED_FRESH_MS", "TRIP_MOVING_SPEED_KPH",
-                        "STANDBY_AFTER_STATIONARY_MS", "HTTP_BATCH_MAX_SAMPLES",
+                        "STANDBY_AFTER_STATIONARY_MS", "HTTP_BATCH_MAX_SAMPLES", "CONFIRM_WINDOW_MS",
+                        "OBD_SILENT_MS", "CAR_OFF_CONFIRM_MS", "UPLOAD_WINDOW_MS", "RESTING_VOLTAGE_MAX",
                         "HTTP_BATCH_MIN_SAMPLES", "HTTP_BATCH_GROW_STEP")))
 support = "\n".join(function(source, signature) for signature in (
     "float readVehicleVoltage()", "bool vehiclePowerPresent()") if signature in source)
@@ -114,6 +115,7 @@ void onTick() {
  if (motionMode==1) moving=tick<10000 || tick>=30000;
  if (motionMode==2) moving=tick<10000 || tick>=120000;
  if (motionMode==3 && tick>=10000) speedKnown=false;
+ if (motionMode==4) voltage=tick<5000 ? 12.4 : 14.2;
  obdSnapshot.status=speedKnown;
  obdSnapshot.readings[0]={PID_SPEED,moving ? 20.f : 0.f,speedKnown ? tick : 0};
  if (loginReplies) teleClient.lastSyncTime=tick;
@@ -123,13 +125,33 @@ void onTick() {
  if (enterStandby && tick>=8000) state.flags=STATE_STANDBY;
 }
 void beepTone(unsigned frequency, int duration) {
- if (frequency==1200 || frequency==1800) {startTones++; delay(duration); return;}
- if (frequency==1000 || frequency==700) {if (!firstStopAt) firstStopAt=tick; stopTones++; delay(duration); return;}
+ static int chimeNote = 0;
+ if (frequency==2000 || frequency==2600 || frequency==3200) {
+   // A chime is three notes: rising 2000-2600-3200 starts, falling ends.
+   if (chimeNote==0 && frequency==2000) startTones++;
+   if (chimeNote==0 && frequency==3200) {if (!firstStopAt) firstStopAt=tick; stopTones++;}
+   chimeNote=(chimeNote+1)%3; delay(duration); return;
+ }
  if (!firstToneAt) firstToneAt=tick;
- if (recoveryAt && tick>=recoveryAt) tonesAfterRecovery++;
+ // Warnings are three tones. An alert that starts before recovery may finish
+ // after it; only an alert that starts after recovery is a fault.
+ static int alertNote = 0; static uint32_t alertStart = 0;
+ if (alertNote==0) alertStart=tick;
+ alertNote=(alertNote+1)%3;
+ if (recoveryAt && alertStart>=recoveryAt) tonesAfterRecovery++;
  tones++; delay(duration);
 }
 uint32_t lastMotionTime = 0; unsigned ramOnly = 0; uint32_t sdBacklog = 0;
+#define PHASE_CONFIRMING 0
+#define PHASE_TRIP 1
+#define PHASE_WRAP_UP 2
+#define PHASE_STANDBY 3
+volatile uint8_t powerPhase = PHASE_TRIP;
+#define WAKE_POWER_ON 0
+#define WAKE_MOTION 1
+#define WAKE_CHARGING 2
+#define WAKE_MAGIC 0x57414B00UL
+uint32_t wakeRecord = 0;
 struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedReadings() { return ramOnly; } } bufman;
 struct Storage { bool healthy() {return storageHealthy;} uint32_t cachedPendingBytes() {return sdBacklog;} } durableQueue, logger;
 '''
@@ -140,7 +162,7 @@ harness += function(source, "bool waitMotion(long timeout") + "\n"
 if "void recordingAlert(const char* message)" in source:
     harness += function(source, "void recordingAlert(const char* message)") + "\n"
 harness += function(source, "void statusSignals(void* inst)") + "\n"
-harness += function(source, "bool stationaryStandbyDue(uint32_t now)") + "\n"
+harness += function(source, "uint8_t nextPowerPhase(uint8_t phase, uint32_t now, uint32_t since, uint32_t lastActivity,\n                       bool activitySeen, uint32_t lastOBDResponse, float voltage,\n                       uint32_t backlogBytes, uint16_t ramOnly)") + "\n"
 harness += function(source, "uint8_t adaptBatchLimit(uint8_t limit, bool sent, uint16_t status)") + "\n"
 harness += r'''
 int main(int argc, char** argv) {
@@ -156,8 +178,8 @@ int main(int argc, char** argv) {
    motionMode=scenario=="traffic-light" ? 1 : scenario=="trip-cycle" ? 2 : scenario=="speed-lost" ? 3 : 0;
    limit=150000; onTick();
    try {statusSignals(nullptr);} catch(Finished&) {}
-   bool pass=tones==0 && (scenario=="trip-cycle" ? startTones==4 && stopTones==2 && firstStopAt>=100000 && firstStopAt<100100 :
-      scenario=="traffic-light" || scenario=="speed-lost" ? startTones==2 && stopTones==0 : startTones==0 && stopTones==0);
+   bool pass=tones==0 && (scenario=="trip-cycle" ? startTones==2 && stopTones==1 && firstStopAt>=100000 && firstStopAt<100100 :
+      scenario=="traffic-light" || scenario=="speed-lost" ? startTones==1 && stopTones==0 : startTones==0 && stopTones==0);
    std::cout<<scenario<<": alerts="<<tones<<" start="<<startTones<<" stop="<<stopTones<<" "<<(pass?"PASS":"FAIL")<<"\n";
    return !pass;
  }
@@ -171,25 +193,49 @@ int main(int argc, char** argv) {
    moving=false; onTick(); pass &= readTripMotion(detected) && !detected;
    std::cout<<scenario<<": "<<(pass?"PASS":"FAIL")<<"\n"; return !pass;
  }
- if(scenario.rfind("standby-",0)==0 && scenario!="standby-quiet") {
-   // Parked entry uses the real stationaryStandbyDue() decision.
-   const uint32_t after=STANDBY_AFTER_STATIONARY_MS;
-   voltage=12.4; lastMotionTime=1000; bool pass=true;
-   if(scenario=="standby-engine-off") {
-     pass=!stationaryStandbyDue(lastMotionTime+after-1) && stationaryStandbyDue(lastMotionTime+after);
-   } else if(scenario=="standby-engine-idle") {
-     // Fresh RPM refreshes lastMotionTime at the 250 ms sample rate for 10 minutes.
-     for(uint32_t t=1000; t<601000 && pass; t+=250) {lastMotionTime=t; pass=!stationaryStandbyDue(t+250);}
-   } else if(scenario=="standby-ram-only") {
-     ramOnly=1; pass=!stationaryStandbyDue(lastMotionTime+after);
-     ramOnly=0; pass&=stationaryStandbyDue(lastMotionTime+after);
-   } else if(scenario=="standby-usb-backlog") {
-     voltage=5; sdBacklog=4096; pass=!stationaryStandbyDue(lastMotionTime+after);
-     voltage=12.4; pass&=stationaryStandbyDue(lastMotionTime+after);
-     voltage=5; sdBacklog=0; pass&=stationaryStandbyDue(lastMotionTime+after);
-   } else if(scenario=="standby-clock-rollover") {
-     lastMotionTime=0xFFFFF000u; pass=!stationaryStandbyDue(lastMotionTime+1000) &&
-       stationaryStandbyDue(lastMotionTime+after);
+ if(scenario.rfind("phase-",0)==0) {
+   // The real nextPowerPhase() decision, one failure mode per scenario.
+   auto step=[](uint8_t phase, uint32_t now, uint32_t since, uint32_t activity, bool seen,
+                uint32_t obd, float volts, uint32_t backlog=0, uint16_t ram=0) {
+     return nextPowerPhase(phase, now, since, activity, seen, obd, volts, backlog, ram); };
+   bool pass=true;
+   if(scenario=="phase-false-wake") {
+     // No engine, no movement: stay confirming (modem off), then sleep at 45 s.
+     pass=step(PHASE_CONFIRMING, CONFIRM_WINDOW_MS-1, 0, 0, false, 0, 12.4)==PHASE_CONFIRMING &&
+          step(PHASE_CONFIRMING, CONFIRM_WINDOW_MS, 0, 0, false, 0, 12.4)==PHASE_STANDBY;
+   } else if(scenario=="phase-real-wake") {
+     pass=step(PHASE_CONFIRMING, 5000, 0, 5000, true, 5000, 14.2)==PHASE_TRIP;
+   } else if(scenario=="phase-red-light") {
+     // Stop-start engine off at a light: ECU still answers, battery voltage.
+     for(uint32_t t=1000; t<170000 && pass; t+=250) pass=step(PHASE_TRIP, t, 0, 1000, true, t, 12.3)==PHASE_TRIP;
+   } else if(scenario=="phase-ignition-off") {
+     // ECU silent from 1 s, last activity at 1 s: wrap-up 15 s later, not 180 s.
+     pass=step(PHASE_TRIP, 1000+CAR_OFF_CONFIRM_MS-1, 0, 1000, true, 1000, 12.6)==PHASE_TRIP &&
+          step(PHASE_TRIP, 1000+CAR_OFF_CONFIRM_MS, 0, 1000, true, 1000, 12.6)==PHASE_WRAP_UP;
+   } else if(scenario=="phase-ecu-dropout-charging") {
+     // OBD drops out while the alternator charges: the engine runs, keep going.
+     pass=step(PHASE_TRIP, 60000, 0, 1000, true, 1000, 14.1)==PHASE_TRIP;
+   } else if(scenario=="phase-wrap-up") {
+     // Empty backlog sleeps at once; a backlog gets at most two minutes.
+     pass=step(PHASE_WRAP_UP, 1000, 1000, 500, true, 500, 12.6, 0, 0)==PHASE_STANDBY &&
+          step(PHASE_WRAP_UP, 1000+UPLOAD_WINDOW_MS-1, 1000, 500, true, 500, 12.6, 50000, 0)==PHASE_WRAP_UP &&
+          step(PHASE_WRAP_UP, 1000+UPLOAD_WINDOW_MS, 1000, 500, true, 500, 12.6, 50000, 3)==PHASE_STANDBY;
+   } else if(scenario=="phase-wrap-up-resume") {
+     pass=step(PHASE_WRAP_UP, 30000, 1000, 29000, true, 29000, 14.0, 50000)==PHASE_TRIP;
+   } else if(scenario=="phase-bench") {
+     // USB power (no car battery): trip at once, keep uploading the backlog.
+     pass=step(PHASE_CONFIRMING, 10, 0, 0, false, 0, 5.0)==PHASE_TRIP &&
+          step(PHASE_TRIP, STANDBY_AFTER_STATIONARY_MS+1000, 0, 1000, false, 0, 5.0, 4096)==PHASE_TRIP &&
+          step(PHASE_TRIP, STANDBY_AFTER_STATIONARY_MS+1000, 0, 1000, false, 0, 5.0, 0)==PHASE_WRAP_UP;
+   } else if(scenario=="phase-no-obd") {
+     // GNSS-only car at a light: no ECU answer is not a trip end before 180 s.
+     pass=step(PHASE_TRIP, 60000, 0, 1000, true, 0, 12.5)==PHASE_TRIP &&
+          step(PHASE_TRIP, 1000+STANDBY_AFTER_STATIONARY_MS, 0, 1000, true, 0, 12.5)==PHASE_WRAP_UP;
+   } else if(scenario=="phase-clock-rollover") {
+     const uint32_t base=0xFFFFF000u;
+     pass=step(PHASE_TRIP, (uint32_t)(base+CAR_OFF_CONFIRM_MS), 0, base, true, base, 12.6)==PHASE_WRAP_UP &&
+          step(PHASE_WRAP_UP, base+20000, base+10000, base+15000, true, base+15000, 14.0, 10)==PHASE_TRIP &&
+          step(PHASE_CONFIRMING, (uint32_t)(base+CONFIRM_WINDOW_MS), base, 0, false, 0, 12.4)==PHASE_STANDBY;
    } else pass=false;
    std::cout<<scenario<<": "<<(pass?"PASS":"FAIL")<<"\n"; return !pass;
  }
@@ -204,6 +250,7 @@ int main(int argc, char** argv) {
    std::cout<<scenario<<": shrink "<<trace<<(pass?"PASS":"FAIL")<<"\n"; return !pass;
  }
  if(scenario=="ignition") voltage=14.4;
+ if(scenario=="charging-edge") {voltage=12.4; motionMode=4;}
  if(scenario=="normal-motion") movement=.12;
  if(scenario=="sensor-failed") {voltage=14.4; sensorOK=false;}
  if(scenario=="sensor-absent") {voltage=14.4; mems=nullptr; state.flags=STATE_STANDBY;}
@@ -225,7 +272,7 @@ int main(int argc, char** argv) {
    try {statusSignals(nullptr);} catch(Finished&) {}
    bool pass=scenario=="healthy-recorder" ? tones==0 :
      recoverStorage ? tones>=6 && tonesAfterRecovery==0 :
-     (enterStandby ? tones==6 && stopTones==2 : tones>=9) && firstToneAt<=17000;
+     (enterStandby ? tones==6 && stopTones==1 : tones>=9) && firstToneAt<=17000;
    std::cout<<scenario<<": tones="<<tones<<" first_ms="<<firstToneAt
      <<" after_recovery="<<tonesAfterRecovery<<" "<<(pass?"PASS":"FAIL")<<"\n";return !pass;
  }
@@ -242,6 +289,9 @@ int main(int argc, char** argv) {
  limit=20000;
  try {woke=waitMotion(-1,STANDBY_MOTION_THRESHOLD,STANDBY_MOTION_CONFIRM_SAMPLES);} catch(Finished&) {}
  bool pass=(scenario=="parked" || scenario=="ignition" || scenario=="ecu-probe-suppressed" ? !woke : woke) && obd.probes==0;
+ // A wake records its reason for the next boot; a maintainer at 14.4 V from the start never wakes.
+ if (scenario=="charging-edge") pass=pass && tick>=5000 && tick<6500 && wakeRecord==(WAKE_MAGIC|WAKE_CHARGING);
+ if (scenario=="normal-motion") pass=pass && wakeRecord==(WAKE_MAGIC|WAKE_MOTION);
  std::cout<<scenario<<": woke="<<woke<<" time_ms="<<tick<<" "<<(pass?"PASS":"FAIL")<<"\n";
  return !pass;
 }
@@ -254,8 +304,9 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
     failures = 0
     for scenario in ("ignition", "normal-motion", "sensor-failed", "sensor-absent", "parked", "ecu-probe-suppressed",
                      "motion-source", "trip-cycle", "traffic-light", "speed-lost", "parked-fault", "parked-server",
-                     "login-only", "standby-quiet", "standby-engine-off", "standby-engine-idle",
-                     "standby-ram-only", "standby-usb-backlog", "standby-clock-rollover", "batch-adapt", "sd-fault", "recording-stall",
+                     "login-only", "standby-quiet", "phase-false-wake", "phase-real-wake", "phase-red-light",
+                     "phase-ignition-off", "phase-ecu-dropout-charging", "phase-wrap-up", "phase-wrap-up-resume",
+                     "phase-bench", "phase-no-obd", "phase-clock-rollover", "charging-edge", "batch-adapt", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):
         failures += subprocess.run([str(binary), scenario], check=False).returncode
     # Moving recording failures remain audible without server alerts or POST.

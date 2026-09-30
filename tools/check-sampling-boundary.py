@@ -20,7 +20,7 @@ if 'void collectSample()' in source:
     signatures += ['void collectSample()']
 # These are the sampling-side callees; workers own all blocking acquisition.
 signatures += ['bool processGPS(CBuffer* buffer)', 'void processMEMS(CBuffer* buffer)', 'float readVehicleVoltage()',
-               'bool stationaryStandbyDue(uint32_t now)']
+               'bool vehicleActivityNow(uint32_t now, uint32_t* lastOBDResponse)']
 if 'void emitOBDSnapshot(CBuffer* buffer)' in source:
     signatures += ['void emitOBDSnapshot(CBuffer* buffer)']
 body = '\n'.join(function(s) for s in signatures)
@@ -32,11 +32,14 @@ failures = [p for p in forbidden if re.search(p, body)]
 if failures:
     raise SystemExit('FAIL: blocking/adaptive sampler paths: ' + ', '.join(failures))
 assert 'vTaskDelayUntil' in function('void process()'), 'Sampler needs a fixed deadline'
-# The sampler never slows down. It may only stop, and only through the parked
-# standby decision (engine off and stationary), which lifecycle checks exercise.
+# The sampler never slows down while the car is in use. It may pause or stop
+# only through nextPowerPhase() (wrap-up or standby after the car turns off),
+# which tools/check-device-lifecycle.py exercises.
 process_body = function('void process()')
-assert re.search(r'if \(stationaryStandbyDue\(now\)\) \{[^}]*state\.clear\(STATE_WORKING\);', process_body), \
-    'Sampler may leave full rate only through stationaryStandbyDue()'
+assert re.search(r'if \(next == PHASE_STANDBY\) \{\s*state\.clear\(STATE_WORKING\);', process_body), \
+    'Sampler may stop only through nextPowerPhase()'
+assert re.search(r'if \(powerPhase == PHASE_WRAP_UP\) \{[^}]*return;', process_body), \
+    'Sampler may pause only in wrap-up'
 assert process_body.count('STATE_WORKING') == 1, 'Unexpected extra sampler state change'
 print('PASS: sampler boundary excludes OBD/GNSS acquisition, reconnect, storage and stationary throttling')
 
@@ -121,12 +124,18 @@ for signature in ['void CStorage::log(uint16_t pid, uint8_t values[], uint8_t co
     code += extract(storage, signature) + '\n'
 code += extract(client, 'void CBufferManager::recordMissedReading(uint32_t count)') + '\n'
 code += extract(client, 'uint32_t CBufferManager::missedReadings() const') + '\n'
+code += extract(client, 'uint16_t CBufferManager::unpersistedReadings() const') + '\n'
 code += 'CBufferManager bufman;\n'
 code += function('void emitOBDSnapshot(CBuffer* buffer)') + '\n'
 # The real standby decision is covered by tools/check-device-lifecycle.py.
 # Here the car is always in use, so every deadline must produce a sample.
 code += '#define STATE_WORKING 256\nstruct { void clear(unsigned) {} } state;\n'
-code += 'bool stationaryStandbyDue(uint32_t) { return false; }\n'
+code += '#define PHASE_CONFIRMING 0\n#define PHASE_TRIP 1\n#define PHASE_WRAP_UP 2\n#define PHASE_STANDBY 3\n'
+code += 'uint8_t powerPhase = PHASE_TRIP; uint32_t phaseSince = 0; bool vehicleActivitySeen = true;\n'
+code += 'bool vehicleActivityNow(uint32_t, uint32_t* obd) { *obd = millis(); return true; }\n'
+code += 'float readVehicleVoltage() { return 14.2f; }\n'
+code += 'struct { uint32_t cachedPendingBytes() { return 0; } } durableQueue;\n'
+code += 'uint8_t nextPowerPhase(uint8_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, float, uint32_t, uint16_t) { return PHASE_TRIP; }\n'
 code += function('void process()') + '\n'
 code += r'''
 int main() {

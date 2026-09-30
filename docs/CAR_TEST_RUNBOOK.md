@@ -38,7 +38,8 @@ The previously installed image registered on operator `23415`, received a cellul
 - Network restored after an announced outage: the production image records recovery silently and leaves notification to the host-side notifier.
 - No accepted Freematics server response for 60 seconds while working: three short audible beeps, once per outage. A successful response rearms the alert. Initial connection failure also triggers the beeps after 60 seconds; parked standby remains quiet. A connected modem by itself does not count as a server response.
 - If the card fails to mount on boot, the normal image retries twice before using RAM. Do not reset or power down while the card is unavailable and unsent readings remain in RAM; restore connectivity or the card first. One bench boot on 27 September failed with `f_mount failed: physical drive cannot work`, and the card mounted on the next reboot.
-- Recording runs every 250 ms while the engine runs or the car moves, including idling in traffic. After 180 seconds with no fresh RPM of 100 or more, no OBD speed of 2 km/h or more and no good-quality GNSS movement, the device enters parked standby.
+- Recording runs every 250 ms while the engine runs or the car moves, including idling in traffic. When the car turns off, the falling chime plays, recording pauses, the backlog uploads for at most 2 minutes and the device enters standby. See README "Trip lifecycle".
+- Chimes: three rising notes at trip start, three falling notes at trip end. Three equal beeps are warnings.
 
 The `motion-20260930-prod` image (flashed 30 September) never entered standby, because the continuous-sampling change removed the stationary cutoff. It keeps the modem, GNSS and OBD polling on while parked. Flash a later image to restore parked standby.
 
