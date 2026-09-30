@@ -749,11 +749,21 @@ static int parsePayloadTimestamp(const char* value, size_t length, uint32_t* tim
 	return 1;
 }
 
+/* Why the latest payload failed validation. uhPost logs it with a copy of the
+ * payload, so a refused batch can be diagnosed from the collector alone. */
+static const char* rejectReason = "";
+
+static int reject(const char* reason)
+{
+	rejectReason = reason;
+	return 0;
+}
+
 static int validatePayload(const char* payload, uint32_t* timestamp, uint32_t* finalTimestamp)
 {
-	if (!payload) return 0;
+	if (!payload) return reject("missing payload");
 	size_t payloadLength = strnlen(payload, MAX_TELEMETRY_RECORD_SIZE + 1);
-	if (!payloadLength || payloadLength > MAX_TELEMETRY_RECORD_SIZE) return 0;
+	if (!payloadLength || payloadLength > MAX_TELEMETRY_RECORD_SIZE) return reject("payload size");
 	const char* field = payload;
 	const char* payloadEnd = payload + payloadLength;
 	int timestampFound = 0;
@@ -761,29 +771,29 @@ static int validatePayload(const char* payload, uint32_t* timestamp, uint32_t* f
 	for (;;) {
 		const char* fieldEnd = strchr(field, ',');
 		if (!fieldEnd) fieldEnd = payloadEnd;
-		if (fieldEnd <= field) return 0;
+		if (fieldEnd <= field) return reject("empty field");
 		for (const unsigned char* p = (const unsigned char*)field; p < (const unsigned char*)fieldEnd; p++) {
-			if (*p < 0x20 || *p == 0x7f) return 0;
+			if (*p < 0x20 || *p == 0x7f) return reject("control character");
 		}
 		const char* separator = field;
 		unsigned int digits = 0;
 		unsigned int pid = 0;
 		while (separator < fieldEnd && ishex(*separator)) {
-			if (digits >= 4) return 0;
+			if (digits >= 4) return reject("PID longer than four hex digits");
 			unsigned int nibble = *separator <= '9' ? (unsigned int)(*separator - '0')
 				: (unsigned int)((*separator & 0xDF) - 'A' + 10);
 			pid = (pid << 4) | nibble;
 			digits++;
 			separator++;
 		}
-		if (!digits || separator >= fieldEnd || (*separator != ':' && *separator != '=')) return 0;
+		if (!digits || separator >= fieldEnd || (*separator != ':' && *separator != '=')) return reject("malformed PID");
 		const char* value = separator + 1;
-		if (value >= fieldEnd) return 0;
+		if (value >= fieldEnd) return reject("empty value");
 		if (pid == 0) {
 			uint32_t parsedTimestamp;
-			if (!parsePayloadTimestamp(value, (size_t)(fieldEnd - value), &parsedTimestamp)) return 0;
+			if (!parsePayloadTimestamp(value, (size_t)(fieldEnd - value), &parsedTimestamp)) return reject("invalid timestamp");
 			/* Batches retain every sample timestamp, including clock rollover. */
-			if (timestampFound && (int32_t)(parsedTimestamp - previousTimestamp) < 0) return 0;
+			if (timestampFound && (int32_t)(parsedTimestamp - previousTimestamp) < 0) return reject("timestamp goes backwards");
 			if (!timestampFound && timestamp) *timestamp = parsedTimestamp;
 			previousTimestamp = parsedTimestamp;
 			if (finalTimestamp) *finalTimestamp = parsedTimestamp;
@@ -791,9 +801,9 @@ static int validatePayload(const char* payload, uint32_t* timestamp, uint32_t* f
 		}
 		if (fieldEnd == payloadEnd) break;
 		field = fieldEnd + 1;
-		if (field >= payloadEnd) return 0;
+		if (field >= payloadEnd) return reject("trailing comma");
 	}
-	return timestampFound;
+	return timestampFound ? 1 : reject("no timestamp");
 }
 
 void clearLiveData(CHANNEL_DATA* pld)
@@ -1473,6 +1483,25 @@ CHANNEL_DATA* assignChannel(const char* devid)
 	return pld;
 }
 
+/* The device moves a refused record to its own reject file and continues.
+ * Keep the collector's copy and reason too, bounded so a faulty device cannot
+ * fill the disk. The live archive never receives these bytes. */
+#define REJECTED_PAYLOAD_LIMIT (16L * 1024 * 1024)
+
+static void keepRejectedPayload(CHANNEL_DATA* pld, const char* payload, unsigned int size)
+{
+	fprintf(stderr, "[REJECT] %s: %s (%u bytes)\n", pld->devid, rejectReason, size);
+	char path[256];
+	int n = snprintf(path, sizeof(path), "%s/%s/rejected.txt", dataDir, pld->devid);
+	if (n < 0 || (size_t)n >= sizeof(path)) return;
+	FILE* fp = fopen(path, "a");
+	if (!fp) return;
+	if (fseek(fp, 0, SEEK_END) == 0 && ftell(fp) < REJECTED_PAYLOAD_LIMIT) {
+		fprintf(fp, "%lld %s %.*s\n", (long long)time(NULL), rejectReason, (int)size, payload ? payload : "");
+	}
+	fclose(fp);
+}
+
 int uhPost(UrlHandlerParam* param)
 {
 	param->contentLength = 0;
@@ -1516,6 +1545,7 @@ int uhPost(UrlHandlerParam* param)
 		return FLAG_DATA_RAW;
 	}
 	if (count < 0) {
+		keepRejectedPayload(pld, param->pucPayload, param->payloadSize);
 		param->hs->response.statusCode = 400;
 		param->contentLength = snprintf(param->pucBuffer, param->bufSize, "Invalid telemetry payload");
 		if (param->contentLength >= param->bufSize) param->contentLength = 0;
