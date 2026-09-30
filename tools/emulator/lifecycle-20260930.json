@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-30",
+  "commits": ["60e0a3c", "9c5f482", "b9cdbc3", "61a0088", "f825248"],
+  "firmware_sha256_unflashed": "defdb8581b4271dd369a042738a3f78ed105f4edff1b42f3e21c757a27a3e6d6",
+  "flashed": false,
+  "field_evidence": {
+    "source": "history.sqlite trip 20260930-113901 and caddy-public log, device ZKUCALJ0",
+    "samples_indexed_for_23_minute_drive": 13,
+    "ram_queue_peak_readings": 1011,
+    "missed_readings_at_trip_end": 1154,
+    "sd_backlog_bytes_at_trip_end": 4665791,
+    "replay_batch_refused_http_400_from": "11:16:47 UTC, 2529 bytes, retried about every 20 s",
+    "trip_start_condition_met": "OBD speed 35 km/h, age 162 ms at 11:41:37 UTC"
+  },
+  "commands": [
+    "pio run -e esp32dev -j 16",
+    "python3 tools/check-recorder.py",
+    "python3 tools/check-device-lifecycle.py",
+    "python3 tools/check-sampling-boundary.py",
+    "python3 tools/emulator/run.py --strict --collector",
+    "python3 tools/check-mems-recovery.py",
+    "python3 -m pytest -q collector/history_indexer_test.py"
+  ],
+  "results": {
+    "recorder_200_backlog_sd_opens": {"batched": 14, "previous_recorder": 400},
+    "journal_16_readings_sd_opens": {"single_appends": 32, "batched_append": 2, "replay": 1},
+    "reboot_replay_into_local_collector": {"valid_frames_accepted": 79, "requests": 12, "requests_without_clock_rule": 20, "refused_frame_kept": "/QUEUE.REJ"},
+    "lifecycle_scenarios": "all pass (phase-false-wake, phase-real-wake, phase-red-light, phase-ignition-off, phase-ecu-dropout-charging, phase-wrap-up, phase-wrap-up-resume, phase-bench, phase-no-obd, phase-clock-rollover, charging-edge, batch-adapt and the earlier alarm scenarios)",
+    "emulator": "46 scenarios pass"
+  },
+  "limitations": [
+    "Not flashed. Chime audibility, lifecycle timing, SD throughput and cellular throughput are unmeasured on the car.",
+    "The car-off rule assumes the ECU stops answering at ignition off, as it did on 30 September (obd_state 0 after about 11:55).",
+    "Readings recorded while confirming a false wake (up to 45 s) stay on the card and upload on the next trip."
+  ]
+}
