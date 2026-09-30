@@ -122,6 +122,8 @@ public:
     // A connected Wi-Fi station does not imply that its HTTPS socket opened.
     // Remember the transport that actually owns this HTTP session.
     bool usingWifi() const { return m_useWifi; }
+    // HTTP status of the latest telemetry POST; 0 when no response arrived.
+    uint16_t lastStatus = 0;
 #if ENABLE_WIFI
     WifiHTTP wifi;
 #endif

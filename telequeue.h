@@ -19,6 +19,10 @@ public:
     bool append(const char* frame, uint16_t length);
     bool peek(char* frame, uint16_t capacity, uint16_t* length);
     bool acknowledge();
+    // Keep a record the collector refused permanently in a local reject file,
+    // then acknowledge past it. Valid only when the batch held that one record.
+    bool quarantine(const char* frame, uint16_t length);
+    uint32_t rejectedCount() const { return m_rejected; }
     void rewind(uint32_t position);
     void retry();
     uint32_t readPosition() const { return m_read; }
@@ -33,6 +37,7 @@ private:
     bool readCursor(const char* path, uint32_t size, uint32_t* value);
     bool writeCursor(const char* path, uint32_t value);
     volatile uint32_t m_cachedPending = 0;
+    volatile uint32_t m_rejected = 0;
     volatile bool m_cachedHealthy = false;
     uint32_t m_ack = 0;
     uint32_t m_read = 0;

@@ -74,6 +74,7 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x93, "gps_age", "GNSS value age", "Elapsed time since the held GNSS fix; UTC fields remain the fix time.", "millisecond", "freematics/gnss", decoder="integer"),
     MetricDefinition(0x94, "voltage_age", "Voltage value age", "Elapsed time since the last successful voltage measurement.", "millisecond", "freematics/power", decoder="integer"),
     MetricDefinition(0x95, "mems_age", "Motion sensor value age", "Elapsed time since the last successful motion sensor measurement.", "millisecond", "freematics/mems", decoder="integer"),
+    MetricDefinition(0x97, "rejected_readings", "Rejected readings", "Journal records the collector refused with HTTP 400 since boot; each one is kept in /QUEUE.REJ on the microSD card.", "count", "freematics/transport", decoder="integer"),
     MetricDefinition(0x96, "signal_age", "Network signal value age", "Elapsed time since the last signal-strength measurement; 4294967295 means not measured yet.", "millisecond", "freematics/transport", decoder="integer"),
     MetricDefinition(0x92, "can_frame", "Passive CAN frame", "Raw CAN monitor line encoded as hexadecimal bytes.", "hex", "freematics/can", decoder="string"),
     MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),

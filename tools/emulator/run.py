@@ -105,6 +105,73 @@ def drive(executable, collector):
             return results, packets, (root / "collector.log").read_text()
 
 
+def drive_reboot(executable):
+    """Replay a journal spanning a reboot, plus one malformed frame, into a real collector."""
+    with tempfile.TemporaryDirectory(prefix="freematics-reboot-") as directory:
+        root = Path(directory)
+        (root / "data").mkdir()
+        (root / "log").mkdir()
+        with socket.socket() as port_socket:
+            port_socket.bind(("127.0.0.1", 0))
+            port = port_socket.getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+        command = [str(ROOT / "collector/teleserver"), "-g", "-p", str(port), "-u", "0",
+                   "-w", "emulator-fixture-only", "-d", str(root / "data"), "-l", str(root / "log")]
+        results, requests, statuses = [], 0, []
+        with (root / "collector.log").open("wb") as log:
+            server = subprocess.Popen(command, cwd=root, stdout=log, stderr=log)
+            child = None
+            try:
+                for attempt in range(60):
+                    try:
+                        request(base, "/api/test")
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+                request(base, "/api/notify/EMULATOR?EV=1&TS=1000")
+                child = subprocess.Popen([str(executable), "--drive-reboot"], stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                for line in child.stdout:
+                    event = json.loads(line)
+                    if event.get("event") != "upload":
+                        results.append(event)
+                        continue
+                    requests += 1
+                    if requests > 200:
+                        raise RuntimeError("Reboot replay exceeded its request limit")
+                    try:
+                        body = request(base, "/api/post/EMULATOR", event["packet"].encode())
+                        status = 200
+                    except urllib.error.HTTPError as error:
+                        status, body = error.code, error.read()
+                    statuses.append(status)
+                    child.stdin.write(f"{status} {body.decode().strip()}\n")
+                    child.stdin.flush()
+                child.wait(timeout=5)
+                archive = "".join(path.read_text() for path in (root / "data").rglob("*.txt"))
+                expected = [f"0:{900000 + index * 250}," for index in range(40) if index != 20]
+                expected += [f"0:{1000 + index * 250}," for index in range(40)]
+                missing = [tick for tick in expected if tick not in archive]
+                results.append({"scenario": "journal spanning a reboot reaches the collector without a stuck batch",
+                                "status": "PASS" if not missing else "ERROR", "observed": len(expected) - len(missing)})
+                kept = "".join(path.read_text() for path in (root / "data").rglob("rejected.txt"))
+                results.append({"scenario": "collector keeps the refused payload with its reason",
+                                "status": "PASS" if " empty value 0:905000,10C:," in kept else "ERROR",
+                                "observed": kept.count("\n")})
+                results.append({"scenario": "reboot replay requests and HTTP statuses",
+                                "status": "PASS", "observed": requests, "statuses": statuses})
+            finally:
+                for process in (child, server):
+                    if process is not None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+        return results
+
+
 def extract_function(source, signature):
     start = source.index(signature + "\n{")
     opening = source.index("{", start)
@@ -167,15 +234,34 @@ public:
 class CStorage { public: byte checksum(const char* data, int len); };
 class CStorageRAM : public CStorage {
 public:
-    char m_cache[8192];
+    char m_cache[16384];
+    unsigned int m_cacheSize = sizeof(m_cache);
     unsigned int m_cacheBytes = 0;
+    unsigned int m_samples = 0, m_checkpointBytes = 0, m_checkpointSamples = 0;
     bool m_overflowed = false;
+    void purge() { m_cacheBytes = m_samples = m_checkpointBytes = m_checkpointSamples = 0; m_overflowed = false; }
+    unsigned int length() { return m_cacheBytes; }
+    char* buffer() { return m_cache; }
+    bool appendRaw(const char* data, unsigned int length);
+    void checkpoint();
+    void rollback();
     void tailer();
 };
 """
         storage = (ROOT / "telestore.cpp").read_text()
-        wire += extract_function(storage, "byte CStorage::checksum(const char* data, int len)") + "\n"
-        wire += extract_function(storage, "void CStorageRAM::tailer()") + "\n"
+        for signature in ("byte CStorage::checksum(const char* data, int len)", "void CStorageRAM::tailer()",
+                          "bool CStorageRAM::appendRaw(const char* data, unsigned int length)",
+                          "void CStorageRAM::checkpoint()", "void CStorageRAM::rollback()"):
+            wire += extract_function(storage, signature) + "\n"
+        # The production replay batch builder and acknowledgement policy.
+        firmware = (ROOT / "telelogger.ino").read_text()
+        wire += '#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
+        wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength)") + "\n"
+        wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n"
+        start = firmware.index("struct ReplayIsolation {")
+        wire += firmware[start:firmware.index("};", start) + 2] + "\n"
+        wire += extract_function(firmware, "uint8_t replayBatchLimit(const ReplayIsolation& isolation)") + "\n"
+        wire += extract_function(firmware, "void settleReplayBatch(DurableQueue& queue, ReplayIsolation& isolation, bool sent, uint16_t status,\n                       uint8_t count, const char* frame, uint16_t length)") + "\n"
         (build / "wire_scenario.h").write_text(wire)
         mems_header = (ROOT / "lib/FreematicsPlus/FreematicsMEMS.h").read_text()
         class_start = mems_header.index("class ICM_42627 :")
@@ -207,6 +293,8 @@ class MEMS_I2C {};
         subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
         output = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=15).stdout
         drive_results, packets, collector_log = drive(executable, args.collector)
+        if args.collector:
+            drive_results += drive_reboot(executable)
     results = [json.loads(line) for line in output.splitlines()]
     results.extend(drive_results)
     sources = [client, ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp",

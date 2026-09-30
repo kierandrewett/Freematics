@@ -119,6 +119,13 @@ struct OBDSnapshot {
   uint8_t status;
 };
 OBDSnapshot obdSnapshot = {};
+
+// After HTTP 400 on a batch, the refused frame is somewhere in the next
+// `suspect` frames. Halving the batch finds it in about 2 * log2(n) requests.
+struct ReplayIsolation {
+  uint8_t suspect;
+  uint8_t limit;
+};
 #if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
 Task statusTask;
 #endif
@@ -1398,6 +1405,8 @@ void collectSample()
   buffer->add(PID_DURABLE_QUEUE_BYTES, ELEMENT_UINT32, &durableBytes, sizeof(durableBytes));
   uint8_t queueHealthy = durableQueue.cachedHealthy() ? 1 : 0;
   buffer->add(PID_DURABLE_QUEUE_HEALTH, ELEMENT_UINT8, &queueHealthy, sizeof(queueHealthy));
+  uint32_t rejected = durableQueue.rejectedCount();
+  buffer->add(PID_REJECTED_READINGS, ELEMENT_UINT32, &rejected, sizeof(rejected));
 #endif
 
   buffer->timestamp = startTime;
@@ -1789,6 +1798,73 @@ bool initCell(bool quick = false)
 /*******************************************************************************
   Initializing network, maintaining connection and doing transmissions
 *******************************************************************************/
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+// Fill one upload batch from the SD journal and return its frame count.
+// The journal survives reboots, and each reboot restarts the device clock.
+// The collector refuses a batch whose timestamps go backwards, so a clock
+// reset always starts a new batch.
+uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,
+                         uint8_t limit, uint16_t* lastLength)
+{
+  uint8_t count = 0;
+  uint32_t previousTick = 0;
+  const uint32_t started = millis();
+  while (count < limit) {
+    const uint32_t position = queue.readPosition();
+    uint16_t length = 0;
+    if (!queue.peek(frame, capacity, &length)) {
+      if (count && millis() - started < HTTP_BATCH_MAX_WAIT_MS) {
+        delay(25);
+        continue;
+      }
+      break;
+    }
+    const bool timed = length > 2 && frame[0] == '0' && frame[1] == ':';
+    const uint32_t tick = timed ? strtoul(frame + 2, nullptr, 10) : previousTick;
+    if (count && (int32_t)(tick - previousTick) < 0) {
+      queue.rewind(position);
+      break;
+    }
+    previousTick = tick;
+    store.checkpoint();
+    if (!store.appendRaw(frame, length)) {
+      store.rollback();
+      queue.rewind(position);
+      break;
+    }
+    *lastLength = length;
+    count++;
+  }
+  if (count) store.tailer();
+  return count;
+}
+
+uint8_t replayBatchLimit(const ReplayIsolation& isolation)
+{
+  return isolation.suspect ? isolation.limit : HTTP_BATCH_MAX_SAMPLES;
+}
+
+// Apply the collector's answer to a replayed batch. HTTP 400 is a permanent
+// refusal of these bytes: split the batch, and move a refused single frame to
+// the reject file on the card so it cannot block later readings.
+void settleReplayBatch(DurableQueue& queue, ReplayIsolation& isolation, bool sent, uint16_t status,
+                       uint8_t count, const char* frame, uint16_t length)
+{
+  if (sent || (status == 400 && count == 1)) {
+    if (sent) queue.acknowledge();
+    else if (!queue.quarantine(frame, length)) { queue.retry(); return; }
+    isolation.suspect = count < isolation.suspect ? isolation.suspect - count : 0;
+    if (isolation.limit > isolation.suspect) isolation.limit = isolation.suspect;
+    return;
+  }
+  queue.retry();
+  if (status != 400) return;
+  Serial.println("[QUEUE] Collector refused a batch; halving it to find the refused frame");
+  isolation.suspect = count;
+  isolation.limit = count / 2;
+}
+#endif
+
 void telemetry(void* inst)
 {
   uint32_t lastRssiTime = 0;
@@ -1805,6 +1881,14 @@ void telemetry(void* inst)
     SERIALIZE_BUFFER_SIZE
   );
   teleClient.reset();
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+  // The last replayed frame stays here, so a refused single-frame batch can
+  // be moved to the reject file without another SD read.
+  static char replayFrame[SAMPLE_FRAME_SIZE];
+  uint16_t replayFrameLength = 0;
+  // Narrows down a batch the collector refused instead of retrying it forever.
+  ReplayIsolation isolation = {0, 0};
+#endif
 
   for (;;) {
     if (state.check(STATE_STANDBY)) {
@@ -1953,29 +2037,9 @@ void telemetry(void* inst)
       // a journal that keeps receiving fresh samples indefinitely.
       replaying = durableQueue.pendingBytes() != 0 && bufman.recordedReadings() == 0;
       if (replaying) {
-        uint32_t batchStarted = millis();
-        char frame[SAMPLE_FRAME_SIZE];
-        while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
-          uint32_t position = durableQueue.readPosition();
-          uint16_t length = 0;
-          if (!durableQueue.peek(frame, sizeof(frame), &length)) {
-            if (batchCount && millis() - batchStarted < HTTP_BATCH_MAX_WAIT_MS) {
-              delay(25);
-              continue;
-            }
-            break;
-          }
-          store.checkpoint();
-          if (!store.appendRaw(frame, length)) {
-            store.rollback();
-            durableQueue.rewind(position);
-            break;
-          }
-          batchCount++;
-        }
-        if (batchCount) {
-          store.tailer();
-        } else if (!durableQueue.healthy()) {
+        batchCount = buildReplayBatch(durableQueue, store, replayFrame, sizeof(replayFrame),
+                                      replayBatchLimit(isolation), &replayFrameLength);
+        if (!batchCount && !durableQueue.healthy()) {
           // Keep sending RAM-backed readings when a damaged journal cannot
           // advance. The journal stays intact for recovery and health alerts.
           replaying = false;
@@ -2048,11 +2112,20 @@ void telemetry(void* inst)
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = false;
 #endif
+#if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+      if (replaying) {
+        // HTTP 400 is a permanent refusal, not an outage. It must not count
+        // towards a modem reconnect or block every later reading.
+        const bool refused = !sent && teleClient.lastStatus == 400;
+        settleReplayBatch(durableQueue, isolation, sent, teleClient.lastStatus, batchCount,
+                          replayFrame, replayFrameLength);
+        if (refused) { store.purge(); continue; }
+      }
+#endif
       if (sent) {
         // Free the entire batch only after the server accepts it.
 #if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
-        if (replaying) durableQueue.acknowledge();
-        else
+        if (!replaying)
 #endif
           for (uint8_t i = 0; i < batchCount; i++) bufman.free(batch[i]);
         connErrors = 0;
@@ -2061,8 +2134,7 @@ void telemetry(void* inst)
         // Retain the whole batch for an at-least-once ordered retry after the
         // connection recovers instead of silently dropping outage data.
 #if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
-        if (replaying) durableQueue.retry();
-        else
+        if (!replaying)
 #endif
           for (uint8_t i = 0; i < batchCount; i++) {
             bufman.restore(batch[i]);

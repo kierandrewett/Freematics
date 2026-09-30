@@ -13,6 +13,7 @@ constexpr const char* DATA_PATH = "/QUEUE.BIN";
 constexpr const char* RECOVERY_PATH = "/QUEUE.REC";
 constexpr const char* CURSOR_A = "/QUEUE.A";
 constexpr const char* CURSOR_B = "/QUEUE.B";
+constexpr const char* REJECTED_PATH = "/QUEUE.REJ";
 constexpr uint32_t RECORD_MAGIC = 0x46514A31; // FQJ1
 constexpr uint32_t CURSOR_MAGIC = 0x46514331; // FQC1
 constexpr uint16_t MAX_FRAME = SAMPLE_FRAME_SIZE;
@@ -384,6 +385,29 @@ bool DurableQueue::acknowledge()
     }
     unlock();
     return saved;
+}
+
+bool DurableQueue::quarantine(const char* frame, uint16_t length)
+{
+    if (!m_ready || !frame || length < 3 || length > MAX_FRAME || !lock()) return false;
+    // Same record layout as the journal, so the reject file can be replayed or
+    // inspected with the normal tools. The bytes never leave the card.
+    RecordHeader header = {RECORD_MAGIC, length, 0, crc32((const uint8_t*)frame, length)};
+    File file = SD.open(REJECTED_PATH, FILE_APPEND);
+    bool okay = file &&
+        file.write((const uint8_t*)&header, sizeof(header)) == sizeof(header) &&
+        file.write((const uint8_t*)frame, length) == length;
+    if (file) { file.flush(); file.close(); }
+    unlock();
+    if (!okay) {
+        Serial.println("[QUEUE] Reject file write failed; record stays in the journal");
+        return false;
+    }
+    if (!acknowledge()) return false;
+    m_rejected++;
+    Serial.print("[QUEUE] Collector refused one record; kept in ");
+    Serial.println(REJECTED_PATH);
+    return true;
 }
 
 void DurableQueue::rewind(uint32_t position)

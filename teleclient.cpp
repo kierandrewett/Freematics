@@ -651,6 +651,7 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
+  lastStatus = 0;
 #if ENABLE_WIFI
   bool disconnected = m_useWifi ? wifi.state() != HTTP_CONNECTED : cell.state() != HTTP_CONNECTED;
   if (disconnected) {
@@ -737,6 +738,7 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 #else
   int responseCode = cell.code();
 #endif
+  lastStatus = responseCode;
   bool accepted = responseCode == 200;
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
   if (accepted) {

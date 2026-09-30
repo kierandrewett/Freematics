@@ -9,6 +9,7 @@ uint32_t simulationTime = 0;
 void runJournalScenarios();
 void runMEMSScenarios();
 int runJournalDrive();
+int runRebootDrive();
 
 class DummyBridge : public CLink
 {
@@ -48,6 +49,7 @@ int main(int argc, char** argv)
 {
     std::cout << std::setprecision(17);
     if (argc == 2 && std::string(argv[1]) == "--drive") return runJournalDrive();
+    if (argc == 2 && std::string(argv[1]) == "--drive-reboot") return runRebootDrive();
     DummyBridge bridge;
     COBD obd;
     obd.begin(&bridge);

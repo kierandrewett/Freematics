@@ -262,3 +262,50 @@ int runJournalDrive()
            lostAcknowledgements == 12 && upload.pendingBytes() == 0, false, accepted);
     return 0;
 }
+
+// Boot A leaves 40 unsent readings, one of them malformed (an empty value).
+// Boot B restarts the device clock at 1000 ms and records 40 more. Replay uses
+// the production batch builder and acknowledgement policy against a real
+// collector, whose answers arrive on stdin as "<status> <body>".
+int runRebootDrive()
+{
+    resetCard();
+    DurableQueue recording;
+    if (!recording.begin()) return 1;
+    for (unsigned index = 0; index < 40; index++) {
+        char frame[96];
+        if (index == 20) snprintf(frame, sizeof(frame), "0:%u,10C:,10D:40,89:1,", 900000 + index * 250);
+        else snprintf(frame, sizeof(frame), "0:%u,10C:%u,10D:40,89:1,", 900000 + index * 250, 900 + index);
+        if (!append(recording, frame)) return 1;
+    }
+    for (unsigned index = 0; index < 40; index++) {
+        char frame[96];
+        snprintf(frame, sizeof(frame), "0:%u,10C:%u,10D:0,89:1,", 1000 + index * 250, 800 + index);
+        if (!append(recording, frame)) return 1;
+    }
+    DurableQueue upload;
+    if (!upload.begin()) return 1;
+    static char frame[8192];
+    uint16_t lastLength = 0;
+    ReplayIsolation isolation = {0, 0};
+    unsigned frames = 0, batches = 0;
+    for (unsigned attempt = 0; attempt < 200; attempt++) {
+        CStorageRAM wire;
+        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame), replayBatchLimit(isolation), &lastLength);
+        if (!count) break;
+        wire.m_cache[wire.m_cacheBytes] = 0;
+        std::cout << "{\"event\":\"upload\",\"packet\":\"" << wire.m_cache << "\"}" << std::endl;
+        std::string response;
+        if (!std::getline(std::cin, response)) return 1;
+        const unsigned status = strtoul(response.c_str(), nullptr, 10);
+        const bool sent = response == "200 OK " + std::to_string(count * 3);
+        if (sent) frames += count;
+        batches++;
+        settleReplayBatch(upload, isolation, sent, status, count, frame, lastLength);
+    }
+    const bool rejectKept = SD.exists("/QUEUE.REJ") && cardFiles.at("/QUEUE.REJ")->size() > 12;
+    report("reboot replay accepts every valid frame and keeps the refused one on the card",
+           frames == 79 && upload.rejectedCount() == 1 && rejectKept && upload.pendingBytes() == 0, false, frames);
+    report("reboot replay batches", batches < 20, false, batches);
+    return 0;
+}
