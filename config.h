@@ -71,7 +71,7 @@
 #if BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
 #define BUFFER_LENGTH 2048 /* bytes per slot; retain complete rich samples */
-#define SERIALIZE_BUFFER_SIZE 16384 /* bytes */
+#define SERIALIZE_BUFFER_SIZE 49152 /* bytes; one POST, below the collector's 64 KB limit */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
 #define BUFFER_LENGTH 2048 /* bytes per slot */
@@ -190,7 +190,11 @@
 // Maximum samples coalesced into one HTTPS POST. The payload itself remains
 // the existing compact PID:value format; batching amortises HTTPS/TLS headers
 // and lets queued readings drain efficiently after a coverage gap.
-#define HTTP_BATCH_MAX_SAMPLES 24
+#define HTTP_BATCH_MAX_SAMPLES 40
+// Batch size adapts to the link: halve after a failed request, grow by
+// HTTP_BATCH_GROW_STEP after each accepted one. A weak signal resends less.
+#define HTTP_BATCH_MIN_SAMPLES 4
+#define HTTP_BATCH_GROW_STEP 4
 // Bound live latency while allowing normal samples to share a request.
 #define HTTP_BATCH_MAX_WAIT_MS 1000UL
 

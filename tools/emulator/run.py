@@ -257,10 +257,10 @@ public:
         firmware = (ROOT / "telelogger.ino").read_text()
         wire += '#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
         wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength)") + "\n"
-        wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n"
+        wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n#define HTTP_BATCH_MIN_SAMPLES 4\n#define HTTP_BATCH_GROW_STEP 4\n"
         start = firmware.index("struct ReplayIsolation {")
         wire += firmware[start:firmware.index("};", start) + 2] + "\n"
-        wire += extract_function(firmware, "uint8_t replayBatchLimit(const ReplayIsolation& isolation)") + "\n"
+        wire += extract_function(firmware, "uint8_t replayBatchLimit(const ReplayIsolation& isolation, uint8_t linkLimit)") + "\n"
         wire += extract_function(firmware, "void settleReplayBatch(DurableQueue& queue, ReplayIsolation& isolation, bool sent, uint16_t status,\n                       uint8_t count, const char* frame, uint16_t length)") + "\n"
         (build / "wire_scenario.h").write_text(wire)
         mems_header = (ROOT / "lib/FreematicsPlus/FreematicsMEMS.h").read_text()

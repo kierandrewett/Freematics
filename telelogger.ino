@@ -1881,9 +1881,20 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
   return count;
 }
 
-uint8_t replayBatchLimit(const ReplayIsolation& isolation)
+uint8_t replayBatchLimit(const ReplayIsolation& isolation, uint8_t linkLimit)
 {
-  return isolation.suspect ? isolation.limit : HTTP_BATCH_MAX_SAMPLES;
+  return isolation.suspect && isolation.limit < linkLimit ? isolation.limit : linkLimit;
+}
+
+// Each POST pays a fixed cost in AT commands and HTTP round trips, so large
+// batches clear a backlog faster. A failed large batch resends everything,
+// so shrink quickly on failure and grow back slowly.
+uint8_t adaptBatchLimit(uint8_t limit, bool sent, uint16_t status)
+{
+  if (sent) return limit + HTTP_BATCH_GROW_STEP < HTTP_BATCH_MAX_SAMPLES ? limit + HTTP_BATCH_GROW_STEP : HTTP_BATCH_MAX_SAMPLES;
+  // HTTP 400 refuses the bytes, not the link. Isolation handles it.
+  if (status == 400) return limit;
+  return limit / 2 > HTTP_BATCH_MIN_SAMPLES ? limit / 2 : HTTP_BATCH_MIN_SAMPLES;
 }
 
 // Apply the collector's answer to a replayed batch. HTTP 400 is a permanent
@@ -1931,6 +1942,7 @@ void telemetry(void* inst)
   // Narrows down a batch the collector refused instead of retrying it forever.
   ReplayIsolation isolation = {0, 0};
 #endif
+  uint8_t batchLimit = HTTP_BATCH_MAX_SAMPLES;
 
   for (;;) {
     if (state.check(STATE_STANDBY)) {
@@ -2080,7 +2092,7 @@ void telemetry(void* inst)
       replaying = durableQueue.pendingBytes() != 0 && bufman.recordedReadings() == 0;
       if (replaying) {
         batchCount = buildReplayBatch(durableQueue, store, replayFrame, sizeof(replayFrame),
-                                      replayBatchLimit(isolation), &replayFrameLength);
+                                      replayBatchLimit(isolation, batchLimit), &replayFrameLength);
         if (!batchCount && !durableQueue.healthy()) {
           // Keep sending RAM-backed readings when a damaged journal cannot
           // advance. The journal stays intact for recovery and health alerts.
@@ -2090,7 +2102,7 @@ void telemetry(void* inst)
       if (!replaying)
 #endif
       {
-      while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
+      while (batchCount < batchLimit) {
         CBuffer* buffer = bufman.getOldest(true);
         if (!buffer) {
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
@@ -2154,6 +2166,7 @@ void telemetry(void* inst)
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = false;
 #endif
+      batchLimit = adaptBatchLimit(batchLimit, sent, teleClient.lastStatus);
 #if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
       if (replaying) {
         // HTTP 400 is a permanent refusal, not an outage. It must not count

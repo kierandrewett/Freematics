@@ -318,7 +318,7 @@ int runRebootDrive()
     unsigned frames = 0, batches = 0;
     for (unsigned attempt = 0; attempt < 200; attempt++) {
         CStorageRAM wire;
-        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame), replayBatchLimit(isolation), &lastLength);
+        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame), replayBatchLimit(isolation, 24), &lastLength);
         if (!count) break;
         wire.m_cache[wire.m_cacheBytes] = 0;
         std::cout << "{\"event\":\"upload\",\"packet\":\"" << wire.m_cache << "\"}" << std::endl;
