@@ -834,24 +834,22 @@ bool initGPS()
 
 void emitGPSFields(CBuffer* buffer)
 {
+  if (!buffer || !gd) return;
   float kph = gd->speed * 1.852f;
-  if (buffer) {
-    // Keep the UTC date alongside the time so queued samples can be placed on
-    // their original timeline after an offline replay.  Older firmware only
-    // emitted PID_GPS_TIME, which is not sufficient to recover a calendar
-    // date after the collector has received a backlog.
-    if (gd->date) buffer->add(PID_GPS_DATE, ELEMENT_UINT32, &gd->date, sizeof(uint32_t));
-    buffer->add(PID_GPS_TIME, ELEMENT_UINT32, &gd->time, sizeof(uint32_t));
-    buffer->add(PID_GPS_LATITUDE, ELEMENT_FLOAT, &gd->lat, sizeof(float));
-    buffer->add(PID_GPS_LONGITUDE, ELEMENT_FLOAT, &gd->lng, sizeof(float));
-    buffer->add(PID_GPS_ALTITUDE, ELEMENT_FLOAT_D1, &gd->alt, sizeof(float)); /* m */
-    buffer->add(PID_GPS_SPEED, ELEMENT_FLOAT_D1, &kph, sizeof(kph));
-    buffer->add(PID_GPS_HEADING, ELEMENT_UINT16, &gd->heading, sizeof(uint16_t));
-    buffer->add(PID_GPS_SAT_COUNT, ELEMENT_UINT8, &gd->sat, sizeof(uint8_t));
-    buffer->add(PID_GPS_HDOP, ELEMENT_UINT8, &gd->hdop, sizeof(uint8_t));
-  }
+  // Time, age and receiver quality also exist before a position fix.
+  if (gd->date) buffer->add(PID_GPS_DATE, ELEMENT_UINT32, &gd->date, sizeof(uint32_t));
+  buffer->add(PID_GPS_TIME, ELEMENT_UINT32, &gd->time, sizeof(uint32_t));
+  buffer->add(PID_GPS_SAT_COUNT, ELEMENT_UINT8, &gd->sat, sizeof(uint8_t));
+  buffer->add(PID_GPS_HDOP, ELEMENT_UINT8, &gd->hdop, sizeof(uint8_t));
   uint32_t age = millis() - gd->ts;
   buffer->add(PID_GPS_AGE, ELEMENT_UINT32, &age, sizeof(age));
+  if ((!gd->lat && !gd->lng) || !isfinite(gd->lat) || !isfinite(gd->lng) ||
+      gd->lat < -90 || gd->lat > 90 || gd->lng < -180 || gd->lng > 180) return;
+  buffer->add(PID_GPS_LATITUDE, ELEMENT_FLOAT, &gd->lat, sizeof(float));
+  buffer->add(PID_GPS_LONGITUDE, ELEMENT_FLOAT, &gd->lng, sizeof(float));
+  buffer->add(PID_GPS_ALTITUDE, ELEMENT_FLOAT_D1, &gd->alt, sizeof(float));
+  buffer->add(PID_GPS_SPEED, ELEMENT_FLOAT_D1, &kph, sizeof(kph));
+  buffer->add(PID_GPS_HEADING, ELEMENT_UINT16, &gd->heading, sizeof(uint16_t));
 }
 
 void syncClockFromGPS(GPS_DATA* gd)
@@ -919,11 +917,9 @@ bool processGPS(CBuffer* buffer)
   portEXIT_CRITICAL(&sensorMux);
   gd = gpsSample.ts ? &gpsSample : nullptr;
   if (!gd) return false;
+  emitGPSFields(buffer);
   const bool newFix = lastGPStime != gd->time || lastGPSdate != gd->date;
-  if (!newFix) {
-    if (buffer && (gd->lat || gd->lng)) emitGPSFields(buffer);
-    return false;
-  }
+  if (!newFix) return false;
   if (gd->date) {
     // generate ISO time string
     char *p = isoTime + sprintf(isoTime, "%04u-%02u-%02uT%02u:%02u:%02u",
@@ -934,19 +930,17 @@ bool processGPS(CBuffer* buffer)
     *p = 'Z';
     *(p + 1) = 0;
   }
-  if (gd->lng == 0 && gd->lat == 0) {
+  if ((!gd->lng && !gd->lat) || !isfinite(gd->lat) || !isfinite(gd->lng) ||
+      gd->lat < -90 || gd->lat > 90 || gd->lng < -180 || gd->lng > 180) {
     // Time may be known before a position fix. Do not fabricate coordinates.
-    return false;
-  }
-  if ((lastGPSLat || lastGPSLng) && (abs(gd->lat - lastGPSLat) > 0.001 || abs(gd->lng - lastGPSLng) > 0.001)) {
-    // invalid coordinates data
-    lastGPSLat = 0;
-    lastGPSLng = 0;
     return false;
   }
 
   float kph = gd->speed * 1.852f;
-  if ((lastGPSLat || lastGPSLng) && kph >= 1) {
+  // Preserve measured positions. Do not integrate distance across an outage
+  // or from a stale fix; position rejection must not suppress telemetry.
+  if ((lastGPSLat || lastGPSLng) && kph >= 1 &&
+      millis() - lastGPSDistanceTime < 5000 && millis() - gd->ts < 1500) {
     float latDelta = (gd->lat - lastGPSLat) * DEG_TO_RAD;
     float lngDelta = (gd->lng - lastGPSLng) * DEG_TO_RAD;
     float x = lngDelta * cosf((gd->lat + lastGPSLat) * 0.5f * DEG_TO_RAD);
@@ -959,8 +953,6 @@ bool processGPS(CBuffer* buffer)
 
   if (kph >= 2) lastMotionTime = millis();
 
-  if (buffer) emitGPSFields(buffer);
-  
   state.set(STATE_GPS_ONLINE);
   lastGPStime = gd->time;
   lastGPSdate = gd->date;
@@ -1383,6 +1375,12 @@ void recordSamples(void*)
   for (;;) {
     if (!state.check(STATE_WORKING)) { delay(50); continue; }
 #if STORAGE == STORAGE_SD
+  static uint32_t lastRecovery = 0;
+  if (durableQueue.damaged() &&
+      (!lastRecovery || millis() - lastRecovery >= 5000UL)) {
+    lastRecovery = millis();
+    durableQueue.recover();
+  }
   // A failed boot mount otherwise leaves the device on its finite RAM queue
   // for the entire active session. Retry at a bounded rate; an already-open
   // logger must not be reopened just because the journal was unavailable.
@@ -1564,8 +1562,29 @@ void acquireGPS(void*)
 void acquireMEMS(void*)
 {
 #if ENABLE_MEMS
+  uint8_t failures = 0;
+  uint32_t lastRetry = 0;
   for (;;) {
-    if (!state.check(STATE_WORKING | STATE_MEMS_READY) || !mems) { delay(50); continue; }
+    if (!state.check(STATE_WORKING) || !mems) { delay(50); continue; }
+    if (!state.check(STATE_MEMS_READY)) {
+      if (!lastRetry || millis() - lastRetry >= 5000UL) {
+        lastRetry = millis();
+        xSemaphoreTake(memsMutex, portMAX_DELAY);
+        mems->end();
+#if ENABLE_ORIENTATION
+        const bool recovered = mems->begin(true);
+#else
+        const bool recovered = mems->begin(false);
+#endif
+        xSemaphoreGive(memsMutex);
+        if (recovered) {
+          failures = 0;
+          state.set(STATE_MEMS_READY);
+          Serial.println("[MEMS] Sensor recovered; acquisition resumed");
+        }
+      }
+      if (!state.check(STATE_MEMS_READY)) { delay(50); continue; }
+    }
     xSemaphoreTake(memsMutex, portMAX_DELAY);
     MEMSSnapshot snapshot = {};
     bool success = mems->read(snapshot.acceleration, snapshot.gyro, snapshot.compass,
@@ -1578,11 +1597,15 @@ void acquireMEMS(void*)
                             );
     xSemaphoreGive(memsMutex);
     if (success) {
+      failures = 0;
       for (byte i = 0; i < 3; i++) snapshot.acceleration[i] -= accBias[i];
       snapshot.timestamp = millis();
       portENTER_CRITICAL(&sensorMux);
       memsSnapshot = snapshot;
       portEXIT_CRITICAL(&sensorMux);
+    } else if (++failures >= 10) {
+      state.clear(STATE_MEMS_READY);
+      Serial.println("[MEMS] Repeated read failures; retrying sensor initialisation");
     }
     delay(20);
   }

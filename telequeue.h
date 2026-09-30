@@ -14,6 +14,8 @@ class DurableQueue {
 public:
     bool begin();
     void suspend();
+    bool recover();
+    bool damaged() const { return m_corrupt; }
     bool append(const char* frame, uint16_t length);
     bool peek(char* frame, uint16_t capacity, uint16_t* length);
     bool acknowledge();
@@ -37,7 +39,7 @@ private:
     uint32_t m_size = 0;
     bool m_ready = false;
     bool m_fault = false;
-    bool m_corrupt = false;
+    volatile bool m_corrupt = false;
     bool m_nextCursorB = false;
 };
 #endif

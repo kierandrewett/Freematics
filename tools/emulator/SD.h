@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <stdexcept>
 #include "Arduino.h"
 
 constexpr int FILE_READ = 0;
@@ -16,6 +17,9 @@ inline std::map<std::string, std::shared_ptr<std::vector<uint8_t>>> cardFiles;
 inline bool cardOnline = true;
 inline bool cardRenameFails = false;
 inline int64_t cardWriteBudget = -1;
+inline int64_t cardReadBudget = -1;
+inline int cardRenameBudget = -1;
+inline bool cardResetAfterRename = false;
 
 class File
 {
@@ -30,6 +34,10 @@ public:
     {
         if (!*this) return 0;
         count = std::min(count, bytes->size() - position);
+        if (cardReadBudget >= 0) {
+            count = std::min(count, static_cast<size_t>(cardReadBudget));
+            cardReadBudget -= count;
+        }
         if (!count) return 0;
         memcpy(target, bytes->data() + position, count);
         position += count;
@@ -74,8 +82,11 @@ public:
     bool rename(const char* from, const char* to)
     {
         if (!cardOnline || cardRenameFails || !exists(from) || exists(to)) return false;
+        if (cardRenameBudget == 0) return false;
+        if (cardRenameBudget > 0) cardRenameBudget--;
         cardFiles[to] = cardFiles.at(from);
         cardFiles.erase(from);
+        if (cardResetAfterRename) throw std::runtime_error("simulated card reset");
         return true;
     }
     File open(const char* path, int mode)

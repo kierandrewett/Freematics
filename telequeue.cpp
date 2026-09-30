@@ -10,6 +10,7 @@
 
 namespace {
 constexpr const char* DATA_PATH = "/QUEUE.BIN";
+constexpr const char* RECOVERY_PATH = "/QUEUE.REC";
 constexpr const char* CURSOR_A = "/QUEUE.A";
 constexpr const char* CURSOR_B = "/QUEUE.B";
 constexpr uint32_t RECORD_MAGIC = 0x46514A31; // FQJ1
@@ -46,6 +47,28 @@ uint32_t crc32(const uint8_t* data, size_t length)
     return ~crc;
 }
 
+// Return -1 for an I/O failure, 0 for damaged bytes, and 1 for a valid record.
+// A read failure must not be treated as permission to skip a record.
+int readRecord(File& file, uint32_t position, uint32_t size,
+               RecordHeader* header, char* frame)
+{
+    if (size - position < sizeof(*header)) return 0;
+    if (!file.seek(position) ||
+        file.read((uint8_t*)header, sizeof(*header)) != sizeof(*header)) return -1;
+    if (header->magic != RECORD_MAGIC || header->reserved != 0 ||
+        header->length < 3 || header->length > MAX_FRAME ||
+        header->length > size - position - sizeof(*header)) return 0;
+    if (file.read((uint8_t*)frame, header->length) != header->length) return -1;
+    return frame[header->length - 1] == ',' &&
+        crc32((const uint8_t*)frame, header->length) == header->crc ? 1 : 0;
+}
+
+bool removeCursors()
+{
+    return (!SD.exists(CURSOR_A) || SD.remove(CURSOR_A)) &&
+           (!SD.exists(CURSOR_B) || SD.remove(CURSOR_B));
+}
+
 bool ensureDataFile()
 {
     if (SD.exists(DATA_PATH)) return true;
@@ -72,7 +95,10 @@ bool archiveAcceptedJournal()
         snprintf(metadata, sizeof(metadata), "/DATA/%lu.UTC", (unsigned long)id);
         snprintf(csv, sizeof(csv), "/DATA/%lu.CSV", (unsigned long)id);
         if (SD.exists(archive) || SD.exists(metadata) || SD.exists(csv)) continue;
-        if (!SD.rename(DATA_PATH, archive)) return false;
+        // Remove checkpoints before the journal changes identity. A reset here
+        // can resend accepted records, but cannot apply an old offset to a
+        // new journal and skip unacknowledged records.
+        if (!removeCursors() || !SD.rename(DATA_PATH, archive)) return false;
         File date = SD.open(metadata, FILE_WRITE);
         if (date) {
             date.printf("%lu\n", (unsigned long)now);
@@ -122,12 +148,21 @@ bool DurableQueue::writeCursor(const char* path, uint32_t value)
     bool written = file.write((const uint8_t*)&cursor, sizeof(cursor)) == sizeof(cursor);
     file.flush();
     file.close();
-    return written;
+    uint32_t saved = 0;
+    return written && readCursor(path, value, &saved) && saved == value;
 }
 
 bool DurableQueue::begin()
 {
     if (!lock()) return false;
+    // Complete a recovery interrupted after the original was quarantined.
+    if (!SD.exists(DATA_PATH) && SD.exists(RECOVERY_PATH) &&
+        !SD.rename(RECOVERY_PATH, DATA_PATH)) {
+        m_ready = false;
+        m_fault = true;
+        unlock();
+        return false;
+    }
     File data = ensureDataFile() ? SD.open(DATA_PATH, FILE_APPEND) : File();
     if (!data) {
         m_ready = false;
@@ -146,12 +181,80 @@ bool DurableQueue::begin()
     m_read = m_ack;
     m_nextCursorB = validA && (!validB || a >= b);
     m_ready = true;
-    m_fault = false;
-    m_corrupt = false;
+    m_fault = m_corrupt;
     unlock();
+    if (m_corrupt && !recover()) return false;
     Serial.print("[QUEUE] SD journal ready | pending bytes: ");
-    Serial.println(size - m_ack);
+    Serial.println(m_cachedPending);
     return true;
+}
+
+bool DurableQueue::recover()
+{
+    if (!m_ready || !m_corrupt || !lock()) return false;
+    // Keep the damaged source permanently outside the normal log retention
+    // directory. Only CRC-verified records enter the replacement journal.
+    char archive[48];
+    bool available = SD.exists("/RECOVERY") || SD.mkdir("/RECOVERY");
+    for (uint16_t attempt = 0; available && attempt < 1000; attempt++) {
+        snprintf(archive, sizeof(archive), "/RECOVERY/%lu-%u.BIN",
+                 (unsigned long)millis(), attempt);
+        if (!SD.exists(archive)) break;
+        if (attempt == 999) available = false;
+    }
+    char* frame = available ? (char*)malloc(MAX_FRAME) : nullptr;
+    File source = frame ? SD.open(DATA_PATH, FILE_READ) : File();
+    File target = source ? SD.open(RECOVERY_PATH, FILE_WRITE) : File();
+    bool okay = source && target;
+    const uint32_t size = source ? source.size() : 0;
+    uint32_t position = m_ack, recovered = 0, damaged = 0, lastYield = m_ack;
+    okay = okay && position <= size;
+    while (okay && position < size) {
+        RecordHeader header;
+        int valid = readRecord(source, position, size, &header, frame);
+        if (valid < 0) { okay = false; break; }
+        if (valid) {
+            okay = target.write((const uint8_t*)&header, sizeof(header)) == sizeof(header) &&
+                target.write((const uint8_t*)frame, header.length) == header.length;
+            position += sizeof(header) + header.length;
+            recovered += sizeof(header) + header.length;
+        } else {
+            position++;
+            damaged++;
+        }
+        if (position - lastYield >= 4096) { delay(1); lastYield = position; }
+    }
+    if (target) { target.flush(); target.close(); }
+    if (source) source.close();
+    // Check the complete replacement before changing the original pathname.
+    File verify = okay ? SD.open(RECOVERY_PATH, FILE_READ) : File();
+    okay = okay && verify && verify.size() == recovered;
+    position = lastYield = 0;
+    while (okay && position < recovered) {
+        RecordHeader header;
+        okay = readRecord(verify, position, recovered, &header, frame) == 1;
+        if (okay) position += sizeof(header) + header.length;
+        if (position - lastYield >= 4096) { delay(1); lastYield = position; }
+    }
+    if (verify) verify.close();
+    free(frame);
+    if (okay) okay = removeCursors() && SD.rename(DATA_PATH, archive);
+    if (okay) okay = SD.rename(RECOVERY_PATH, DATA_PATH);
+    if (okay) {
+        m_ack = m_read = 0; // offsets refer to the verified replacement journal
+        m_size = recovered;
+        m_nextCursorB = false;
+        m_fault = m_corrupt = false;
+        Serial.print("[QUEUE] Damaged journal retained at ");
+        Serial.println(archive);
+        Serial.print("[QUEUE] Intact records recovered; damaged bytes retained: ");
+        Serial.println(damaged);
+    } else {
+        m_fault = true;
+        Serial.println("[QUEUE] Recovery incomplete; original bytes retained");
+    }
+    unlock();
+    return okay;
 }
 
 void DurableQueue::suspend()
