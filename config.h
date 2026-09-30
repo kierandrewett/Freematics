@@ -70,12 +70,12 @@
 **************************************/
 #if BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 1024 /* bytes per slot; retain complete rich samples */
-#define SERIALIZE_BUFFER_SIZE 4096 /* bytes */
+#define BUFFER_LENGTH 2048 /* bytes per slot; retain complete rich samples */
+#define SERIALIZE_BUFFER_SIZE 16384 /* bytes */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
-#define BUFFER_LENGTH 256 /* bytes per slot */
-#define SERIALIZE_BUFFER_SIZE 1024 /* bytes */
+#define BUFFER_LENGTH 2048 /* bytes per slot */
+#define SERIALIZE_BUFFER_SIZE 16384 /* bytes */
 #endif
 
 /**************************************
@@ -164,16 +164,15 @@
 #define DATA_RECEIVING_TIMEOUT 5000 /* ms */
 // expected maximum server sync signal interval
 #define SERVER_SYNC_INTERVAL 120 /* seconds, 0 to disable */
-// Data interval settings. Moving samples target 4 Hz so brief RPM/speed
-// transitions have a better chance of being recorded. Slower tiers remain
-// active while idling/parked to limit flash and radio traffic.
-#define STATIONARY_TIME_TABLE {10, 60, 180} /* seconds */
+// Always record at full rate while powered, including when stationary.
+#define SAMPLE_INTERVAL_MS 250UL
+#define SAMPLE_FRAME_SIZE 8192
 #define OBD_FAST_INTERVAL_MS 250UL /* target 4 Hz RPM and moving-sample cadence */
 #define OBD_AUX_INTERVAL_MS 250UL /* interleave auxiliary reads with core reads */
 #define OBD_AUX_PIDS_PER_CYCLE 1 /* one bounded auxiliary read per cycle */
 #define DTC_SCAN_INTERVAL_MS 120000UL /* stored, pending and permanent code scan */
 #define OBD_PID_READ_WARN_MS 200UL /* log a slow Mode 01 response at most once per 10 s */
-#define DATA_INTERVAL_TABLE {OBD_FAST_INTERVAL_MS, 2000, 5000} /* ms */
+
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */
 // Maximum samples coalesced into one HTTPS POST. The payload itself remains

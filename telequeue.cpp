@@ -14,7 +14,7 @@ constexpr const char* CURSOR_A = "/QUEUE.A";
 constexpr const char* CURSOR_B = "/QUEUE.B";
 constexpr uint32_t RECORD_MAGIC = 0x46514A31; // FQJ1
 constexpr uint32_t CURSOR_MAGIC = 0x46514331; // FQC1
-constexpr uint16_t MAX_FRAME = 1536;
+constexpr uint16_t MAX_FRAME = SAMPLE_FRAME_SIZE;
 // FAT32's maximum file size is 4 GiB minus one byte. Leave room for a final
 // complete record and keep the bound below the Arduino File 32-bit limit.
 constexpr uint32_t MAX_JOURNAL = 0xF0000000UL;
@@ -94,6 +94,10 @@ bool DurableQueue::lock()
 
 void DurableQueue::unlock()
 {
+    // Published under the storage lock. Sampling reads these native-width
+    // cached scalars without touching FAT or waiting for an SD operation.
+    m_cachedPending = m_size >= m_ack ? m_size - m_ack : 0;
+    m_cachedHealthy = m_ready && !m_fault;
     unlockSD();
 }
 

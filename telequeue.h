@@ -21,6 +21,8 @@ public:
     void retry();
     uint32_t readPosition() const { return m_read; }
     uint32_t pendingBytes();
+    uint32_t cachedPendingBytes() const { return m_cachedPending; }
+    bool cachedHealthy() const { return m_cachedHealthy; }
     bool ready() const { return m_ready; }
     bool healthy() const { return m_ready && !m_fault; }
 private:
@@ -28,6 +30,8 @@ private:
     void unlock();
     bool readCursor(const char* path, uint32_t size, uint32_t* value);
     bool writeCursor(const char* path, uint32_t value);
+    volatile uint32_t m_cachedPending = 0;
+    volatile bool m_cachedHealthy = false;
     uint32_t m_ack = 0;
     uint32_t m_read = 0;
     uint32_t m_size = 0;

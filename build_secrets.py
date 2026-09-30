@@ -12,6 +12,9 @@ Import("env")
 
 token = os.environ.get("FREEMATICS_TOKEN", "")
 production = os.environ.get("PRODUCTION_BUILD") == "1"
+format_sd_once = os.environ.get("FREEMATICS_FORMAT_SD_ONCE") == "1"
+if format_sd_once and os.environ.get("FREEMATICS_FORMAT_SD_CONFIRM") != "ERASE_UNFORMATTED_CARD":
+    raise RuntimeError("SD provisioning requires FREEMATICS_FORMAT_SD_CONFIRM=ERASE_UNFORMATTED_CARD")
 
 if production and not token:
     raise RuntimeError("FREEMATICS_TOKEN is required for a production firmware build")
@@ -30,6 +33,10 @@ if token:
         except ValueError as exc:
             raise RuntimeError(f"invalid production configuration: {exc}") from exc
     env.Append(CPPDEFINES=[("SERVER_TOKEN", env.StringifyMacro(token))])
+if format_sd_once:
+    # This opt-in image is used only while provisioning a new card. Never
+    # format on an ordinary mount failure in the production image.
+    env.Append(CPPDEFINES=["FREEMATICS_FORMAT_SD_ONCE"])
 # Stamp every image with the source revision visible in the boot log. This is
 # deliberately metadata only; credentials remain injected through SERVER_TOKEN.
 build_id = os.environ.get("FREEMATICS_BUILD_ID", "").strip()

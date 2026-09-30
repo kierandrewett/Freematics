@@ -36,7 +36,8 @@ public:
     void serialize(CStorage& store);
     uint32_t timestamp;
     uint16_t offset;
-    uint8_t total;
+    uint16_t total;
+    bool recorded = false;
     uint8_t state;
 private:
     uint8_t* m_data;
@@ -49,7 +50,8 @@ public:
     void purge();
     void free(CBuffer* slot);
     CBuffer* getFree();
-    CBuffer* getOldest();
+    CBuffer* getOldest(bool recorded = true);
+    uint16_t recordedReadings() const;
     CBuffer* getNewest();
     void printStats();
     uint16_t pendingReadings() const;
@@ -57,7 +59,7 @@ public:
     uint32_t pendingBytes() const;
     void publish(CBuffer* slot);
     void restore(CBuffer* slot);
-    void recordMissedReading();
+    void recordMissedReading(uint32_t count = 1);
     uint32_t missedReadings() const;
 private:
     CBuffer** slots = 0;

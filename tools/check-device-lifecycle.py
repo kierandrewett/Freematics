@@ -58,6 +58,9 @@ using byte = uint8_t;
 #define STATE_WIFI_CONNECTED 128
 uint32_t tick = 1000, limit = 90000;
 float voltage = 0, movement = 0;
+int sensorMux = 0; float cachedVoltage = 0;
+#define portENTER_CRITICAL(x) ((void)0)
+#define portEXIT_CRITICAL(x) ((void)0)
 bool sensorOK = true;
 bool loginReplies = false;
 bool dataReplies = false, collectReplies = false;

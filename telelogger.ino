@@ -36,6 +36,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 #if ENABLE_OLED
 #include "FreematicsOLED.h"
 #endif
@@ -86,6 +87,38 @@ CBufferManager bufman;
 DurableQueue durableQueue;
 #endif
 Task subtask;
+Task obdTask;
+Task gpsTask;
+Task memsTask;
+SemaphoreHandle_t memsMutex = nullptr;
+Task recorderTask;
+SemaphoreHandle_t coprocessorMutex = nullptr;
+portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
+GPS_DATA gpsSnapshot = {};
+GPS_DATA gpsSample = {};
+uint32_t voltageTimestamp = 0;
+float cachedVoltage = 0;
+struct MEMSSnapshot {
+  float acceleration[3];
+  float gyro[3];
+  float compass[3];
+  float temperature;
+  ORIENTATION orientation;
+  uint32_t timestamp;
+};
+MEMSSnapshot memsSnapshot = {};
+
+struct OBDSnapshot {
+  PID_POLLING_INFO readings[sizeof(obdData) / sizeof(obdData[0])];
+  DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
+  uint32_t timeouts;
+  uint32_t latency;
+  uint16_t supported;
+  uint8_t protocol;
+  uint8_t failures;
+  uint8_t status;
+};
+OBDSnapshot obdSnapshot = {};
 #if ENABLE_NETWORK_STATUS_SIGNALS || STORAGE == STORAGE_SD
 Task statusTask;
 #endif
@@ -118,6 +151,7 @@ String netop;
 String ip;
 int16_t rssi = 0;
 int16_t rssiLast = 0;
+volatile uint32_t lastRssiMeasurement = 0;
 char vin[18] = {0};
 float batteryVoltage = 0;
 float tripDistanceKm = 0;
@@ -138,7 +172,6 @@ uint32_t lastGPSDistanceTime = 0;
 uint32_t timeoutsOBD = 0;
 uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
-byte dtcBatchPending = 0;
 #if ENABLE_OBD
 byte dtcScanIndex = 0;
 byte fastOBDIndex = 0;
@@ -195,22 +228,13 @@ private:
 
 FreematicsESP32 sys;
 
-class OBD : public COBD
-{
-protected:
-  void idleTasks()
-  {
-    // do some quick tasks while waiting for OBD response
-#if ENABLE_MEMS
-    processMEMS(0);
-#endif
-    processBLE(0);
-  }
-};
+// OBD waits run in their own task. Never touch MEMS or BLE from here.
+class OBD : public COBD {};
 
 OBD obd;
 
 MEMS_I2C* mems = 0;
+bool hasMagnetometer = false;
 
 #if STORAGE == STORAGE_SPIFFS
 SPIFFSLogger logger;
@@ -324,15 +348,12 @@ void clearOBDReadings()
   dtcData[2].basePid = PID_DTC_PERMANENT_BASE;
   dtcData[2].statusPid = PID_DTC_PERMANENT_STATUS;
   dtcData[2].status = DTC_STATUS_NO_RESPONSE;
-  dtcBatchPending = 0;
   dtcScanIndex = 0;
   fastOBDIndex = 0;
   lastOBDFastPoll = 0;
   fastOBDFailureCycles = 0;
   supportedOBDPIDs = 0;
   lastOBDReadLatency = 0;
-  lastOBDSpeed = 0;
-  lastOBDDistanceTime = 0;
 }
 #endif
 
@@ -560,9 +581,13 @@ int handlerLiveData(UrlHandlerParam* param)
     int bufsize = param->bufSize;
     int n = snprintf(buf, bufsize, "{\"obd\":{\"vin\":\"%s\",\"battery\":%.1f,\"pid\":[", vin, batteryVoltage);
     uint32_t t = millis();
+    OBDSnapshot snapshot;
+    portENTER_CRITICAL(&sensorMux);
+    snapshot = obdSnapshot;
+    portEXIT_CRITICAL(&sensorMux);
     for (int i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
         n += snprintf(buf + n, bufsize - n, "{\"pid\":%u,\"value\":%d,\"age\":%u},",
-            0x100 | obdData[i].pid, obdData[i].value, (unsigned int)(t - obdData[i].ts));
+            0x100 | snapshot.readings[i].pid, (int)snapshot.readings[i].value, (unsigned int)(t - snapshot.readings[i].ts));
     }
     n--;
     n += snprintf(buf + n, bufsize - n, "]}");
@@ -595,7 +620,6 @@ void scanDiagnostics()
   item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
   item.status = obd.getDTCStatus();
   item.lastScan = millis();
-  dtcBatchPending |= (byte)(1u << dtcScanIndex);
   Serial.print("DTC mode ");
   Serial.print(item.mode, HEX);
   Serial.print(':');
@@ -603,36 +627,6 @@ void scanDiagnostics()
   if (++dtcScanIndex >= sizeof(dtcData) / sizeof(dtcData[0])) dtcScanIndex = 0;
 }
 
-void processDiagnostics(CBuffer* buffer)
-{
-  const byte count = sizeof(dtcData) / sizeof(dtcData[0]);
-  if (!dtcBatchPending) {
-    const uint32_t now = millis();
-    for (byte offset = 0; offset < count; offset++) {
-      const byte index = (dtcScanIndex + offset) % count;
-      if (!dtcData[index].lastScan || now - dtcData[index].lastScan >= DTC_SCAN_INTERVAL_MS) {
-        dtcScanIndex = index;
-        scanDiagnostics();
-        break;
-      }
-    }
-  }
-  if (!dtcBatchPending) return;
-
-  byte pendingIndex = 0;
-  while (pendingIndex < count && !(dtcBatchPending & (byte)(1u << pendingIndex))) pendingIndex++;
-  if (pendingIndex >= count) {
-    dtcBatchPending = 0;
-    return;
-  }
-  DTC_POLLING_INFO& item = dtcData[pendingIndex];
-  bool complete = buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
-  if (complete) complete = buffer->add(item.statusPid, ELEMENT_UINT8, &item.status, sizeof(item.status));
-  for (byte i = 0; complete && i < DTC_CODE_SLOTS; i++) {
-    complete = buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
-  }
-  if (complete) dtcBatchPending &= (byte)~(1u << pendingIndex);
-}
 
 
 void updateOBDDistance(float speedKph)
@@ -647,7 +641,61 @@ void updateOBDDistance(float speedKph)
   lastOBDDistanceTime = now;
 }
 
-void processOBD(CBuffer* buffer)
+void publishOBDSnapshot()
+{
+  // Only the OBD owner writes obdData/dtcData. Publish a bounded copy, never
+  // hold a spinlock across serial I/O, delays or buffer serialisation.
+  OBDSnapshot snapshot;
+  memcpy(snapshot.readings, obdData, sizeof(obdData));
+  memcpy(snapshot.diagnostics, dtcData, sizeof(dtcData));
+  snapshot.timeouts = timeoutsOBD;
+  snapshot.latency = lastOBDReadLatency;
+  snapshot.supported = supportedOBDPIDs;
+  snapshot.protocol = obd.getProtocol();
+  snapshot.failures = fastOBDFailureCycles;
+  snapshot.status = state.check(STATE_OBD_READY) ? (fastOBDFailureCycles ? 2 : 1) : 0;
+  portENTER_CRITICAL(&sensorMux);
+  obdSnapshot = snapshot;
+  portEXIT_CRITICAL(&sensorMux);
+}
+
+void emitOBDSnapshot(CBuffer* buffer)
+{
+  OBDSnapshot snapshot;
+  portENTER_CRITICAL(&sensorMux);
+  snapshot = obdSnapshot;
+  portEXIT_CRITICAL(&sensorMux);
+  const uint32_t now = millis();
+  for (auto& item : snapshot.readings) {
+    if (!item.ts) continue; // never invent a value before its first response
+    buffer->add(0x100 | item.pid, ELEMENT_FLOAT_D2, &item.value, sizeof(item.value));
+    uint32_t age = now - item.ts;
+    buffer->add(PID_OBD_AGE_BASE | item.pid, ELEMENT_UINT32, &age, sizeof(age));
+    if (age <= 1500 && snapshot.status && item.pid == PID_SPEED) {
+      updateOBDDistance(item.value);
+      if (item.value >= 2) lastMotionTime = now;
+    }
+    if (age <= 1500 && snapshot.status && item.pid == PID_RPM && item.value >= 100) lastMotionTime = now;
+  }
+  for (byte index = 0; index < sizeof(dtcData) / sizeof(dtcData[0]); index++) {
+    auto& item = snapshot.diagnostics[index];
+    if (item.lastScan) buffer->add(item.countPid, ELEMENT_UINT8, &item.count, sizeof(item.count));
+    uint16_t statusPid = index == 0 ? PID_DTC_STORED_STATUS : index == 1 ? PID_DTC_PENDING_STATUS : PID_DTC_PERMANENT_STATUS;
+    buffer->add(statusPid, ELEMENT_UINT8, &item.status, sizeof(item.status));
+    if (!item.lastScan) continue;
+    uint32_t age = now - item.lastScan;
+    buffer->add(PID_DTC_AGE_BASE + index, ELEMENT_UINT32, &age, sizeof(age));
+    for (byte i = 0; i < DTC_CODE_SLOTS; i++) buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
+  }
+  buffer->add(PID_OBD_PROTOCOL, ELEMENT_UINT8, &snapshot.protocol, sizeof(snapshot.protocol));
+  buffer->add(PID_OBD_SUPPORTED_PIDS, ELEMENT_UINT16, &snapshot.supported, sizeof(snapshot.supported));
+  buffer->add(PID_OBD_TIMEOUTS, ELEMENT_UINT32, &snapshot.timeouts, sizeof(snapshot.timeouts));
+  buffer->add(PID_OBD_LAST_LATENCY, ELEMENT_UINT32, &snapshot.latency, sizeof(snapshot.latency));
+  buffer->add(PID_OBD_STATE, ELEMENT_UINT8, &snapshot.status, sizeof(snapshot.status));
+  buffer->add(PID_OBD_FAST_FAILURES, ELEMENT_UINT8, &snapshot.failures, sizeof(snapshot.failures));
+}
+
+void pollOBD()
 {
   static byte auxIndex = 0;
   static uint32_t lastAuxPoll = 0;
@@ -672,11 +720,10 @@ void processOBD(CBuffer* buffer)
     lastOBDFastPoll = now;
     lastOBDReadLatency = 0;
     byte sampled = 0;
-    // Poll RPM every fast cycle instead of waiting for its turn in the core
-    // rotation, so short engine-speed transients are easier to capture.
+    // Poll RPM and speed every fast cycle; rotate the remaining core PIDs.
     for (byte rpmIndex = 0; rpmIndex < count; rpmIndex++) {
       PID_POLLING_INFO& rpm = obdData[rpmIndex];
-      if (rpm.pid != PID_RPM || !obd.isValidPID(rpm.pid)) continue;
+      if ((rpm.pid != PID_RPM && rpm.pid != PID_SPEED) || !obd.isValidPID(rpm.pid)) continue;
       sampled++;
       float value;
       const uint32_t readStarted = millis();
@@ -691,17 +738,15 @@ void processOBD(CBuffer* buffer)
       } else {
         rpm.ts = millis();
         rpm.value = value;
-        buffer->add((uint16_t)rpm.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-        if (value >= 100) lastMotionTime = millis();
+        publishOBDSnapshot();
       }
-      break;
     }
     byte visited = 0;
     while (sampled < OBD_FAST_PIDS_PER_CYCLE && visited < count) {
       if (fastOBDIndex >= count) fastOBDIndex = 0;
       PID_POLLING_INFO& item = obdData[fastOBDIndex++];
       visited++;
-      if (item.priority != 1 || item.pid == PID_RPM || !obd.isValidPID(item.pid)) continue;
+      if (item.priority != 1 || item.pid == PID_RPM || item.pid == PID_SPEED || !obd.isValidPID(item.pid)) continue;
       sampled++;
       float value;
       const uint32_t readStarted = millis();
@@ -717,21 +762,14 @@ void processOBD(CBuffer* buffer)
       }
       item.ts = millis();
       item.value = value;
-      buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
-      if (item.pid == PID_SPEED) {
-        updateOBDDistance(value);
-        if (value >= 2) lastMotionTime = millis();
-      } else if (item.pid == PID_RPM && value >= 100) {
-        // Keep the trip active while the engine idles in stationary traffic.
-        lastMotionTime = millis();
-      }
+      publishOBDSnapshot();
+
     }
   }
 
   if (fastDue && fastReadFailed) {
     if (++fastOBDFailureCycles >= MAX_OBD_ERRORS) {
       Serial.println("[OBD] Fast PID failures persisted; clearing ECU session");
-      clearOBDReadings();
       state.clear(STATE_OBD_READY);
     }
     // Do not add lower-priority traffic while the fast probe is unstable.
@@ -765,11 +803,18 @@ void processOBD(CBuffer* buffer)
       }
       item.ts = millis();
       item.value = value;
-      buffer->add((uint16_t)item.pid | 0x100, ELEMENT_FLOAT_D2, &value, sizeof(value));
+      publishOBDSnapshot();
     }
   }
 
-  processDiagnostics(buffer);
+  for (byte offset = 0; offset < sizeof(dtcData) / sizeof(dtcData[0]); offset++) {
+    const byte index = (dtcScanIndex + offset) % (sizeof(dtcData) / sizeof(dtcData[0]));
+    if (!dtcData[index].lastScan || millis() - dtcData[index].lastScan >= DTC_SCAN_INTERVAL_MS) {
+      dtcScanIndex = index;
+      scanDiagnostics();
+      break;
+    }
+  }
 }
 #endif
 
@@ -787,55 +832,30 @@ bool initGPS()
   return true;
 }
 
-bool processGPS(CBuffer* buffer)
+void emitGPSFields(CBuffer* buffer)
 {
-  static uint32_t lastGPStime = 0;
-  static float lastGPSLat = 0;
-  static float lastGPSLng = 0;
+  float kph = gd->speed * 1.852f;
+  if (buffer) {
+    // Keep the UTC date alongside the time so queued samples can be placed on
+    // their original timeline after an offline replay.  Older firmware only
+    // emitted PID_GPS_TIME, which is not sufficient to recover a calendar
+    // date after the collector has received a backlog.
+    if (gd->date) buffer->add(PID_GPS_DATE, ELEMENT_UINT32, &gd->date, sizeof(uint32_t));
+    buffer->add(PID_GPS_TIME, ELEMENT_UINT32, &gd->time, sizeof(uint32_t));
+    buffer->add(PID_GPS_LATITUDE, ELEMENT_FLOAT, &gd->lat, sizeof(float));
+    buffer->add(PID_GPS_LONGITUDE, ELEMENT_FLOAT, &gd->lng, sizeof(float));
+    buffer->add(PID_GPS_ALTITUDE, ELEMENT_FLOAT_D1, &gd->alt, sizeof(float)); /* m */
+    buffer->add(PID_GPS_SPEED, ELEMENT_FLOAT_D1, &kph, sizeof(kph));
+    buffer->add(PID_GPS_HEADING, ELEMENT_UINT16, &gd->heading, sizeof(uint16_t));
+    buffer->add(PID_GPS_SAT_COUNT, ELEMENT_UINT8, &gd->sat, sizeof(uint8_t));
+    buffer->add(PID_GPS_HDOP, ELEMENT_UINT8, &gd->hdop, sizeof(uint8_t));
+  }
+  uint32_t age = millis() - gd->ts;
+  buffer->add(PID_GPS_AGE, ELEMENT_UINT32, &age, sizeof(age));
+}
 
-  if (!gd) {
-    lastGPStime = 0;
-    lastGPSLat = 0;
-    lastGPSLng = 0;
-  }
-#if GNSS == GNSS_STANDALONE
-  if (state.check(STATE_GPS_READY)) {
-    // read parsed GPS data
-    if (!sys.gpsGetData(&gd)) {
-      return false;
-    }
-  }
-#else
-    if (!teleClient.cell.getLocation(&gd)) {
-      return false;
-    }
-#endif
-  if (!gd || lastGPStime == gd->time) return false;
-  if (gd->date) {
-    // generate ISO time string
-    char *p = isoTime + sprintf(isoTime, "%04u-%02u-%02uT%02u:%02u:%02u",
-        (unsigned int)(gd->date % 100) + 2000, (unsigned int)(gd->date / 100) % 100, (unsigned int)(gd->date / 10000),
-        (unsigned int)(gd->time / 1000000), (unsigned int)(gd->time % 1000000) / 10000, (unsigned int)(gd->time % 10000) / 100);
-    unsigned char tenth = (gd->time % 100) / 10;
-    if (tenth) p += sprintf(p, ".%c00", '0' + tenth);
-    *p = 'Z';
-    *(p + 1) = 0;
-  }
-  if (gd->lng == 0 && gd->lat == 0) {
-    // coordinates not ready
-    if (gd->date) {
-      Serial.print("[GNSS] ");
-      Serial.println(isoTime);
-    }
-    return false;
-  }
-  if ((lastGPSLat || lastGPSLng) && (abs(gd->lat - lastGPSLat) > 0.001 || abs(gd->lng - lastGPSLng) > 0.001)) {
-    // invalid coordinates data
-    lastGPSLat = 0;
-    lastGPSLng = 0;
-    return false;
-  }
-
+void syncClockFromGPS(GPS_DATA* gd)
+{
   // On some mobile networks NITZ and modem NTP are unavailable. A valid GNSS
   // position also supplies UTC; seed the ESP32 clock so the modem can use it
   // on its next HTTPS attempt without disabling certificate date checks.
@@ -880,6 +900,51 @@ bool processGPS(CBuffer* buffer)
     }
   }
 
+}
+
+bool processGPS(CBuffer* buffer)
+{
+  static uint32_t lastGPStime = 0;
+  static uint32_t lastGPSdate = 0;
+  static float lastGPSLat = 0;
+  static float lastGPSLng = 0;
+
+  if (!gd) {
+    lastGPStime = 0;
+    lastGPSLat = 0;
+    lastGPSLng = 0;
+  }
+  portENTER_CRITICAL(&sensorMux);
+  gpsSample = gpsSnapshot;
+  portEXIT_CRITICAL(&sensorMux);
+  gd = gpsSample.ts ? &gpsSample : nullptr;
+  if (!gd) return false;
+  const bool newFix = lastGPStime != gd->time || lastGPSdate != gd->date;
+  if (!newFix) {
+    if (buffer && (gd->lat || gd->lng)) emitGPSFields(buffer);
+    return false;
+  }
+  if (gd->date) {
+    // generate ISO time string
+    char *p = isoTime + sprintf(isoTime, "%04u-%02u-%02uT%02u:%02u:%02u",
+        (unsigned int)(gd->date % 100) + 2000, (unsigned int)(gd->date / 100) % 100, (unsigned int)(gd->date / 10000),
+        (unsigned int)(gd->time / 1000000), (unsigned int)(gd->time % 1000000) / 10000, (unsigned int)(gd->time % 10000) / 100);
+    unsigned char tenth = (gd->time % 100) / 10;
+    if (tenth) p += sprintf(p, ".%c00", '0' + tenth);
+    *p = 'Z';
+    *(p + 1) = 0;
+  }
+  if (gd->lng == 0 && gd->lat == 0) {
+    // Time may be known before a position fix. Do not fabricate coordinates.
+    return false;
+  }
+  if ((lastGPSLat || lastGPSLng) && (abs(gd->lat - lastGPSLat) > 0.001 || abs(gd->lng - lastGPSLng) > 0.001)) {
+    // invalid coordinates data
+    lastGPSLat = 0;
+    lastGPSLng = 0;
+    return false;
+  }
+
   float kph = gd->speed * 1.852f;
   if ((lastGPSLat || lastGPSLng) && kph >= 1) {
     float latDelta = (gd->lat - lastGPSLat) * DEG_TO_RAD;
@@ -894,37 +959,11 @@ bool processGPS(CBuffer* buffer)
 
   if (kph >= 2) lastMotionTime = millis();
 
-  if (buffer) {
-    // Keep the UTC date alongside the time so queued samples can be placed on
-    // their original timeline after an offline replay.  Older firmware only
-    // emitted PID_GPS_TIME, which is not sufficient to recover a calendar
-    // date after the collector has received a backlog.
-    if (gd->date) buffer->add(PID_GPS_DATE, ELEMENT_UINT32, &gd->date, sizeof(uint32_t));
-    buffer->add(PID_GPS_TIME, ELEMENT_UINT32, &gd->time, sizeof(uint32_t));
-    buffer->add(PID_GPS_LATITUDE, ELEMENT_FLOAT, &gd->lat, sizeof(float));
-    buffer->add(PID_GPS_LONGITUDE, ELEMENT_FLOAT, &gd->lng, sizeof(float));
-    buffer->add(PID_GPS_ALTITUDE, ELEMENT_FLOAT_D1, &gd->alt, sizeof(float)); /* m */
-    buffer->add(PID_GPS_SPEED, ELEMENT_FLOAT_D1, &kph, sizeof(kph));
-    buffer->add(PID_GPS_HEADING, ELEMENT_UINT16, &gd->heading, sizeof(uint16_t));
-    if (gd->sat) buffer->add(PID_GPS_SAT_COUNT, ELEMENT_UINT8, &gd->sat, sizeof(uint8_t));
-    if (gd->hdop) buffer->add(PID_GPS_HDOP, ELEMENT_UINT8, &gd->hdop, sizeof(uint8_t));
-  }
+  if (buffer) emitGPSFields(buffer);
   
-  Serial.print("[GNSS] ");
-  Serial.print(gd->lat, 6);
-  Serial.print(' ');
-  Serial.print(gd->lng, 6);
-  Serial.print(' ');
-  Serial.print((int)kph);
-  Serial.print("km/h");
-  Serial.print(" SATS:");
-  Serial.print(gd->sat);
-  Serial.print(" HDOP:");
-  Serial.print(gd->hdop);
-  Serial.print(" Course:");
-  Serial.println(gd->heading);
-  //Serial.println(gd->errors);
+  state.set(STATE_GPS_ONLINE);
   lastGPStime = gd->time;
+  lastGPSdate = gd->date;
   return true;
 }
 
@@ -943,66 +982,30 @@ bool waitMotionGPS(int timeout)
 #if ENABLE_MEMS
 void processMEMS(CBuffer* buffer)
 {
-  if (!state.check(STATE_MEMS_READY)) return;
-
-  // load and store accelerometer data
-  float temp;
+  MEMSSnapshot snapshot;
+  portENTER_CRITICAL(&sensorMux);
+  snapshot = memsSnapshot;
+  portEXIT_CRITICAL(&sensorMux);
+  if (!buffer || !snapshot.timestamp) return;
+  deviceTemp = (int)snapshot.temperature;
+  memcpy(acc, snapshot.acceleration, sizeof(acc));
+  memcpy(gyr, snapshot.gyro, sizeof(gyr));
+  memcpy(mag, snapshot.compass, sizeof(mag));
+  buffer->add(PID_ACC, ELEMENT_FLOAT_D2, snapshot.acceleration, sizeof(snapshot.acceleration), 3);
+  buffer->add(PID_GYRO, ELEMENT_FLOAT_D2, snapshot.gyro, sizeof(snapshot.gyro), 3);
+  // ICM-42627 has no magnetometer. Do not emit fabricated compass values.
+  if (hasMagnetometer) buffer->add(PID_COMPASS, ELEMENT_FLOAT_D2, snapshot.compass, sizeof(snapshot.compass), 3);
 #if ENABLE_ORIENTATION
-  ORIENTATION ori;
-  if (!mems->read(acc, gyr, mag, &temp, &ori)) return;
-#else
-  if (!mems->read(acc, gyr, mag, &temp)) return;
+  float orientation[3] = {snapshot.orientation.yaw, snapshot.orientation.pitch, snapshot.orientation.roll};
+  buffer->add(PID_ORIENTATION, ELEMENT_FLOAT_D2, orientation, sizeof(orientation), 3);
 #endif
-  deviceTemp = (int)temp;
-
-  accSum[0] += acc[0];
-  accSum[1] += acc[1];
-  accSum[2] += acc[2];
-  accCount++;
-
-  if (buffer) {
-    if (accCount) {
-      float value[3];
-      value[0] = accSum[0] / accCount - accBias[0];
-      value[1] = accSum[1] / accCount - accBias[1];
-      value[2] = accSum[2] / accCount - accBias[2];
-      buffer->add(PID_ACC, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-/*
-      Serial.print("[ACC] ");
-      Serial.print(value[0]);
-      Serial.print('/');
-      Serial.print(value[1]);
-      Serial.print('/');
-      Serial.println(value[2]);
-*/
-#if ENABLE_ORIENTATION
-      value[0] = ori.yaw;
-      value[1] = ori.pitch;
-      value[2] = ori.roll;
-      buffer->add(PID_ORIENTATION, ELEMENT_FLOAT_D2, value, sizeof(value), 3);
-#endif
-#if 0
-      // calculate motion
-      float motion = 0;
-      for (byte i = 0; i < 3; i++) {
-        motion += value[i] * value[i];
-      }
-      if (motion >= MOTION_THRESHOLD * MOTION_THRESHOLD) {
-        lastMotionTime = millis();
-        Serial.print("Motion:");
-        Serial.println(motion);
-      }
-#endif
-    }
-    accSum[0] = 0;
-    accSum[1] = 0;
-    accSum[2] = 0;
-    accCount = 0;
-  }
+  uint32_t age = millis() - snapshot.timestamp;
+  buffer->add(PID_MEMS_AGE, ELEMENT_UINT32, &age, sizeof(age));
 }
 
 void calibrateMEMS()
 {
+  xSemaphoreTake(memsMutex, portMAX_DELAY);
   if (state.check(STATE_MEMS_READY)) {
     accBias[0] = 0;
     accBias[1] = 0;
@@ -1027,6 +1030,7 @@ void calibrateMEMS()
     Serial.print('/');
     Serial.println(accBias[2]);
   }
+  xSemaphoreGive(memsMutex);
 }
 #endif
 
@@ -1049,7 +1053,11 @@ float readVehicleVoltage()
 {
 #if ENABLE_OBD
   if (sys.devType > 12) return (float)(analogRead(A0) * 45) / 4095;
-  return obd.getVoltage();
+  float voltage;
+  portENTER_CRITICAL(&sensorMux);
+  voltage = cachedVoltage;
+  portEXIT_CRITICAL(&sensorMux);
+  return voltage;
 #else
   return 0;
 #endif
@@ -1069,6 +1077,8 @@ void capturePassiveCAN()
   if (!state.check(STATE_OBD_READY | STATE_STORAGE_READY)) return;
   passiveCanCaptureComplete = true;
 
+  SDGuard captureGuard;
+  if (!captureGuard) return;
   const byte protocol = obd.getProtocol();
   if (protocol < 6 || protocol > 15) {
     Serial.println("[CAN] Passive capture skipped; OBD protocol is not CAN");
@@ -1114,36 +1124,6 @@ void initialize()
   }
 #endif
 
-#if GNSS == GNSS_STANDALONE
-  if (!state.check(STATE_GPS_READY)) {
-    if (initGPS()) {
-      state.set(STATE_GPS_READY);
-    }
-  }
-#endif
-
-#if ENABLE_OBD
-  // initialize OBD communication
-  if (!state.check(STATE_OBD_READY)) {
-    timeoutsOBD = 0;
-    lastOBDInitAttempt = millis();
-    clearOBDReadings();
-    if (vehiclePowerPresent() && obd.init()) {
-      Serial.println("[OBD] ECU connected");
-      state.set(STATE_OBD_READY);
-      lastOBDInitAttempt = millis();
-      reportOBDCapabilities();
-#if ENABLE_OLED
-      oled.println("OBD OK");
-#endif
-    } else {
-      Serial.println("[OBD] ECU not available; check the ignition and OBD connection");
-      //state.clear(STATE_WORKING);
-      //return;
-    }
-  }
-#endif
-
 #if STORAGE != STORAGE_NONE
   if (!state.check(STATE_STORAGE_READY)) {
     // init storage
@@ -1165,27 +1145,7 @@ void initialize()
 #if STORAGE == STORAGE_SD
   storageCheckComplete = true;
 #endif
-#if ENABLE_CAN_CAPTURE && ENABLE_OBD
-  capturePassiveCAN();
-#endif
-#endif
 
-  // re-try OBD if connection not established
-#if ENABLE_OBD
-  if (state.check(STATE_OBD_READY)) {
-    char buf[128];
-    if (obd.getVIN(buf, sizeof(buf))) {
-      strncpy(vin, buf, sizeof(vin) - 1);
-      vin[sizeof(vin) - 1] = 0;
-      Serial.print("VIN:");
-      Serial.println(vin);
-    }
-    scanDiagnostics();
-#if ENABLE_OLED
-    oled.print("VIN:");
-    oled.println(vin);
-#endif
-  }
 #endif
 
   // check system time
@@ -1317,9 +1277,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
 /*******************************************************************************
   Collecting and processing data
 *******************************************************************************/
-void process()
+void collectSample()
 {
-  static uint32_t lastGPStick = 0;
   uint32_t startTime = millis();
 
   CBuffer* buffer = bufman.getFree();
@@ -1335,65 +1294,29 @@ void process()
   }
 
 #if ENABLE_OBD
-  // Process OBD data if connected. Reinitialisation is rate-limited because
-  // a missing ECU must not block the rest of the collection loop.
-  const uint32_t obdNow = millis();
-  const bool obdInitDue = !lastOBDInitAttempt
-    || obdNow - lastOBDInitAttempt >= OBD_RETRY_INTERVAL_MS;
-  if (state.check(STATE_OBD_READY)) {
-    processOBD(buffer);
-    if (state.check(STATE_OBD_READY) && obd.errors >= MAX_OBD_ERRORS && obdInitDue) {
-      lastOBDInitAttempt = obdNow;
-      clearOBDReadings();
-      if (!obd.init()) {
-        Serial.println("[OBD] ECU OFF");
-        state.clear(STATE_OBD_READY);
-      } else {
-        Serial.println("[OBD] ECU reconnected");
-        reportOBDCapabilities();
-      }
-    }
-  } else if (obdInitDue && vehiclePowerPresent()) {
-    lastOBDInitAttempt = obdNow;
-    clearOBDReadings();
-    if (obd.init(PROTO_AUTO, true)) {
-      state.set(STATE_OBD_READY);
-      lastOBDInitAttempt = obdNow;
-      Serial.println("[OBD] ECU ON");
-      reportOBDCapabilities();
-    }
-  }
-#endif
-#if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
-  capturePassiveCAN();
-#endif
-#if ENABLE_OBD
-  uint8_t obdProtocol = obd.getProtocol();
-  uint16_t supportedPIDs = supportedOBDPIDs;
-  uint32_t obdTimeoutCount = timeoutsOBD;
-  uint32_t obdLatency = lastOBDReadLatency;
-  uint8_t obdState = state.check(STATE_OBD_READY) ? (fastOBDFailureCycles ? 2 : 1) : 0;
-  uint8_t coreFailures = fastOBDFailureCycles;
-  buffer->add(PID_OBD_PROTOCOL, ELEMENT_UINT8, &obdProtocol, sizeof(obdProtocol));
-  buffer->add(PID_OBD_SUPPORTED_PIDS, ELEMENT_UINT16, &supportedPIDs, sizeof(supportedPIDs));
-  buffer->add(PID_OBD_TIMEOUTS, ELEMENT_UINT32, &obdTimeoutCount, sizeof(obdTimeoutCount));
-  buffer->add(PID_OBD_LAST_LATENCY, ELEMENT_UINT32, &obdLatency, sizeof(obdLatency));
-  buffer->add(PID_OBD_STATE, ELEMENT_UINT8, &obdState, sizeof(obdState));
-  buffer->add(PID_OBD_FAST_FAILURES, ELEMENT_UINT8, &coreFailures, sizeof(coreFailures));
+  emitOBDSnapshot(buffer);
 #endif
 
-  if (rssi != rssiLast) {
+  {
     int val = (rssiLast = rssi);
     buffer->add(PID_CSQ, ELEMENT_INT32, &val, sizeof(val));
+    uint32_t age = lastRssiMeasurement ? millis() - lastRssiMeasurement : 0xFFFFFFFF;
+    buffer->add(PID_CSQ_AGE, ELEMENT_UINT32, &age, sizeof(age));
   }
   uint8_t networkTransport = state.check(STATE_CELL_CONNECTED) ? 2 :
     (state.check(STATE_WIFI_CONNECTED) ? 1 : 0);
   buffer->add(PID_NETWORK_TRANSPORT, ELEMENT_UINT8, &networkTransport, sizeof(networkTransport));
 #if ENABLE_OBD
   batteryVoltage = readVehicleVoltage();
-  if (batteryVoltage) {
+  if (batteryVoltage || sys.devType > 12) {
     uint16_t v = batteryVoltage * 100;
     buffer->add(PID_BATTERY_VOLTAGE, ELEMENT_UINT16, &v, sizeof(v));
+    uint32_t ts;
+    portENTER_CRITICAL(&sensorMux);
+    ts = voltageTimestamp;
+    portEXIT_CRITICAL(&sensorMux);
+    uint32_t age = sys.devType > 12 ? 0 : millis() - ts;
+    buffer->add(PID_VOLTAGE_AGE, ELEMENT_UINT32, &age, sizeof(age));
   }
 #endif
 
@@ -1405,21 +1328,7 @@ void process()
   processMEMS(buffer);
 #endif
 
-  bool success = processGPS(buffer);
-#if GNSS_RESET_TIMEOUT
-  if (success) {
-    lastGPStick = millis();
-    state.set(STATE_GPS_ONLINE);
-  } else {
-    if (millis() - lastGPStick > GNSS_RESET_TIMEOUT * 1000) {
-      sys.gpsEnd();
-      state.clear(STATE_GPS_ONLINE | STATE_GPS_READY);
-      delay(20);
-      if (initGPS()) state.set(STATE_GPS_READY);
-      lastGPStick = millis();
-    }
-  }
-#endif
+  processGPS(buffer);
 
   buffer->add(PID_TRIP_DISTANCE, ELEMENT_FLOAT_D2, &tripDistanceKm, sizeof(tripDistanceKm));
 
@@ -1435,22 +1344,90 @@ void process()
   uint32_t missedReadings = bufman.missedReadings();
   buffer->add(PID_MISSED_READINGS, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));
 #if STORAGE == STORAGE_SD
-  uint32_t durableBytes = durableQueue.pendingBytes();
+  uint32_t durableBytes = durableQueue.cachedPendingBytes();
   buffer->add(PID_DURABLE_QUEUE_BYTES, ELEMENT_UINT32, &durableBytes, sizeof(durableBytes));
-  uint8_t queueHealthy = durableQueue.healthy() ? 1 : 0;
+  uint8_t queueHealthy = durableQueue.cachedHealthy() ? 1 : 0;
   buffer->add(PID_DURABLE_QUEUE_HEALTH, ELEMENT_UINT8, &queueHealthy, sizeof(queueHealthy));
 #endif
 
-  buffer->timestamp = millis();
+  buffer->timestamp = startTime;
 
-  // display file buffer stats
-  if (startTime - lastStatsTime >= 3000) {
-    bufman.printStats();
-    lastStatsTime = startTime;
+  bufman.publish(buffer);
+  lastCollectionTime = millis();
+
+}
+
+void process()
+{
+  static TickType_t deadline = xTaskGetTickCount();
+  collectSample();
+  dataInterval = SAMPLE_INTERVAL_MS;
+  // Absolute deadlines avoid accumulating sensor/formatting time as drift.
+  // If overloaded, skip expired slots rather than inventing catch-up samples.
+  const uint32_t elapsed = xTaskGetTickCount() - deadline;
+  if (elapsed >= pdMS_TO_TICKS(SAMPLE_INTERVAL_MS)) {
+    bufman.recordMissedReading(elapsed / pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+    static uint32_t lastWarning = 0;
+    if (!lastWarning || millis() - lastWarning >= 10000UL) {
+      Serial.println("[SAMPLING] Deadline missed; inspect sensor age, queue and missed-reading metrics");
+      lastWarning = millis();
+    }
+    deadline = xTaskGetTickCount();
   }
+  vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+  processBLE(0);
+}
 
+void recordSamples(void*)
+{
+  for (;;) {
+    if (!state.check(STATE_WORKING)) { delay(50); continue; }
+#if STORAGE == STORAGE_SD
+  // A failed boot mount otherwise leaves the device on its finite RAM queue
+  // for the entire active session. Retry at a bounded rate; an already-open
+  // logger must not be reopened just because the journal was unavailable.
+  static uint32_t lastSDRetry = 0;
+  if ((!state.check(STATE_STORAGE_READY) || !logger.healthy() || !durableQueue.healthy()) &&
+      (lastSDRetry == 0 || millis() - lastSDRetry >= 30000UL)) {
+    lastSDRetry = millis();
+    Serial.println("[STORAGE] Retrying SD storage");
+    SDGuard recovery;
+    if (recovery) {
+      // Recovery can replay an already accepted batch. It cannot advance past
+      // the saved cursor or discard a RAM sample while the card is unavailable.
+      logger.end();
+      durableQueue.suspend();
+      state.clear(STATE_STORAGE_READY);
+      SD.end();
+      SPI.end();
+      delay(100);
+      if (logger.init()) {
+        if (durableQueue.begin()) Serial.println("[STORAGE] SD journal recovered; replay enabled");
+        fileid = logger.begin();
+        if (fileid) state.set(STATE_STORAGE_READY);
+      }
+    }
+  }
+#endif
+
+#if STORAGE == STORAGE_SD
+  logger.maintain();
+#endif
+    if (millis() - lastStatsTime >= 3000) {
+      bufman.printStats();
+      lastStatsTime = millis();
+    }
+    CBuffer* buffer = bufman.getOldest(false);
+#if STORAGE == STORAGE_SD
+    // Once storage recovers, journal RAM fallback readings even while offline.
+    if (!buffer && durableQueue.ready() && durableQueue.healthy()) buffer = bufman.getOldest(true);
+#endif
+    if (!buffer) { delay(5); continue; }
 #if STORAGE != STORAGE_NONE
-  if (state.check(STATE_STORAGE_READY)) {
+  if (!buffer->recorded && state.check(STATE_STORAGE_READY)) {
+#if STORAGE == STORAGE_SD
+    SDGuard logGuard;
+#endif
     logger.timestamp(buffer->timestamp);
     buffer->serialize(logger);
 #if STORAGE == STORAGE_SPIFFS
@@ -1474,7 +1451,7 @@ void process()
 #if STORAGE == STORAGE_SD
   bool journaled = false;
   if (durableQueue.ready()) {
-    static char sampleFrame[1536];
+    static char sampleFrame[SAMPLE_FRAME_SIZE];
     CStorageRAM sampleStore;
     sampleStore.init(sampleFrame, sizeof(sampleFrame));
     sampleStore.timestamp(buffer->timestamp);
@@ -1487,60 +1464,130 @@ void process()
       bufman.free(buffer);
     }
   }
-  if (!journaled) bufman.publish(buffer);
+  if (!journaled) { buffer->recorded = true; bufman.restore(buffer); }
 #else
-  bufman.publish(buffer);
+  buffer->recorded = true;
+  bufman.restore(buffer);
 #endif
-  lastCollectionTime = millis();
+  }
+}
 
-  const int dataIntervals[] = DATA_INTERVAL_TABLE;
-#if ENABLE_OBD || ENABLE_MEMS
-  // motion adaptive data interval control
-  const uint16_t stationaryTime[] = STATIONARY_TIME_TABLE;
-  unsigned int motionless = (millis() - lastMotionTime) / 1000;
-  bool stationary = true;
-  for (byte i = 0; i < sizeof(stationaryTime) / sizeof(stationaryTime[0]); i++) {
-    dataInterval = dataIntervals[i];
-    if (motionless < stationaryTime[i] || stationaryTime[i] == 0) {
-      stationary = false;
-      break;
-    }
-  }
-  if (stationary) {
-    const uint16_t volatileReadings = bufman.unpersistedReadings();
-    bool usbBacklog = false;
-#if STORAGE == STORAGE_SD
-    // USB bench power must allow the existing backlog to finish uploading.
-    // Vehicle standby still follows the normal parked power policy.
-    usbBacklog = !vehiclePowerPresent() && durableQueue.pendingBytes() != 0;
+void acquireOBD(void*)
+{
+#if ENABLE_OBD
+  for (;;) {
+    if (!state.check(STATE_WORKING)) { delay(50); continue; }
+    xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
+    const uint32_t now = millis();
+    if (!state.check(STATE_OBD_READY) || obd.errors >= MAX_OBD_ERRORS) {
+      state.clear(STATE_OBD_READY);
+      publishOBDSnapshot();
+      if (!lastOBDInitAttempt || now - lastOBDInitAttempt >= OBD_RETRY_INTERVAL_MS) {
+        lastOBDInitAttempt = now;
+        if (vehiclePowerPresent() && obd.init(PROTO_AUTO, true)) {
+          state.set(STATE_OBD_READY);
+          fastOBDFailureCycles = 0;
+          reportOBDCapabilities();
+          char buf[128];
+          if (obd.getVIN(buf, sizeof(buf))) {
+            strncpy(vin, buf, sizeof(vin) - 1);
+            vin[sizeof(vin) - 1] = 0;
+          }
+          Serial.println("[OBD] ECU connected (background)");
+#if ENABLE_CAN_CAPTURE && STORAGE != STORAGE_NONE
+          capturePassiveCAN();
 #endif
-    if (!volatileReadings && !usbBacklog) {
-      Serial.print("Stationary for ");
-      Serial.print(motionless);
-      Serial.println(" secs");
-      // The SD journal survives the standby wake reboot; RAM does not.
-      state.clear(STATE_WORKING);
-      return;
-    }
-    static uint32_t lastRetentionWarning = 0;
-    if (!lastRetentionWarning || millis() - lastRetentionWarning >= 30000UL) {
-      if (volatileReadings) {
-        Serial.print("[POWER] Keeping active until ");
-        Serial.print(volatileReadings);
-        Serial.println(" RAM-only readings are uploaded or journaled");
-      } else {
-        Serial.println("[POWER] USB powered; keeping active to upload the SD backlog");
+        }
       }
-      lastRetentionWarning = millis();
+    } else {
+      pollOBD();
     }
+    // Model B voltage is an ADC read. Older boards use the serial link.
+    float voltage = sys.devType > 12 ? readVehicleVoltage() : obd.getVoltage();
+    portENTER_CRITICAL(&sensorMux);
+    if (voltage > 0) { cachedVoltage = voltage; voltageTimestamp = millis(); }
+    portEXIT_CRITICAL(&sensorMux);
+    publishOBDSnapshot();
+    xSemaphoreGive(coprocessorMutex);
+    delay(10);
   }
-#else
-  dataInterval = dataIntervals[0];
 #endif
-  do {
-    long t = dataInterval - (millis() - startTime);
-    processBLE(t > 0 ? t : 0);
-  } while (millis() - startTime < dataInterval);
+  vTaskDelete(nullptr);
+}
+
+void acquireGPS(void*)
+{
+#if GNSS == GNSS_STANDALONE
+  uint32_t lastFix = millis();
+  for (;;) {
+    if (!state.check(STATE_WORKING)) { delay(50); continue; }
+    if (!state.check(STATE_GPS_READY)) {
+      if (xSemaphoreTake(coprocessorMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (initGPS()) state.set(STATE_GPS_READY);
+        lastFix = millis();
+        xSemaphoreGive(coprocessorMutex);
+      }
+    } else {
+      const bool usesLink = sys.gpsUsesLink();
+      // External UART GNSS keeps running even through a long OBD timeout.
+      if (!usesLink || xSemaphoreTake(coprocessorMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        GPS_DATA* fix = nullptr;
+        if (sys.gpsGetData(&fix) && fix && fix->ts) {
+          bool fresh = false;
+          portENTER_CRITICAL(&sensorMux);
+          if (!gpsSnapshot.ts || fix->date != gpsSnapshot.date || fix->time != gpsSnapshot.time) {
+            fresh = true;
+            gpsSnapshot = *fix;
+            lastFix = millis();
+          }
+          portEXIT_CRITICAL(&sensorMux);
+          if (fresh) syncClockFromGPS(fix);
+        }
+        if (usesLink) xSemaphoreGive(coprocessorMutex);
+      }
+#if GNSS_RESET_TIMEOUT
+      if (millis() - lastFix > GNSS_RESET_TIMEOUT * 1000UL &&
+          xSemaphoreTake(coprocessorMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        sys.gpsEnd();
+        state.clear(STATE_GPS_READY | STATE_GPS_ONLINE);
+        lastFix = millis();
+        xSemaphoreGive(coprocessorMutex);
+      }
+#endif
+    }
+    delay(20);
+  }
+#endif
+  vTaskDelete(nullptr);
+}
+
+void acquireMEMS(void*)
+{
+#if ENABLE_MEMS
+  for (;;) {
+    if (!state.check(STATE_WORKING | STATE_MEMS_READY) || !mems) { delay(50); continue; }
+    xSemaphoreTake(memsMutex, portMAX_DELAY);
+    MEMSSnapshot snapshot = {};
+    bool success = mems->read(snapshot.acceleration, snapshot.gyro, snapshot.compass,
+                            &snapshot.temperature,
+#if ENABLE_ORIENTATION
+                            &snapshot.orientation
+#else
+                            nullptr
+#endif
+                            );
+    xSemaphoreGive(memsMutex);
+    if (success) {
+      for (byte i = 0; i < 3; i++) snapshot.acceleration[i] -= accBias[i];
+      snapshot.timestamp = millis();
+      portENTER_CRITICAL(&sensorMux);
+      memsSnapshot = snapshot;
+      portEXIT_CRITICAL(&sensorMux);
+    }
+    delay(20);
+  }
+#endif
+  vTaskDelete(nullptr);
 }
 
 bool initCell(bool quick = false)
@@ -1744,7 +1791,7 @@ void telemetry(void* inst)
           Serial.print(rssi);
           Serial.println("dBm");
         }
-        lastRssiTime = millis();
+        lastRssiMeasurement = lastRssiTime = millis();
 
 #if ENABLE_WIFI
         if (PREFER_CELLULAR && wifiFallback && state.check(STATE_WIFI_CONNECTED) &&
@@ -1761,6 +1808,14 @@ void telemetry(void* inst)
 #endif
       }
 
+#if GNSS == GNSS_CELLULAR
+      GPS_DATA* fix = nullptr;
+      if (teleClient.cell.getLocation(&fix) && fix && fix->ts) {
+        portENTER_CRITICAL(&sensorMux);
+        if (!gpsSnapshot.ts || fix->date != gpsSnapshot.date || fix->time != gpsSnapshot.time) gpsSnapshot = *fix;
+        portEXIT_CRITICAL(&sensorMux);
+      }
+#endif
       // Coalesce queued samples into one POST. This keeps live latency low when
       // only one sample is waiting but avoids a request storm after an outage.
       CBuffer* batch[HTTP_BATCH_MAX_SAMPLES];
@@ -1773,10 +1828,10 @@ void telemetry(void* inst)
 #if STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
       // A sample held in RAM after an SD write failure must not starve behind
       // a journal that keeps receiving fresh samples indefinitely.
-      replaying = durableQueue.pendingBytes() != 0 && bufman.pendingReadings() == 0;
+      replaying = durableQueue.pendingBytes() != 0 && bufman.recordedReadings() == 0;
       if (replaying) {
         uint32_t batchStarted = millis();
-        char frame[1536];
+        char frame[SAMPLE_FRAME_SIZE];
         while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
           uint32_t position = durableQueue.readPosition();
           uint16_t length = 0;
@@ -1807,7 +1862,7 @@ void telemetry(void* inst)
 #endif
       {
       while (batchCount < HTTP_BATCH_MAX_SAMPLES) {
-        CBuffer* buffer = bufman.getOldest();
+        CBuffer* buffer = bufman.getOldest(true);
         if (!buffer) {
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
           if (batchCount && millis() - batch[0]->timestamp < HTTP_BATCH_MAX_WAIT_MS) {
@@ -1948,6 +2003,8 @@ void telemetry(void* inst)
 void standby()
 {
   state.set(STATE_STANDBY);
+  state.clear(STATE_WORKING);
+  xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
     logger.end();
@@ -1994,6 +2051,7 @@ void standby()
   ESP.restart();
 #endif  
   state.clear(STATE_STANDBY);
+  xSemaphoreGive(coprocessorMutex);
 }
 
 /*******************************************************************************
@@ -2191,21 +2249,18 @@ void processBLE(int timeout)
       );
   } else if (!memcmp(cmd, "01", 2)) {
     byte pid = hex2uint8(cmd + 2);
+    OBDSnapshot snapshot;
+    portENTER_CRITICAL(&sensorMux);
+    snapshot = obdSnapshot;
+    portEXIT_CRITICAL(&sensorMux);
     for (byte i = 0; i < sizeof(obdData) / sizeof(obdData[0]); i++) {
-      if (obdData[i].pid == pid) {
-        n += snprintf(buf + n, bufsize - n, "%.2f", obdData[i].value);
+      if (snapshot.readings[i].pid == pid && snapshot.readings[i].ts) {
+        n += snprintf(buf + n, bufsize - n, "%.2f", snapshot.readings[i].value);
         pid = 0;
         break;
       }
     }
-    if (pid) {
-      float value;
-      if (obd.link && state.check(STATE_OBD_READY) && obd.getState() == OBD_CONNECTED && obd.readPID(pid, value)) {
-        n += snprintf(buf + n, bufsize - n, "%.2f", value);
-      } else {
-        n += snprintf(buf + n, bufsize - n, "N/A");
-      }
-    }
+    if (pid) n += snprintf(buf + n, bufsize - n, "N/A");
   } else if (!strcmp(cmd, "VIN")) {
     n += snprintf(buf + n, bufsize - n, "%s", vin[0] ? vin : "N/A");
   } else if (!strcmp(cmd, "LAT") && gd) {
@@ -2324,6 +2379,7 @@ if (!state.check(STATE_MEMS_READY)) do {
   ret = mems->begin();
   if (ret) {
     state.set(STATE_MEMS_READY);
+    hasMagnetometer = true;
     Serial.println("ICM-20948");
     break;
   } 
@@ -2370,10 +2426,26 @@ if (!state.check(STATE_MEMS_READY)) do {
     beepTone(1600, 500);
   }
 #endif
+  coprocessorMutex = xSemaphoreCreateMutex();
+  memsMutex = xSemaphoreCreateMutex();
+  if (!coprocessorMutex || !memsMutex) ESP.restart();
+#if ENABLE_OBD
+  clearOBDReadings();
+  publishOBDSnapshot();
+#endif
   initialize();
+  if (!coprocessorMutex ||
+      !recorderTask.create(recordSamples, "recorder", 1, 8192) ||
+      !obdTask.create(acquireOBD, "obd", 1, 8192) ||
+      !gpsTask.create(acquireGPS, "gnss", 1, 4096) ||
+      !memsTask.create(acquireMEMS, "mems", 1, 4096)) {
+    Serial.println("[CRITICAL] Acquisition/recorder task creation failed");
+    beepTone(1600, 500);
+    ESP.restart();
+  }
 
   // initialize network and maintain connection
-  if (!subtask.create(telemetry, "telemetry", 2, 12288)) {
+  if (!subtask.create(telemetry, "telemetry", 2, 24576)) {
     Serial.println("[CRITICAL] Upload task creation failed; retaining local recordings");
     beepTone(1600, 500);
   }
@@ -2399,37 +2471,5 @@ void loop()
     return;
   }
 
-#if STORAGE == STORAGE_SD
-  // A failed boot mount otherwise leaves the device on its finite RAM queue
-  // for the entire active session. Retry at a bounded rate; an already-open
-  // logger must not be reopened just because the journal was unavailable.
-  static uint32_t lastSDRetry = 0;
-  if ((!state.check(STATE_STORAGE_READY) || !logger.healthy() || !durableQueue.healthy()) &&
-      (lastSDRetry == 0 || millis() - lastSDRetry >= 30000UL)) {
-    lastSDRetry = millis();
-    Serial.println("[STORAGE] Retrying SD storage");
-    SDGuard recovery;
-    if (recovery) {
-      // Recovery can replay an already accepted batch. It cannot advance past
-      // the saved cursor or discard a RAM sample while the card is unavailable.
-      logger.end();
-      durableQueue.suspend();
-      state.clear(STATE_STORAGE_READY);
-      SD.end();
-      SPI.end();
-      delay(100);
-      if (logger.init()) {
-        if (durableQueue.begin()) Serial.println("[STORAGE] SD journal recovered; replay enabled");
-        fileid = logger.begin();
-        if (fileid) state.set(STATE_STORAGE_READY);
-      }
-    }
-  }
-#endif
-
-  // collect and log data
-#if STORAGE == STORAGE_SD
-  logger.maintain();
-#endif
   process();
 }

@@ -149,6 +149,7 @@ public:
   void gpsEnd(bool powerOff = true);
   // get parsed GPS data (returns the number of data parsed since last invoke)
   bool gpsGetData(GPS_DATA** pgd);
+  bool gpsUsesLink() const { return (m_flags & FLAG_GNSS_USE_LINK) != 0; }
   // get buffered NMEA data
   int gpsGetNMEA(char* buffer, int bufsize);
   // send command string to GPS

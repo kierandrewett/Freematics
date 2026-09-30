@@ -54,6 +54,7 @@ void CBuffer::purge()
   timestamp = 0;
   offset = 0;
   total = 0;
+  recorded = false;
 }
 
 void CBuffer::serialize(CStorage& store)
@@ -141,6 +142,7 @@ CBuffer* CBufferManager::getFree()
     CBuffer* slot = last;
     last = 0;
     if (slot->state == BUFFER_STATE_EMPTY) {
+      slot->recorded = false;
       slot->state = BUFFER_STATE_FILLING;
       freeSlot = slot;
     }
@@ -148,6 +150,7 @@ CBuffer* CBufferManager::getFree()
   // A full queue must never overwrite a captured reading.
   for (int n = 0; !freeSlot && n < total; n++) {
     if (slots[n]->state == BUFFER_STATE_EMPTY) {
+      slots[n]->recorded = false;
       slots[n]->state = BUFFER_STATE_FILLING;
       freeSlot = slots[n];
     }
@@ -156,14 +159,14 @@ CBuffer* CBufferManager::getFree()
   return freeSlot;
 }
 
-CBuffer* CBufferManager::getOldest()
+CBuffer* CBufferManager::getOldest(bool recorded)
 {
   uint32_t ts = 0;
   int m = -1;
   portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
     // RAM queue entries span less than half the 32-bit millisecond period.
-    if (slots[n]->state == BUFFER_STATE_FILLED &&
+    if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->recorded == recorded &&
         (m < 0 || (int32_t)(slots[n]->timestamp - ts) < 0)) {
         m = n;
         ts = slots[n]->timestamp;
@@ -220,10 +223,10 @@ void CBufferManager::restore(CBuffer* slot)
   portEXIT_CRITICAL(&m_mux);
 }
 
-void CBufferManager::recordMissedReading()
+void CBufferManager::recordMissedReading(uint32_t count)
 {
   portENTER_CRITICAL(&m_mux);
-  missed++;
+  missed += count;
   portEXIT_CRITICAL(&m_mux);
 }
 
@@ -886,4 +889,15 @@ void TeleClientHTTP::shutdown()
   cell.end();
   Serial.println("[CELL] Deactivated");
   m_useWifi = false;
+}
+
+uint16_t CBufferManager::recordedReadings() const
+{
+  uint16_t count = 0;
+  portENTER_CRITICAL(&m_mux);
+  for (uint32_t n = 0; n < total; n++) {
+    if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->recorded) count++;
+  }
+  portEXIT_CRITICAL(&m_mux);
+  return count;
 }
