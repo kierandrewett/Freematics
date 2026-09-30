@@ -4527,7 +4527,7 @@
           "type": "prometheus",
           "uid": "freematics-prometheus"
         },
-        "definition": "label_values(freematics_device_connected, device_id)",
+        "definition": "label_values(freematics_device_connected{device_id!=\"CODEXTEST\"}, device_id)",
         "hide": 0,
         "includeAll": false,
         "label": "Vehicle",
@@ -4535,7 +4535,7 @@
         "name": "device",
         "options": [],
         "query": {
-          "query": "label_values(freematics_device_connected, device_id)",
+          "query": "label_values(freematics_device_connected{device_id!=\"CODEXTEST\"}, device_id)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,

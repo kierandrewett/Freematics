@@ -1155,15 +1155,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1317,15 +1317,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1415,15 +1415,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1513,15 +1513,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1611,15 +1611,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1726,15 +1726,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1841,15 +1841,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1980,15 +1980,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -2241,15 +2241,15 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
+            "insertNulls": 10000,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
             "scaleDistribution": {
               "type": "linear"
             },
-            "showPoints": "never",
-            "spanNulls": false,
+            "showPoints": "always",
+            "spanNulls": 10000,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -2768,14 +2768,14 @@
           "type": "frser-sqlite-datasource",
           "uid": "freematics-history"
         },
-        "definition": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
+        "definition": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip WHERE device_id <> 'CODEXTEST' ORDER BY device_id",
         "hide": 0,
         "includeAll": false,
         "label": "Vehicle",
         "multi": false,
         "name": "device",
         "options": [],
-        "query": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id",
+        "query": "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip WHERE device_id <> 'CODEXTEST' ORDER BY device_id",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,

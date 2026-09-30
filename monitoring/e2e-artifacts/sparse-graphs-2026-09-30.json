@@ -1,0 +1,62 @@
+{
+  "dashboard": "freematics-trips",
+  "device": "ZKUCALJ0",
+  "trip": "20260929-121013",
+  "url": "https://grafana.drewett.dev/d/freematics-trips?var-device=ZKUCALJ0&var-trip=20260929-121013&from=1790683773400&to=1790684940600",
+  "before": [
+    {
+      "colouredPlotPixels": 22,
+      "height": 150,
+      "title": "Engine load and throttle",
+      "width": 970
+    },
+    {
+      "colouredPlotPixels": 19,
+      "height": 150,
+      "title": "Engine temperatures",
+      "width": 970
+    },
+    {
+      "colouredPlotPixels": 18,
+      "height": 176,
+      "title": "Mass airflow",
+      "width": 970
+    }
+  ],
+  "after": [
+    {
+      "colouredPlotPixels": 17367,
+      "height": 150,
+      "title": "Engine load and throttle",
+      "width": 970
+    },
+    {
+      "colouredPlotPixels": 817,
+      "height": 150,
+      "title": "Engine temperatures",
+      "width": 970
+    },
+    {
+      "colouredPlotPixels": 6390,
+      "height": 176,
+      "title": "Mass airflow",
+      "width": 970
+    }
+  ],
+  "passed": true,
+  "visibleDevices": [
+    "ZKUCALJ0"
+  ],
+  "cause": "Every measured value was separated by null rows; points hidden and null connections disabled.",
+  "fix": {
+    "showPoints": "always",
+    "spanNulls": 10000,
+    "insertNulls": 10000
+  },
+  "browserProbe": "(()=>{let out=[];for(const title of ['Engine load and throttle','Engine temperatures','Mass airflow']){let p=document.querySelector('section[data-testid=\"data-testid Panel header '+title+'\"]');let canvas=p?.querySelector('canvas');if(!canvas){out.push({title,noCanvas:true});continue;}let d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data,count=0;for(let i=0;i<d.length;i+=4){if(d[i+3]&&Math.max(d[i],d[i+1],d[i+2])-Math.min(d[i],d[i+1],d[i+2])>45&&Math.max(d[i],d[i+1],d[i+2])>100)count++;}out.push({title,width:canvas.width,height:canvas.height,colouredPlotPixels:count});}return out;})()",
+  "replay": "Open the recorded trip URL in an authenticated browser and evaluate browserProbe through Runtime.evaluate. All three plots must have more than 100 coloured canvas pixels.",
+  "limitations": [
+    "Existing monitoring test expects obsolete Trip index title and also fails on the prior commit.",
+    "No new firmware has been flashed; historical raw samples were not changed."
+  ]
+}

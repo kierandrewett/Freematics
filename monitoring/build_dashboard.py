@@ -1549,6 +1549,15 @@ def build_dashboard(view: str = "combined") -> dict:
             if targets:
                 panel["datasource"] = HISTORY_DS
                 panel["targets"] = targets
+                if panel["type"] == "timeseries":
+                    # Rotating PID acquisition leaves isolated values among
+                    # null rows. Show each observation and join short gaps,
+                    # while preserving longer acquisition outages.
+                    panel["fieldConfig"]["defaults"]["custom"].update({
+                        "showPoints": "always",
+                        "spanNulls": 10_000,
+                        "insertNulls": 10_000,
+                    })
                 if panel["id"] in {19, 20, 31}:
                     panel.pop("transformations", None)
         trip_index = next(item for item in panels if item["id"] == 19)
@@ -1819,7 +1828,8 @@ def build_dashboard(view: str = "combined") -> dict:
         )
 
     if view == "trips":
-        device_query = "SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip ORDER BY device_id"
+        device_query = ("SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip "
+                        "WHERE device_id <> 'CODEXTEST' ORDER BY device_id")
         device_variable = {
             "current": {"selected": False, "text": "", "value": ""},
             "datasource": HISTORY_DS,
@@ -1843,7 +1853,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "type": "query",
         }
     else:
-        device_query = "label_values(freematics_device_connected, device_id)"
+        device_query = 'label_values(freematics_device_connected{device_id!="CODEXTEST"}, device_id)'
         device_variable = {
             "current": {"selected": True, "text": "ZKUCALJ0", "value": "ZKUCALJ0"},
             "datasource": DS,
