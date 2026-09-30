@@ -11,3 +11,5 @@ collector/teleserver
 .beads/proxieddb/
 **/__pycache__/
 *.pyc
+**/node_modules/
+collector/ui-src/dist/

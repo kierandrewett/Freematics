@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": {"type": "string"},
+    "patterns": {"type": "array", "items": {"type": "string"}},
+    "possible_issues": {"type": "array", "items": {"type": "string"}},
+    "data_limits": {"type": "array", "items": {"type": "string"}},
+    "fault_analysis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {"type": "string"},
+          "interpretation": {"type": "string"},
+          "possible_causes": {"type": "array", "items": {"type": "string"}},
+          "evidence_for": {"type": "array", "items": {"type": "string"}},
+          "evidence_against": {"type": "array", "items": {"type": "string"}},
+          "next_checks": {"type": "array", "items": {"type": "string"}},
+          "source_urls": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["code", "interpretation", "possible_causes", "evidence_for", "evidence_against", "next_checks", "source_urls"]
+      }
+    }
+  },
+  "required": ["summary", "patterns", "possible_issues", "data_limits", "fault_analysis"]
+}
