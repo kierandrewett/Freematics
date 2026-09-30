@@ -124,6 +124,8 @@ public:
     bool usingWifi() const { return m_useWifi; }
     // HTTP status of the latest telemetry POST; 0 when no response arrived.
     uint16_t lastStatus = 0;
+    // Compressed batches that failed the on-device inflate check.
+    uint32_t compressionFaults = 0;
 #if ENABLE_WIFI
     WifiHTTP wifi;
 #endif
