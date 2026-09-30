@@ -76,9 +76,12 @@ After approximately three minutes without motion, the new fork firmware shuts
 down the radios and OBD link, puts the Model B's ICM-42627 accelerometer into
 50 Hz low-power mode, turns the LED off, and light-sleeps between 250 ms motion
 checks. It sends one parked marker on entry, then performs no periodic
-cellular/GPS tracking while parked. Three consecutive samples above 0.5 g are
+cellular/GPS tracking while parked. Three consecutive samples above 0.08 g are
 required to wake the active collection path, filtering a single bump or
 vibration. Motion returns the unit to the active collection path automatically.
+Standby does not poll OBD or wake the ECU. OBD speed is read after the motion
+sensor wakes the device. Only a failed or absent motion sensor permits the
+Model B's passive voltage input to wake it at charging voltage.
 If readings exist only in RAM, it stays active instead of rebooting into
 standby and losing them. This can increase parked power draw until storage or
 the server recovers.

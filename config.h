@@ -224,7 +224,6 @@
 #define STANDBY_MOTION_CONFIRM_SAMPLES 3
 #define IGNITION_WAKE_VOLTAGE 13.2f
 #define IGNITION_WAKE_CONFIRM_SAMPLES 3
-#define OBD_WAKE_POLL_MS 15000UL
 // engine jumpstart voltage for waking up (when MEMS unavailable) 
 #define JUMPSTART_VOLTAGE 14 /* V */
 // reset device after waking up

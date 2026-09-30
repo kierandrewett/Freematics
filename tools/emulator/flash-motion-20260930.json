@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-30",
+  "build_id": "motion-20260930-prod",
+  "device_id": "ZKUCALJ0",
+  "firmware_sha256": "a0462b26cb054eb60dbf27d117084234db60ef1bd9d931e9414216337034f9ba",
+  "flashed": true,
+  "flash_checksum_verified": true,
+  "production_credential_in_image_verified": true,
+  "installed_build_and_identity_verified": true,
+  "wake_policy": "Confirmed MEMS motion; passive voltage fallback only if MEMS unavailable; no parked OBD probes.",
+  "trip_stop_delay_ms": 90000,
+  "upload_seconds": 9.2,
+  "build_and_upload_seconds": 22.79,
+  "lifecycle_scenarios_passed": 27,
+  "limitations": [
+    "Physical driving and parked battery-current measurement remain unverified."
+  ],
+  "boot_evidence": [
+    "[BOOT] Freematics TeleLogger starting",
+    "[BOOT] Build: motion-20260930-prod",
+    "[BOOT] Release: 1.0.0",
+    "[BOOT] CPU: 160 MHz | flash: 16 MB",
+    "[BOOT] RAM: 320 KB | PSRAM: 8 MB",
+    "[BOOT] Device ID: ZKUCALJ0",
+    "[BOOT] Hardware type: 14",
+    "[QUEUE] SD journal ready | pending bytes: 49406"
+  ]
+}

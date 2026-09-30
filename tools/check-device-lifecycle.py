@@ -98,9 +98,9 @@ struct State { unsigned flags; bool check(unsigned f) { return (flags & f) == f;
 struct MEMS { bool read(float* a) { a[0]=movement; a[1]=0; a[2]=1; if (!sensorOK) delay(1); return sensorOK; } } sensor;
 MEMS* mems = &sensor;
 struct System { int devType = 14; } sys;
-struct OBD { float getVoltage() { return voltage; } bool probe = false;
+struct OBD { float getVoltage() { return voltage; } bool probe = false; int probes = 0;
  void leaveLowPowerMode() {} void enterLowPowerMode() {}
- bool readPID(int,int&) {return probe;}
+ bool readPID(int,int&) {probes++; return probe;}
 } obd;
 #define PID_RPM 12
 #define PROTO_AUTO 0
@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
  if(scenario=="sensor-failed") {voltage=14.4; sensorOK=false;}
  if(scenario=="sensor-absent") {voltage=14.4; mems=nullptr; state.flags=STATE_STANDBY;}
  if(scenario=="parked") {voltage=12.4; movement=.02;}
+ if(scenario=="ecu-probe-suppressed") {voltage=12.4; obd.probe=true;}
  if(scenario=="sd-fault" || scenario=="recording-stall" || scenario=="startup-stall" ||
     scenario=="recording-recovery" || scenario=="fault-standby" || scenario=="healthy-recorder") {
    state.flags=STATE_WORKING|STATE_NET_READY|STATE_CELL_CONNECTED;
@@ -201,9 +202,9 @@ int main(int argc, char** argv) {
    bool pass=scenario=="login-only" ? tones==3 : tones==0;
    std::cout<<scenario<<": tones="<<tones<<" "<<(pass?"PASS":"FAIL")<<"\n";return !pass;
  }
- limit=6000;
+ limit=20000;
  try {woke=waitMotion(-1,STANDBY_MOTION_THRESHOLD,STANDBY_MOTION_CONFIRM_SAMPLES);} catch(Finished&) {}
- bool pass=scenario=="parked" ? !woke : woke;
+ bool pass=(scenario=="parked" || scenario=="ignition" || scenario=="ecu-probe-suppressed" ? !woke : woke) && obd.probes==0;
  std::cout<<scenario<<": woke="<<woke<<" time_ms="<<tick<<" "<<(pass?"PASS":"FAIL")<<"\n";
  return !pass;
 }
@@ -214,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
     cpp.write_text(harness)
     subprocess.run(["g++", "-std=c++17", "-Wall", str(cpp), "-o", str(binary)], check=True)
     failures = 0
-    for scenario in ("ignition", "normal-motion", "sensor-failed", "sensor-absent", "parked",
+    for scenario in ("ignition", "normal-motion", "sensor-failed", "sensor-absent", "parked", "ecu-probe-suppressed",
                      "motion-source", "trip-cycle", "traffic-light", "speed-lost", "parked-fault", "parked-server",
                      "login-only", "standby-quiet", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):

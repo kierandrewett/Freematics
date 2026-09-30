@@ -1254,36 +1254,14 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
     uint8_t motionHits = 0;
     uint8_t ignitionHits = 0;
     const bool initiallyPowered = vehiclePowerPresent();
-    uint32_t lastOBDProbe = t;
     do {
-      const float voltage = readVehicleVoltage();
-      if (voltage >= IGNITION_WAKE_VOLTAGE || (!initiallyPowered && voltage >= 6.0f)) {
-        if (++ignitionHits >= IGNITION_WAKE_CONFIRM_SAMPLES) {
-          Serial.println("[POWER] Vehicle power or ignition confirmed; waking recorder");
-          return true;
-        }
-      } else {
-        ignitionHits = 0;
-      }
-#if ENABLE_OBD
-      // Charging voltage is not universal on cars with smart alternators.
-      // A bounded read-only ECU probe also detects ignition while stationary.
-      if (voltage >= 6.0f && millis() - lastOBDProbe >= OBD_WAKE_POLL_MS) {
-        lastOBDProbe = millis();
-        obd.leaveLowPowerMode();
-        int rpm = 0;
-        if (obd.readPID(PID_RPM, rpm)) {
-          Serial.println("[POWER] ECU responded; waking recorder");
-          return true;
-        }
-        obd.enterLowPowerMode();
-      }
-#endif
       // calculate relative movement
       float motion = 0;
       float acc[3];
+      bool motionSensorReady = false;
 #if ENABLE_MEMS
-      if (mems && state.check(STATE_MEMS_READY) && mems->read(acc)) {
+      motionSensorReady = mems && state.check(STATE_MEMS_READY) && mems->read(acc);
+      if (motionSensorReady) {
       if (accCount == 10) {
         accCount = 0;
         accSum[0] = 0;
@@ -1300,6 +1278,21 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       }
       }
 #endif
+      // Never wake the ECU to check a parked vehicle. If MEMS is unavailable,
+      // use the passive voltage input as the fallback on the Model B.
+      if (!motionSensorReady) {
+        const float voltage = readVehicleVoltage();
+        if (voltage >= IGNITION_WAKE_VOLTAGE || (!initiallyPowered && voltage >= 6.0f)) {
+          if (++ignitionHits >= IGNITION_WAKE_CONFIRM_SAMPLES) {
+            Serial.println("[POWER] Motion sensor unavailable; passive ignition wake");
+            return true;
+          }
+        } else {
+          ignitionHits = 0;
+        }
+      } else {
+        ignitionHits = 0;
+      }
 #if ENABLE_HTTPD
       serverProcess(100);
 #endif
@@ -2122,7 +2115,7 @@ void standby()
 #elif ENABLE_OBD
   do {
     delay(5000);
-  } while (obd.getVoltage() < JUMPSTART_VOLTAGE);
+  } while (readVehicleVoltage() < JUMPSTART_VOLTAGE);
 #else
   delay(5000);
 #endif
