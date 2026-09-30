@@ -299,9 +299,9 @@ private:
   uint8_t readByte(uint8_t);
   bool readBytes(uint8_t, uint8_t, uint8_t *);
   void init();
-  void readAccelData(int16_t data[]);
-  void readGyroData(int16_t data[]);
-  int16_t readTempData();
+  bool readAccelData(int16_t data[]);
+  bool readGyroData(int16_t data[]);
+  bool readTempData(int16_t& data);
 };
 
 #define ICM_20948_ARD_UNUSED_PIN 0xFF

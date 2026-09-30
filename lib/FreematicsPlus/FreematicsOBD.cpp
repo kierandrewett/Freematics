@@ -80,21 +80,60 @@ bool COBD::readPID(byte pid, int& result)
 	return true;
 }
 
+// Validate every byte consumed by normalizeData before publishing a reading.
+static byte decodedPIDBytes(byte pid)
+{
+    if ((pid >= PID_O2_S1_WR_VOLTAGE && pid <= PID_O2_S8_WR_VOLTAGE) ||
+        (pid >= PID_O2_S1_WR_CURRENT && pid <= PID_O2_S8_WR_CURRENT) || pid == PID_ODOMETER) return 4;
+    switch (pid) {
+    case PID_RPM:
+    case PID_MAF_FLOW:
+    case PID_FREEZE_DTC:
+    case PID_DISTANCE:
+    case PID_DISTANCE_WITH_MIL:
+    case PID_TIME_WITH_MIL:
+    case PID_TIME_SINCE_CODES_CLEARED:
+    case PID_RUNTIME:
+    case PID_FUEL_RAIL_PRESSURE:
+    case PID_ENGINE_REF_TORQUE:
+    case PID_FUEL_RAIL_PRESSURE_RELATIVE:
+    case PID_FUEL_RAIL_PRESSURE_DIRECT:
+    case PID_ABS_EVAP_SYS_VAPOR_PRESSURE:
+    case PID_EVAP_SYS_VAPOR_PRESSURE:
+    case PID_EVAP_SYS_VAPOR_PRESSURE_ALT:
+    case PID_CONTROL_MODULE_VOLTAGE:
+    case PID_ENGINE_FUEL_RATE:
+    case PID_FUEL_INJECTION_TIMING:
+    case PID_CATALYST_TEMP_B1S1:
+    case PID_CATALYST_TEMP_B2S1:
+    case PID_CATALYST_TEMP_B1S2:
+    case PID_CATALYST_TEMP_B2S2:
+    case PID_AIR_FUEL_EQUIV_RATIO:
+        return 2;
+    default:
+        return 1;
+    }
+}
+
 bool COBD::readPID(byte pid, float& result)
 {
-	char buffer[64];
+	char buffer[64] = {};
 	char* data = 0;
 	sprintf(buffer, "%02X%02X\r", dataMode, pid);
-	link->send(buffer);
+    if (!link || !link->send(buffer)) {
+        if (errors < 255) errors++;
+        return false;
+    }
 	idleTasks();
 	int ret = link->receive(buffer, sizeof(buffer), OBD_TIMEOUT_SHORT);
+    if (ret > 0) buffer[ret < (int)sizeof(buffer) ? ret : sizeof(buffer) - 1] = 0;
 	if (ret > 0 && !checkErrorMessage(buffer)) {
 		char *p = buffer;
 		while ((p = strstr(p, "41 "))) {
 			p += 3;
 			byte curpid = hex2uint8(p);
-			if (curpid == pid) {
-				errors = 0;
+			if (strlen(p) >= 3 && isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1]) &&
+                p[2] == ' ' && curpid == pid) {
 				while (*p && *p != ' ') p++;
 				while (*p == ' ') p++;
 				if (*p) {
@@ -105,11 +144,27 @@ bool COBD::readPID(byte pid, float& result)
 		}
 	}
 
-	if (!data) {
-		errors++;
-		return false;
-	}
-	result = normalizeData(pid, data);
+    char validated[12] = {};
+    const byte required = decodedPIDBytes(pid);
+    bool valid = data != nullptr;
+    for (byte index = 0; valid && index < required; index++) {
+        while (*data == ' ') data++;
+        if (!data[0] || !data[1] || !isxdigit((unsigned char)data[0]) ||
+            !isxdigit((unsigned char)data[1]) ||
+            (data[2] && data[2] != ' ' && data[2] != '\r' && data[2] != '\n' && data[2] != '>')) {
+            valid = false;
+            break;
+        }
+        snprintf(validated + index * 3, sizeof(validated) - index * 3, "%02X", hex2uint8(data));
+        if (index) validated[index * 3 - 1] = ' ';
+        data += 2;
+    }
+    if (!valid) {
+        if (errors < 255) errors++;
+        return false;
+    }
+    result = normalizeData(pid, validated);
+    errors = 0;
 	return true;
 }
 

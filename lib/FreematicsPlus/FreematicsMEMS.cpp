@@ -823,49 +823,54 @@ bool ICM_42627::readBytes(uint8_t subAddress, uint8_t count, uint8_t * dest)
   return ret == ESP_OK;
 }
 
-void ICM_42627::readAccelData(int16_t data[])
+bool ICM_42627::readAccelData(int16_t data[])
 {
-  uint8_t rawData[6];  // x/y/z accel register data stored here
-  readBytes(ACCEL_XOUT_H_REG, 6, &rawData[0]);  // Read the six raw data registers into data array
+  uint8_t rawData[6] = {};
+  if (!readBytes(ACCEL_XOUT_H_REG, 6, rawData)) return false;
   data[0] = ((int16_t)rawData[0] << 8) | rawData[1] ;  // Turn the MSB and LSB into a signed 16-bit value
   data[1] = ((int16_t)rawData[2] << 8) | rawData[3] ;
   data[2] = ((int16_t)rawData[4] << 8) | rawData[5] ;
+  return true;
 }
 
-int16_t ICM_42627::readTempData()
+bool ICM_42627::readTempData(int16_t& data)
 {
-  uint8_t rawData[2];  // x/y/z gyro register data stored here
-  readBytes(TEMP_OUT_H_REG, 2, &rawData[0]);  // Read the two raw data registers sequentially into data array
-  return ((int16_t)rawData[0] << 8) | rawData[1] ;  // Turn the MSB and LSB into a 16-bit value
+  uint8_t rawData[2] = {};
+  if (!readBytes(TEMP_OUT_H_REG, 2, rawData)) return false;
+  data = ((int16_t)rawData[0] << 8) | rawData[1];
+  return true;
 }
 
-void ICM_42627::readGyroData(int16_t data[])
+bool ICM_42627::readGyroData(int16_t data[])
 {
-  uint8_t rawData[6];  // x/y/z gyro register data stored here
-  readBytes(GYRO_XOUT_H_REG, 6, &rawData[0]);  // Read the six raw data registers sequentially into data array
+  uint8_t rawData[6] = {};
+  if (!readBytes(GYRO_XOUT_H_REG, 6, rawData)) return false;
   data[0] = ((int16_t)rawData[0] << 8) | rawData[1] ;  // Turn the MSB and LSB into a signed 16-bit value
   data[1] = ((int16_t)rawData[2] << 8) | rawData[3] ;
   data[2] = ((int16_t)rawData[4] << 8) | rawData[5] ;
+  return true;
 }
 
 bool ICM_42627::read(float* acc, float* gyr, float* mag, float* temp, ORIENTATION* ori)
 {
+  int16_t accelCount[3] = {};
+  int16_t gyroCount[3] = {};
+  int16_t temperature = 0;
+  // Publish a complete snapshot only after every requested transfer succeeds.
+  if ((acc && !readAccelData(accelCount)) || (gyr && !readGyroData(gyroCount)) ||
+      (temp && !readTempData(temperature))) return false;
   if (acc) {
-    int16_t accelCount[3] = {0};
-    readAccelData(accelCount);
     acc[0] = (float)accelCount[0]*aRes; // - accelBias[0];  // get actual g value, this depends on scale being set
     acc[1] = (float)accelCount[1]*aRes; // - accelBias[1];
     acc[2] = (float)accelCount[2]*aRes; // - accelBias[2];
   }
   if (gyr) {
-    int16_t gyroCount[3] = {0};
-    readGyroData(gyroCount);
     gyr[0] = (float)gyroCount[0]*gRes;  // get actual gyro value, this depends on scale being set
     gyr[1] = (float)gyroCount[1]*gRes;
     gyr[2] = (float)gyroCount[2]*gRes;
   }
   if (temp) {
-    *temp = (float)readTempData() / 132.48 + 25.0;
+    *temp = (float)temperature / 132.48 + 25.0;
   }
   return true;
 }

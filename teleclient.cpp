@@ -158,11 +158,13 @@ CBuffer* CBufferManager::getFree()
 
 CBuffer* CBufferManager::getOldest()
 {
-  uint32_t ts = 0xffffffff;
+  uint32_t ts = 0;
   int m = -1;
   portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
-    if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->timestamp < ts) {
+    // RAM queue entries span less than half the 32-bit millisecond period.
+    if (slots[n]->state == BUFFER_STATE_FILLED &&
+        (m < 0 || (int32_t)(slots[n]->timestamp - ts) < 0)) {
         m = n;
         ts = slots[n]->timestamp;
     }
@@ -181,7 +183,8 @@ CBuffer* CBufferManager::getNewest()
   int m = -1;
   portENTER_CRITICAL(&m_mux);
   for (int n = 0; n < total; n++) {
-    if (slots[n]->state == BUFFER_STATE_FILLED && slots[n]->timestamp > ts) {
+    if (slots[n]->state == BUFFER_STATE_FILLED &&
+        (m < 0 || (int32_t)(slots[n]->timestamp - ts) > 0)) {
       m = n;
       ts = slots[n]->timestamp;
     }
