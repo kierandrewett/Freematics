@@ -324,6 +324,12 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_missed_readings gauge\n"
 		"# HELP freematics_device_durable_queue_healthy Whether the microSD journal accepted its latest write.\n"
 		"# TYPE freematics_device_durable_queue_healthy gauge\n"
+		"# HELP freematics_device_rejected_readings Journal records refused by the collector since boot, kept on the card.\n"
+		"# TYPE freematics_device_rejected_readings gauge\n"
+		"# HELP freematics_device_power_phase Trip lifecycle: 0 confirming a wake, 1 trip, 2 wrap-up upload.\n"
+		"# TYPE freematics_device_power_phase gauge\n"
+		"# HELP freematics_device_wake_reason Why the device booted: 0 power on, 1 motion, 2 charging voltage.\n"
+		"# TYPE freematics_device_wake_reason gauge\n"
 		"# HELP freematics_device_sample_rate_per_minute Samples received per minute.\n"
 		"# TYPE freematics_device_sample_rate_per_minute gauge\n"
 		"# HELP freematics_device_rssi_dbm Cellular or Wi-Fi received signal strength.\n"
@@ -425,6 +431,9 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_bytes", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_BYTES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_missed_readings", pld->devid, pld->tripid, pld->data + PID_MISSED_READINGS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_healthy", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_HEALTH, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_rejected_readings", pld->devid, pld->tripid, pld->data + PID_REJECTED_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_power_phase", pld->devid, pld->tripid, pld->data + PID_POWER_PHASE, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_wake_reason", pld->devid, pld->tripid, pld->data + PID_WAKE_REASON, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_protocol", pld->devid, pld->tripid, pld->data + PID_OBD_PROTOCOL, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_supported_pids", pld->devid, pld->tripid, pld->data + PID_OBD_SUPPORTED_PIDS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_timeouts", pld->devid, pld->tripid, pld->data + PID_OBD_TIMEOUTS, 1);

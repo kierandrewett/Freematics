@@ -1317,10 +1317,41 @@ def build_dashboard(view: str = "combined") -> dict:
                 [
                     target(fresh_device(f"freematics_device_queue_readings{{{DEVICE}}}"), "A", "Queued readings"),
                     target(fresh_device(f"freematics_device_queue_bytes{{{DEVICE}}}"), "B", "Queued bytes"),
+                    target(fresh_device(f"freematics_device_durable_queue_bytes{{{DEVICE}}}"), "C", "SD backlog"),
                 ],
                 unit="short",
-                description="Filled telemetry readings and encoded bytes waiting for upload. A growing queue indicates transport back-pressure; a stale device age hides the series.",
-                overrides=[by_name("Queued bytes", ("unit", "decbytes"))],
+                description="Readings waiting in RAM, their encoded bytes, and the unacknowledged microSD backlog. A growing queue or backlog indicates transport back-pressure; a stale device age hides the series.",
+                overrides=[
+                    by_name("Queued bytes", ("unit", "decbytes")),
+                    by_name("SD backlog", ("unit", "decbytes"), ("custom.axisPlacement", "right")),
+                ],
+            )
+        )
+    if view in {"combined", "live"}:
+        panels.append(
+            timeseries(
+                48,
+                "Device lifecycle",
+                0,
+                76,
+                24,
+                5,
+                [
+                    target(fresh_device(f"freematics_device_power_phase{{{DEVICE}}}"), "A", "Power phase"),
+                    target(fresh_device(f"freematics_device_wake_reason{{{DEVICE}}}"), "B", "Wake reason"),
+                    target(fresh_device(f"freematics_device_rejected_readings{{{DEVICE}}}"), "C", "Rejected readings"),
+                ],
+                unit="short",
+                description=(
+                    "Power phase: 0 confirming a wake (modem off), 1 trip, 2 wrap-up upload after the car turned off. "
+                    "Wake reason: 0 power on, 1 motion, 2 charging voltage. Rejected readings: records the collector "
+                    "refused since boot, kept in /QUEUE.REJ on the card. Parked standby sends no data, so the series stop."
+                ),
+                overrides=[
+                    by_name("Power phase", ("custom.lineInterpolation", "stepAfter"), ("min", 0), ("max", 2)),
+                    by_name("Wake reason", ("custom.lineInterpolation", "stepAfter")),
+                    by_name("Rejected readings", ("custom.axisPlacement", "right")),
+                ],
             )
         )
     if view in {"combined", "live"}:

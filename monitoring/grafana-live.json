@@ -3205,7 +3205,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Filled telemetry readings and encoded bytes waiting for upload. A growing queue indicates transport back-pressure; a stale device age hides the series.",
+      "description": "Readings waiting in RAM, their encoded bytes, and the unacknowledged microSD backlog. A growing queue or backlog indicates transport back-pressure; a stale device age hides the series.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -3266,6 +3266,22 @@
                 "value": "decbytes"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SD backlog"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
           }
         ]
       },
@@ -3315,6 +3331,17 @@
           "legendFormat": "Queued bytes",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_durable_queue_bytes{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "SD backlog",
+          "range": true,
+          "refId": "C"
         }
       ],
       "title": "Telemetry queue",

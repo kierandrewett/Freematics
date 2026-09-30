@@ -103,6 +103,14 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
             else:
                 raise AssertionError('Uncompressed body accepted as compressed')
             print(f'PASS: zlib batch accepted ({len(raw)} -> {len(packed)} bytes), corrupt compressed body refused')
+            # Lifecycle fields reach the Prometheus metrics the dashboard reads.
+            text = '0:40000,89:1,97:1,98:2,99:1,8D:5000'
+            assert b'OK' in request(base, '/api/post/PACKED', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            for name, value in (('rejected_readings', '1'), ('power_phase', '2'), ('wake_reason', '1')):
+                assert any(line.startswith(f'freematics_device_{name}{{device_id="PACKED"') and line.endswith(' ' + value)
+                           for line in metrics.splitlines()), (name, [l for l in metrics.splitlines() if name in l])
+            print('PASS: power phase, wake reason and rejected readings exported as metrics')
             # A disconnected ECU must retain explicitly aged values while
             # legacy firmware without ages must still clear stale live data.
             text = '0:2000,10C:900,40C:1000,89:0'
