@@ -1,10 +1,14 @@
 #include <iostream>
+#include <iomanip>
 #include <string>
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
 #include "queue_scenario.h"
 
 uint32_t simulationTime = 0;
+void runJournalScenarios();
+void runMEMSScenarios();
+int runJournalDrive();
 
 class DummyBridge : public CLink
 {
@@ -40,8 +44,10 @@ void report(const char* name, bool passed, bool fault, double observed)
               << "\",\"observed\":" << observed << "}\n";
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    std::cout << std::setprecision(17);
+    if (argc == 2 && std::string(argv[1]) == "--drive") return runJournalDrive();
     DummyBridge bridge;
     COBD obd;
     obd.begin(&bridge);
@@ -85,6 +91,16 @@ int main()
     okay = obd.readPID(PID_SPEED, value);
     report("reject invalid hexadecimal speed", !okay && value == -123, true, value);
 
+    bridge.reply = "41 42 0C\r>";
+    okay = obd.readPID(PID_CONTROL_MODULE_VOLTAGE, value);
+    report("reject truncated two-byte voltage", !okay, true, value);
+    bridge.reply = "41 24 80 00\r>";
+    okay = obd.readPID(PID_O2_S1_WR_VOLTAGE, value);
+    report("reject truncated four-byte oxygen value", !okay, true, value);
+    bridge.reply = "41 0C  0e   10\r>";
+    okay = obd.readPID(PID_RPM, value);
+    report("RPM with lowercase bytes and extra spaces", okay && value == 900, true, value);
+
     unsigned failures = 0;
     unsigned successes = 0;
     unsigned mismatches = 0;
@@ -124,4 +140,16 @@ int main()
     queue.total = 1;
     selected = queue.getOldest(true);
     report("queue entry at maximum timestamp", selected == &older, true, selected ? selected->timestamp : -1.0);
+
+    older = {BUFFER_STATE_FILLED, true, 0xffffff00};
+    newer = {BUFFER_STATE_FILLED, true, 10};
+    queue.total = 2;
+    selected = queue.getNewest();
+    report("newest across millisecond rollover", selected == &newer, true, selected ? selected->timestamp : -1.0);
+    older = {BUFFER_STATE_FILLED, true, 0};
+    queue.total = 1;
+    selected = queue.getNewest();
+    report("queue entry at zero timestamp", selected == &older, true, selected ? selected->timestamp : -1.0);
+    runJournalScenarios();
+    runMEMSScenarios();
 }

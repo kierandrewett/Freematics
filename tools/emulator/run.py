@@ -4,14 +4,105 @@ import argparse
 import hashlib
 import json
 import platform
+import re
+import selectors
 from pathlib import Path
+import shutil
 import shlex
+import socket
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
+
+
+def request(base, path, packet=None):
+    headers = {"Authorization": "Bearer " + "A" * 64, "Content-Type": "application/octet-stream"}
+    with urllib.request.urlopen(urllib.request.Request(base + path, data=packet, headers=headers), timeout=3) as response:
+        return response.read()
+
+
+def drive(executable, collector):
+    """Feed real HTTP responses back into the production journal replay loop."""
+    with tempfile.TemporaryDirectory(prefix="freematics-drive-") as directory:
+        root = Path(directory)
+        server = None
+        packets = []
+        results = []
+        child = None
+        with (root / "collector.log").open("wb") as log:
+            try:
+                if collector:
+                    (root / "data").mkdir()
+                    (root / "log").mkdir()
+                    with socket.socket() as port_socket:
+                        port_socket.bind(("127.0.0.1", 0))
+                        port = port_socket.getsockname()[1]
+                    base = f"http://127.0.0.1:{port}"
+                    command = [str(ROOT / "collector/teleserver"), "-g", "-p", str(port), "-u", "0",
+                               "-w", "emulator-fixture-only", "-d", str(root / "data"), "-l", str(root / "log")]
+                    server = subprocess.Popen(command, cwd=root, stdout=log, stderr=log)
+                    for attempt in range(60):
+                        try:
+                            request(base, "/api/test")
+                            break
+                        except OSError:
+                            if server.poll() is not None:
+                                raise RuntimeError("Local collector exited")
+                            time.sleep(0.05)
+                    else:
+                        raise RuntimeError("Local collector did not start")
+                    request(base, "/api/notify/EMULATOR?EV=1&TS=1000")
+                child = subprocess.Popen([str(executable), "--drive"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True)
+                events = selectors.DefaultSelector()
+                events.register(child.stdout, selectors.EVENT_READ)
+                while True:
+                    if not events.select(timeout=5):
+                        raise RuntimeError("Drive stopped producing events for five seconds")
+                    line = child.stdout.readline()
+                    if not line:
+                        break
+                    event = json.loads(line)
+                    if event.get("event") != "upload":
+                        results.append(event)
+                        continue
+                    packet = event["packet"]
+                    packets.append(packet)
+                    if len(packets) > 1000:
+                        raise RuntimeError("Drive exceeded its replay limit")
+                    response = request(base, "/api/post/EMULATOR", packet.encode()) if collector else b"OK 3"
+                    if response.strip() != b"OK 3":
+                        raise RuntimeError(f"Collector rejected sample: {response!r}")
+                    child.stdin.write("ACK\n")
+                    child.stdin.flush()
+                child.wait(timeout=5)
+                events.close()
+                if child.returncode:
+                    raise RuntimeError(f"Drive exited with {child.returncode}: {child.stderr.read()}")
+                if collector:
+                    live = json.loads(request(base, "/api/get/EMULATOR"))
+                    values = {int(row[0]): row[1] for row in live["data"]}
+                    if values.get(0x10C) != 3290:
+                        raise RuntimeError(f"Incorrect final RPM: {values.get(0x10C)}")
+                    archive = "".join(path.read_text() for path in (root / "data").rglob("*.txt"))
+                    missing = [index for index in range(240) if f"0:{1000 + index * 250}," not in archive]
+                    results.append({"scenario": "240 offline readings reach local collector archive",
+                                    "status": "PASS" if not missing else "ERROR", "observed": 240 - len(missing)})
+            finally:
+                for process in (child, server):
+                    if process is not None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+            return results, packets, (root / "collector.log").read_text()
 
 
 def extract_function(source, signature):
@@ -29,8 +120,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strict", action="store_true", help="Fail when a firmware fault scenario reports an issue")
     parser.add_argument("--report", type=Path, help="Save a JSON evidence report")
+    parser.add_argument("--collector", action="store_true", help="Replay the offline drive into a real local collector")
+    parser.add_argument("--sanitize", action="store_true", help="Check native memory access and undefined behaviour")
+    parser.add_argument("--compiler", default="c++", help="C++ compiler executable")
     args = parser.parse_args()
-    compiler = "c++"
+    compiler = args.compiler
+    if args.collector:
+        subprocess.run(["make", "-C", str(ROOT / "collector")], check=True, capture_output=True, text=True, timeout=60)
     client = ROOT / "teleclient.cpp"
     with tempfile.TemporaryDirectory(prefix="freematics-ecu-") as temporary:
         build = Path(temporary)
@@ -45,29 +141,85 @@ public:
     CBuffer** slots;
     int total;
     CBuffer* getOldest(bool recorded);
+    CBuffer* getNewest();
 };
 """
         header += extract_function(client.read_text(), "CBuffer* CBufferManager::getOldest(bool recorded)")
+        header += "\n" + extract_function(client.read_text(), "CBuffer* CBufferManager::getNewest()")
         (build / "queue_scenario.h").write_text(header + "\n")
+        # Byte-identical production files; only hardware headers and POSIX calls are substituted.
+        for name in ("telequeue.cpp", "telequeue.h"):
+            shutil.copyfile(ROOT / name, build / name)
+        (build / "config.h").write_text("#define STORAGE_SD 1\n#define STORAGE 1\n#define SAMPLE_FRAME_SIZE 8192\n")
+        (build / "sdaccess.h").write_text("#pragma once\ninline bool lockSD() { return true; }\ninline void unlockSD() {}\n")
+        (build / "freertos").mkdir()
+        for name in ("FreeRTOS.h", "semphr.h"):
+            (build / "freertos" / name).write_text("#pragma once\n")
+        wire = """#pragma once
+#include "Arduino.h"
+class CStorage { public: byte checksum(const char* data, int len); };
+class CStorageRAM : public CStorage {
+public:
+    char m_cache[8192];
+    unsigned int m_cacheBytes = 0;
+    bool m_overflowed = false;
+    void tailer();
+};
+"""
+        storage = (ROOT / "telestore.cpp").read_text()
+        wire += extract_function(storage, "byte CStorage::checksum(const char* data, int len)") + "\n"
+        wire += extract_function(storage, "void CStorageRAM::tailer()") + "\n"
+        (build / "wire_scenario.h").write_text(wire)
+        mems_header = (ROOT / "lib/FreematicsPlus/FreematicsMEMS.h").read_text()
+        class_start = mems_header.index("class ICM_42627 :")
+        class_end = mems_header.index("};", class_start) + 2
+        mems = """#pragma once
+#include "FreematicsBase.h"
+#include "utility/ICM_42627.h"
+class MEMS_I2C {};
+"""
+        # Use the production class declaration and scale macros, without ESP32 drivers.
+        scales = mems_header[mems_header.index("#define Ascale"):mems_header.index("#endif", mems_header.index("#if Gscale")) + 6]
+        mems += scales + "\n"
+        mems += mems_header[class_start:class_end] + "\n"
+        mems_source = (ROOT / "lib/FreematicsPlus/FreematicsMEMS.cpp").read_text()
+        for name in ("readAccelData", "readGyroData", "readTempData", "read"):
+            signature = re.search(r"(?:void|bool|int16_t) ICM_42627::" + name + r"\([^\n]*\)", mems_source).group()
+            mems += extract_function(mems_source, signature) + "\n"
+        (build / "mems_scenario.h").write_text(mems)
         executable = build / "scenarios"
         command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-O1",
                    "-I", str(HERE), "-I", str(ROOT / "lib/FreematicsPlus"), "-I", str(build),
                    str(HERE / "scenarios.cpp"), str(ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp"),
+                   str(HERE / "journal_scenarios.cpp"), str(build / "telequeue.cpp"),
+                   str(HERE / "mems_scenarios.cpp"),
+                   "-Wl,--wrap=open,--wrap=close,--wrap=time",
                    "-o", str(executable)]
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        output = subprocess.run([str(executable)], check=True, capture_output=True, text=True).stdout
+        if args.sanitize:
+            command[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
+        output = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=15).stdout
+        drive_results, packets, collector_log = drive(executable, args.collector)
     results = [json.loads(line) for line in output.splitlines()]
+    results.extend(drive_results)
     sources = [client, ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp",
                ROOT / "lib/FreematicsPlus/FreematicsOBD.h", ROOT / "lib/FreematicsPlus/FreematicsBase.h",
                ROOT / "lib/FreematicsPlus/utility/OBD.h", HERE / "Arduino.h",
-               HERE / "scenarios.cpp", Path(__file__).resolve()]
+               ROOT / "telequeue.cpp", ROOT / "telequeue.h", ROOT / "telestore.cpp", HERE / "SD.h",
+               ROOT / "lib/FreematicsPlus/FreematicsMEMS.cpp", ROOT / "lib/FreematicsPlus/FreematicsMEMS.h",
+               ROOT / "lib/FreematicsPlus/utility/ICM_42627.h", HERE / "mems_scenarios.cpp",
+               HERE / "journal_scenarios.cpp", HERE / "scenarios.cpp", Path(__file__).resolve()]
+    if args.collector:
+        sources.append(ROOT / "collector/teleserver")
     report = {
         "command": shlex.join([sys.executable, *sys.argv]),
         "environment": platform.platform(),
         "compiler": subprocess.run([compiler, "--version"], check=True, capture_output=True, text=True).stdout.splitlines()[0],
         "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},
-        "coverage": "Actual OBD decoder and extracted queue method; no ESP32 boot, task concurrency or physical I/O",
+        "coverage": "Actual OBD decoder, queue methods, wire checksum, IMU methods and journal with fake SD; no ESP32 boot or concurrent tasks",
         "results": results,
+        "drive_packets": packets,
+        "collector_log": collector_log,
     }
     if args.report:
         args.report.write_text(json.dumps(report, indent=2) + "\n")
@@ -79,6 +231,6 @@ public:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except subprocess.CalledProcessError as error:
-        print(error.stderr or str(error), file=sys.stderr)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError) as error:
+        print(getattr(error, "stderr", None) or str(error), file=sys.stderr)
         sys.exit(1)
