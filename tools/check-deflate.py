@@ -70,6 +70,15 @@ def main() -> int:
         }
         for seed in range(20):
             cases[f"telemetry batch {seed}"] = telemetry_batch(seed, 40)
+        # Huffman edge cases: tiny and skewed alphabets, one repeated symbol,
+        # every byte value, and sizes up to the 64 KB collector limit.
+        for seed in range(300):
+            local = random.Random(seed)
+            alphabet = bytes(local.sample(range(256), local.choice([1, 2, 3, 5, 12, 40, 256])))
+            size = local.choice([0, 1, 2, 3, 4, 7, 100, 1000, 4096, 20000, 65000])
+            weights = [local.random() ** local.choice([1, 4, 12]) for _ in alphabet]
+            cases[f"random {seed}"] = bytes(local.choices(alphabet, weights, k=size))
+        cases["all byte values"] = bytes(range(256)) * 50
         if len(sys.argv) > 1:
             text = Path(sys.argv[1]).read_text()
             samples = [s for line in text.splitlines() for s in line.split("*")[0].split(",0:")]
