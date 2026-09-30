@@ -20,7 +20,7 @@
 #include "teleclient.h"
 #include "config.h"
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
-#include "esp32/rom/miniz.h"
+#include "teledeflate.h"
 #endif
 
 extern int16_t rssi;
@@ -652,72 +652,19 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
   }
 }
 
-#if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
-// zlib-compress one batch with the ESP32 ROM deflate. Full-rate samples repeat
-// most PIDs and values, so a 40-sample batch shrinks about 6x. Returns 0 when
-// compression fails; the caller then sends the batch as it is.
-size_t deflateBatch(const char* input, size_t length, uint8_t* output, size_t capacity)
-{
-  // About 100 KB of compressor state, allocated once in PSRAM.
-  static tdefl_compressor* compressor =
-    (tdefl_compressor*)heap_caps_malloc(sizeof(tdefl_compressor), MALLOC_CAP_SPIRAM);
-  if (!compressor || !input || !output) return 0;
-  if (tdefl_init(compressor, nullptr, nullptr, TDEFL_WRITE_ZLIB_HEADER | HTTP_COMPRESS_PROBES) != TDEFL_STATUS_OKAY) {
-    return 0;
-  }
-  size_t consumed = length;
-  size_t produced = capacity;
-  const tdefl_status status = tdefl_compress(compressor, input, &consumed, output, &produced, TDEFL_FINISH);
-  return status == TDEFL_STATUS_DONE && consumed == length ? produced : 0;
-}
-
-// The ROM compressor runs without the PSRAM cache workaround this revision 1
-// chip needs, and one compressed batch failed to inflate on the collector.
-// Inflate the result into an internal-RAM window with the ROM decompressor
-// and compare it with the original. Any doubt sends the batch uncompressed.
-bool deflateMatches(const uint8_t* packed, size_t packedSize, const char* original, size_t length)
-{
-  tinfl_decompressor* inflator = (tinfl_decompressor*)heap_caps_malloc(sizeof(tinfl_decompressor),
-                                                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  uint8_t* window = (uint8_t*)heap_caps_malloc(TINFL_LZ_DICT_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-  bool matches = inflator && window;
-  if (matches) {
-    tinfl_init(inflator);
-    size_t read = 0, written = 0, compared = 0;
-    for (;;) {
-      size_t inBytes = packedSize - read;
-      size_t outBytes = TINFL_LZ_DICT_SIZE - written;
-      const tinfl_status status = tinfl_decompress(inflator, packed + read, &inBytes, window, window + written,
-                                                   &outBytes, TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_COMPUTE_ADLER32);
-      read += inBytes;
-      if (compared + outBytes > length || memcmp(window + written, original + compared, outBytes)) {
-        matches = false;
-        break;
-      }
-      compared += outBytes;
-      written = (written + outBytes) & (TINFL_LZ_DICT_SIZE - 1);
-      if (status == TINFL_STATUS_DONE) { matches = compared == length && read == packedSize; break; }
-      if (status != TINFL_STATUS_HAS_MORE_OUTPUT) { matches = false; break; }
-    }
-  }
-  heap_caps_free(window);
-  heap_caps_free(inflator);
-  return matches;
-}
-#endif
-
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+  // teledeflate.cpp is compiled into the app, so it runs with the PSRAM
+  // workaround this revision 1 chip needs (the ROM deflate does not).
   static uint8_t* packed = (uint8_t*)heap_caps_malloc(SERIALIZE_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-  size_t packedSize = packed ? deflateBatch(packetBuffer, packetSize, packed, SERIALIZE_BUFFER_SIZE) : 0;
-  if (packedSize && packedSize < packetSize && !deflateMatches(packed, packedSize, packetBuffer, packetSize)) {
-    compressionFaults++;
-    Serial.print("[HTTP] Compressed batch failed its self-check; sending uncompressed. Faults: ");
-    Serial.println(compressionFaults);
-    packedSize = 0;
-  }
+  static DeflateScratch* scratch = (DeflateScratch*)heap_caps_malloc(sizeof(DeflateScratch), MALLOC_CAP_SPIRAM);
+  const uint32_t started = millis();
+  const size_t packedSize = packed && scratch
+    ? zlibCompress((const uint8_t*)packetBuffer, packetSize, packed, SERIALIZE_BUFFER_SIZE, scratch) : 0;
+  compressMillis = millis() - started;
   if (packedSize && packedSize < packetSize) {
+    Serial.printf("[HTTP] Compressed %u -> %u bytes in %u ms\n", packetSize, (unsigned)packedSize, (unsigned)compressMillis);
     if (transmitBody(packetBuffer, packetSize, (const char*)packed, packedSize)) return true;
     // A collector without inflate support, or a compression fault, must not
     // make the device set readings aside. Resend the batch as it is.

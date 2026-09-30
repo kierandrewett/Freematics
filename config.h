@@ -208,12 +208,10 @@
 #define HTTP_BATCH_MIN_SAMPLES 4
 // zlib-compress POST bodies (collector 2026-10-01 or later inflates ?z=1).
 // A refused compressed batch is resent uncompressed, so older collectors work.
-// OFF: on this revision 1 ESP32 the ROM deflate path failed its self-check for
-// every input above 4 KB, and a probe build of it crash-looped. Re-enable only
-// with a compressor compiled into the app and checked on the device.
+// The encoder is teledeflate.cpp (compiled into the app, so it gets the PSRAM
+// workaround); the ROM deflate failed on this revision 1 chip. Off until the
+// app encoder has been checked on the device.
 #define HTTP_COMPRESS_UPLOADS 0
-// Deflate effort: dictionary probes per match search (ROM miniz, max 4095).
-#define HTTP_COMPRESS_PROBES 32
 #define HTTP_BATCH_GROW_STEP 4
 // Bound live latency while allowing normal samples to share a request.
 #define HTTP_BATCH_MAX_WAIT_MS 1000UL
