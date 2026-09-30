@@ -144,8 +144,15 @@ public:
     CBuffer* getNewest();
 };
 """
-        header += extract_function(client.read_text(), "CBuffer* CBufferManager::getOldest(bool recorded)")
-        header += "\n" + extract_function(client.read_text(), "CBuffer* CBufferManager::getNewest()")
+        client_source = client.read_text()
+        oldest = "CBuffer* CBufferManager::getOldest(bool recorded)"
+        if oldest not in client_source:
+            # The committed queue has no recorder filter; pending recorder work adds it.
+            header = header.replace("CBuffer* getOldest(bool recorded);", "CBuffer* getOldest();\n"
+                                    "    CBuffer* getOldest(bool) { return getOldest(); }")
+            oldest = "CBuffer* CBufferManager::getOldest()"
+        header += extract_function(client_source, oldest)
+        header += "\n" + extract_function(client_source, "CBuffer* CBufferManager::getNewest()")
         (build / "queue_scenario.h").write_text(header + "\n")
         # Byte-identical production files; only hardware headers and POSIX calls are substituted.
         for name in ("telequeue.cpp", "telequeue.h"):

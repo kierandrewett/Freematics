@@ -127,10 +127,12 @@ class DriveBridge : public CLink
 {
 public:
     unsigned rpm = 900;
-    bool send(const char*) override { return true; }
+    byte pid = PID_RPM;
+    bool send(const char* command) override { pid = hex2uint8(command + 2); return true; }
     int receive(char* buffer, int capacity, unsigned int) override
     {
         const unsigned encoded = rpm * 4;
+        if (pid == PID_SPEED) return snprintf(buffer, capacity, "41 0D 32\r>");
         return snprintf(buffer, capacity, "41 0C %02X %02X\r>", encoded >> 8, encoded & 255);
     }
 };
@@ -146,9 +148,12 @@ int runJournalDrive()
     for (unsigned index = 0; index < 240; index++) {
         bridge.rpm = 900 + index * 10;
         float value = 0;
+        float speed = 0;
         if (!obd.readPID(PID_RPM, value)) return 1;
+        if (!obd.readPID(PID_SPEED, speed)) return 1;
         char frame[160];
-        snprintf(frame, sizeof(frame), "0:%u,10C:%u,40C:0,89:1,", 1000 + index * 250, (unsigned)value);
+        snprintf(frame, sizeof(frame), "0:%u,10C:%u,10D:%u,89:1,", 1000 + index * 250,
+                 (unsigned)value, (unsigned)speed);
         if (!append(recording, frame)) return 1;
     }
     // Restart while all readings are offline. Only the fake SD bytes survive.
