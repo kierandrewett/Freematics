@@ -4,6 +4,13 @@
 #include <time.h>
 #include <ctype.h>
 
+#ifndef CELL_TLS_CHUNK_BYTES
+#define CELL_TLS_CHUNK_BYTES 1024
+#endif
+#ifndef CELL_TLS_COMMAND_SETTLE_MS
+#define CELL_TLS_COMMAND_SETTLE_MS 10
+#endif
+
 namespace {
 bool timeValid(time_t value) { return value >= 1704067200 && value <= 2145916799; }
 int hexDigit(char value)
@@ -59,7 +66,9 @@ bool CellularTLS::command(const char* text, unsigned timeout, const char* expect
         // stale UART responses from the previous command or ESP32 restart.
         m_device->xbPurge();
         m_device->xbWrite(text);
-        delay(10);
+        // xbReceive() below waits for the reply, so this pause only adds
+        // latency to every AT command; it stays configurable for bench tests.
+        if (CELL_TLS_COMMAND_SETTLE_MS) delay(CELL_TLS_COMMAND_SETTLE_MS);
     }
     m_reply[0] = 0;
     const char* answers[] = {"\r\nOK", "\r\nERROR"};
@@ -93,7 +102,9 @@ void CellularTLS::close()
 
 int CellularTLS::socketWrite(const unsigned char* data, size_t length)
 {
-    const size_t count = min(length, (size_t)1024);
+    // Each chunk costs one AT+CIPSEND round trip, so larger chunks move a
+    // batch in fewer round trips. The SIM7670 accepts up to 1500 bytes.
+    const size_t count = min(length, (size_t)CELL_TLS_CHUNK_BYTES);
     char text[48];
     snprintf(text, sizeof(text), "AT+CIPSEND=0,%u\r", (unsigned)count);
     if (m_socketClosed || !command(text, 5000, ">")) return MBEDTLS_ERR_NET_SEND_FAILED;
