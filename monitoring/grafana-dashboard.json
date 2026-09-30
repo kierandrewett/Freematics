@@ -30,7 +30,7 @@
       "title": "Historical trips view",
       "tooltip": "Open the trip index and route evidence",
       "type": "link",
-      "url": "/d/freematics-trips?var-device=$device&var-trip=$trip"
+      "url": "/d/freematics-trips?var-device=$device"
     },
     {
       "asDropdown": false,
@@ -939,7 +939,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(avg(avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (avg(avg_over_time((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))[$__range])) * 0.621371)",
+          "expr": "(avg(avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (avg(avg_over_time((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))[$__range:])) * 0.621371)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1006,7 +1006,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (max(max_over_time((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))[$__range])) * 0.621371)",
+          "expr": "(max(max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:])) * 0.621371) or (max(max_over_time((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))[$__range:])) * 0.621371)",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1341,7 +1341,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max(max_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range]))",
+          "expr": "max(max_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range:]))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1408,7 +1408,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "abs(min(min_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range])))",
+          "expr": "abs(min(min_over_time(freematics_acceleration_g{device_id=\"$device\",trip_id=~\"$trip\",axis=\"x\"}[$__range:])))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -1499,10 +1499,10 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "freematics-prometheus"
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
       },
-      "description": "One row per collector trip in the dashboard time range. Use the Trip selector for a detailed route and metric investigation.",
+      "description": "All stored trips, independent of the live time range. Click a Trip value to inspect its recorded interval.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1516,72 +1516,54 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Start"
+              "options": "Trip"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "dateTimeAsIso"
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Inspect this trip",
+                    "url": "/d/freematics-trips?var-device=${__data.fields[\"Vehicle\"]}&var-trip=${__value.raw}&from=${__data.fields[\"Window start\"]}&to=${__data.fields[\"Window end\"]}",
+                    "targetBlank": false
+                  }
+                ]
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Duration"
+              "options": "Window start"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "s"
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Distance"
+              "options": "Window end"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "suffix: mi"
-              },
-              {
-                "id": "decimals",
-                "value": 2
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Average speed"
+              "options": "Archive"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Maximum speed"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -1607,7 +1589,7 @@
         "showHeader": true,
         "sortBy": [
           {
-            "displayName": "Start",
+            "displayName": "Trip",
             "desc": true
           }
         ]
@@ -1615,80 +1597,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
           },
-          "editorMode": "code",
-          "expr": "last_over_time(freematics_trip_start_time_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 1000",
-          "legendFormat": "Start",
-          "range": false,
+          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
+          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
+          "queryType": "table",
           "refId": "A",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_elapsed_seconds{device_id=\"$device\",trip_id=~\"$trip\"}[$__range])",
-          "legendFormat": "Duration",
-          "range": false,
-          "refId": "B",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time(freematics_trip_distance_kilometres{device_id=\"$device\",trip_id=~\"$trip\"}[$__range]) * 0.621371",
-          "legendFormat": "Distance",
-          "range": false,
-          "refId": "C",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "avg_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Average speed",
-          "range": false,
-          "refId": "D",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "freematics-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value{device_id=\"$device\",trip_id=~\"$trip\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 15))[$__range:]) * 0.621371",
-          "legendFormat": "Maximum speed",
-          "range": false,
-          "refId": "E",
-          "instant": true,
-          "format": "table"
+          "timeColumns": []
         }
       ],
-      "title": "Trip index",
-      "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "trip_id",
-            "mode": "outer"
-          }
-        }
-      ],
+      "title": "Trip archive — click a trip to inspect",
       "type": "table"
     },
     {
@@ -2965,7 +2884,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time((freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 300))[$__range])",
+          "expr": "max_over_time((freematics_diagnostic_trouble_code_info{device_id=\"$device\",trip_id=~\"$trip\"} unless on(device_id,trip_id,status) (freematics_diagnostic_trouble_codes_age_seconds{device_id=\"$device\",trip_id=~\"$trip\"} > 300))[$__range:])",
           "legendFormat": "Fault",
           "range": false,
           "refId": "A",
@@ -4685,6 +4604,6 @@
   "timezone": "browser",
   "title": "Vehicle · Freematics",
   "uid": "freematics-vehicle",
-  "version": 1,
+  "version": 11,
   "weekStart": "monday"
 }

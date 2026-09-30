@@ -1,11 +1,15 @@
 # Freematics Model B car test runbook
 
 This is the portable hand-off for the Freematics ONE+ Model B installed as
-device `ZKUCALJ0`. The last recorded device-side image was fork commit
-`12dc207bc559`, based on an earlier hardware observation. That historical
-record does not verify the image currently installed after the interrupted
-flash attempt. The source tree release marker is `1.0.0`, but use the
-production rebuild and boot verification below before calling it installed.
+device `ZKUCALJ0`. On 27 September 2026 the normal SD journal image
+`sd-retry-20260927` was flashed and verified on the USB-connected unit. Its
+boot log showed the 29,992 MB card mounted and 332 pending journal bytes
+preserved through the flash. The collector then received a fresh POST and the
+history indexer processed the resulting archive. It retries unavailable SD
+storage every 30 seconds while active; recovery from an actual card fault still
+needs a vehicle run.
+The image SHA-256 is recorded in the root README. Recheck the serial boot
+identifier after any future flash.
 Bench USB checks can verify boot, time, TLS, cellular attach and server
 responses. They cannot verify vehicle facts.
 
@@ -18,10 +22,11 @@ responses. They cannot verify vehicle facts.
 - Network order: cellular first, Wi-Fi fallback
 - Transport: authenticated HTTPS to `freematics.drewett.dev:443`, with CA, hostname and time verification
 - Device ID: `ZKUCALJ0`
-- Storage: internal SPIFFS; no SD card is required
+- Management: [Freematics](https://freematics.drewett.dev/) and [Freematics Admin](https://freematics-admin.drewett.dev/) require Pocket ID. The former lists trips, mechanic assessments and fault codes, with direct links to each trip's Grafana time range; it also handles server-side ChatGPT sign-in. Device uploads and the bearer-authenticated MCP endpoint do not use browser sessions.
+- Storage: the installed image uses a verified 29,992 MB microSD card and an SD upload journal; the local build override must also say `STORAGE_SD`
 - SIM orientation: insert it as shown in the Freematics Model B product image, with the electrical contacts facing up
 
-The final USB test registered on operator `23415`, received a cellular IP, enabled strict TLS verification, authenticated, and received repeated `HTTP 200` responses from the collector. Live samples are grouped for up to five seconds and outage backlogs drain in complete, ordered batches of up to 24 samples per request.
+The previously installed image registered on operator `23415`, received a cellular IP, enabled strict TLS verification, authenticated, and received repeated `HTTP 200` responses from the collector. That image grouped live samples for up to five seconds. The current source reduces the batch wait to one second; verify the new image and live collector behaviour after flashing. Outage backlogs drain in complete, ordered batches of up to 24 samples per request.
 
 ## Light, buzzer and standby behaviour
 
@@ -31,12 +36,27 @@ The final USB test registered on operator `23415`, received a cellular IP, enabl
 - Parked standby: LED fully off; radios are shut down, the accelerometer is in low-power mode, and the ESP32 sleeps between motion checks. Tracking is paused; one parked marker is sent when standby begins. This is intentional standby, not an outage.
 - Network offline for 15 seconds while working: the production image records the outage silently. The optional host-side notifier sends the event to the `freematics-device` ntfy topic.
 - Network restored after an announced outage: the production image records recovery silently and leaves notification to the host-side notifier.
+- No accepted Freematics server response for 60 seconds while working: three short audible beeps, once per outage. A successful response rearms the alert. Initial connection failure also triggers the beeps after 60 seconds; parked standby remains quiet. A connected modem by itself does not count as a server response.
+- If the card fails to mount on boot, the normal image retries twice before using RAM. Do not reset or power down while the card is unavailable and unsent readings remain in RAM; restore connectivity or the card first. One bench boot on 27 September failed with `f_mount failed: physical drive cannot work`, and the card mounted on the next reboot.
+- Current source stays awake and records every 250 ms while powered, including when parked. Automatic stationary standby is disabled. Explicit standby commands still pause recording.
 
-On the bench, this image enters standby after approximately 180 seconds without motion. It requires three consecutive 250 ms samples above the parked `0.5 g` threshold before restarting the active collection path, filtering out a single bump or vibration. Modem/GNSS/OBD startup and network registration still take additional time. There is no periodic cellular tracking while parked.
+The previously installed image entered standby after approximately 180 seconds without motion. The full-rate source removes that cutoff. Build and flash the new image before expecting continuous parked telemetry; the disconnected Model B has not been updated or drive-tested.
 
 ## Six-month unattended-use boundary
 
-This firmware is not certified for six months connected directly to a vehicle battery. The published Model B low-power floor is approximately 10 mA with radios and GPS off; that is about 44 Ah over six months before the vehicle's own parasitic load, and the standby motion-monitoring loop may draw more. Use a measured current budget plus a switched or low-voltage-cutoff OBD supply before leaving it installed for months. A microSD card is optional for normal connected operation but required if a long network outage must be retained locally: the in-memory queue holds only 1,024 readings (about 8.5 minutes at the 500 ms moving cadence), while internal SPIFFS is a bounded rotating log rather than a six-month archive.
+This firmware is not certified for six months connected directly to a vehicle battery. The published Model B low-power floor is approximately 10 mA with radios and GPS off; that is about 44 Ah over six months before the vehicle's own parasitic load, and the standby motion-monitoring loop may draw more. Use a measured current budget plus a switched or low-voltage-cutoff OBD supply before leaving it installed for months. The new source uses an acknowledged microSD journal for outage retention. If the card fails or fills, the finite RAM queue holds at most 1,024 readings (about 4.3 minutes at the continuous 250 ms cadence). A missed-readings counter and storage-fault event expose when collection cannot be retained. This is bounded retention, not an absolute zero-loss guarantee.
+
+## Inserted card and firmware changeover
+
+The 27 September bench run mounted the card, preserved 2,986 pending journal bytes across a firmware change, replayed them with collector `OK` acknowledgements, and continued writing after journal rollover. The indexed end-of-run health fields were `0x08D=0` pending bytes, `0x08E=0` missed readings, and `0x08F=1` healthy journal. A longer offline/reboot/backfill drive is still needed to establish endurance in the vehicle. For future flashes, verify a stable USB link, record the boot build, and check both `config.h` and `local_config.h` for `STORAGE_SD`. Only use the explicitly confirmed one-time formatter from the root README if a new card is unformatted. The formatter is a build option, not a serial command.
+
+During this USB run, cellular registered and obtained an IP address but the
+modem did not provide a usable clock for strict HTTPS. The unit switched to
+Wi-Fi and delivered the backlog. On a drive outside Wi-Fi coverage, the SD
+journal must retain readings until cellular time and HTTPS recover; check the
+serial `[TLS]` and `[NET]` lines and the durable backlog field `0x08D`. The
+installed build can seed time from a valid GNSS fix and retry cellular with
+certificate checks still enabled; this was not proven on the GPS-less bench.
 
 ## Move the unit to the car
 
@@ -45,7 +65,7 @@ This firmware is not certified for six months connected directly to a vehicle ba
 3. Insert it firmly into the car's OBD-II socket.
 4. Turn the ignition on without starting the engine.
 5. Leave it powered for 90 seconds while it discovers the ECU, reads the VIN and supported PIDs, starts the stored/pending/permanent fault-code scan rotation, acquires GNSS, and registers on LTE.
-6. Check the device at [Freematics Admin](https://freematics-admin.drewett.dev/) or open the [Grafana vehicle dashboard](https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0).
+6. Check the device at [Freematics Admin](https://freematics-admin.drewett.dev/) or open the [Grafana vehicle dashboard](https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0). The **Trip archive** table lists stored sessions regardless of Grafana's live time range. Click a **Trip** value to open its historical route and time series over the stored trip interval. A session with zero samples has no timeline to inspect.
 7. Once ECU data is visible, start the engine and leave it idling for two minutes. This adds live RPM, load, temperatures, fuel/air readings, voltage, and other ECU-advertised values to the inventory.
 
 After a reflash, capture the first serial boot lines, including `[BOOT] Release:`
@@ -59,12 +79,12 @@ The unit sends data autonomously over the SIM. A laptop is only needed if live s
 ## What is collected
 
 - Every numeric standard Mode 01 PID that the ECU advertises as supported, with a complete raw metric table as well as friendly names
-- Bounded fast OBD polling for core driving metrics, with at most two priority-1 PIDs per 500 ms slice
-- All other supported standard PIDs in a bus-safe rotating poll
+- Continuous 250 ms sample target, with background OBD reads, reconnects, GNSS acquisition, motion-sensor reads and storage writes; RPM and speed are requested every fast OBD cycle, plus one rotating core PID
+- One auxiliary PID interleaved per cycle; all ECU-advertised standard Mode 01 PIDs are rotated, with actual rates bounded by ECU response time
 - Stored Mode 03, pending Mode 07, and permanent Mode 0A diagnostic trouble codes
 - VIN, battery voltage, device temperature, LTE/Wi-Fi signal, and connection state
 - GNSS latitude, longitude, altitude, heading, satellites, HDOP, and speed
-- Three-axis acceleration and device orientation where available
+- Three-axis acceleration and gyroscope, compass on hardware that has a magnetometer, and device orientation where available
 - Trip identity, duration, and GPS-first distance with OBD-speed fallback
 - A raw per-trip server archive so future dashboards and decoders can revisit the original readings
 - A dedicated two-second Prometheus scrape with bounded 400-day/10 GB retention, feeding the history-first Grafana trip index, route, summaries, diagnostics and exhaustive raw-metric table
@@ -85,6 +105,9 @@ The firmware now emits these device fields with every active sample:
 | `0x08A` | Consecutive failed core OBD cycles |
 | `0x08B` | Filled telemetry readings waiting for upload |
 | `0x08C` | Encoded telemetry bytes waiting for upload |
+| `0x08D` | Unacknowledged bytes in the microSD upload journal |
+| `0x08E` | Collection cycles missed because no free RAM buffer was available |
+| `0x08F` | MicroSD journal health: `1` healthy, `0` unavailable or failed |
 | `0x310` | Stored DTC read state: `0` no response, `1` response, `2` codes |
 | `0x330` | Pending DTC read state: `0` no response, `1` response, `2` codes |
 | `0x350` | Permanent DTC read state: `0` no response, `1` response, `2` codes |
@@ -185,8 +208,8 @@ by Caddy on both public and private ingress, so production firmware must be
 built with the device's 64-character bearer token obtained through the
 authorised server-secret process. Keep the committed production cadence:
 
-* `OBD_FAST_INTERVAL_MS=500UL`, with two priority-1 PIDs per cycle
-* `OBD_AUX_INTERVAL_MS=5000UL`, with eight rotating auxiliary PIDs per cycle
+* `OBD_FAST_INTERVAL_MS=250UL`, with RPM plus two rotating core PIDs per cycle
+* `OBD_AUX_INTERVAL_MS=250UL`, with one interleaved auxiliary PID per cycle
 * `STANDBY_POLL_INTERVAL_MS=250UL`
 
 Build the image, record its hash, then flash it. Before running this block,
@@ -217,3 +240,26 @@ token as an installable fallback. Never paste the token into Git, shell
 history, screenshots or support logs. Do not clear diagnostic codes from the
 firmware or dashboard during initial testing. Reading codes is non-destructive;
 clearing them can erase useful freeze-frame evidence and readiness state.
+
+## Check continuous coverage after the next flash
+
+Run against the collector's SQLite history after the drive has been indexed:
+
+```bash
+python3 tools/check_gaps.py --database /path/to/history.sqlite \
+  --device ZKUCALJ0 --trip YYYYMMDD-HHMMSS \
+  --require-pid 0x10C --require-pid 0x10D
+```
+
+The report includes missing sample counts, largest gaps and sensor value ages.
+Each measured OBD PID is held in every sample after its first response. Its
+age appears at `0x400 + the Mode 01 PID` (RPM age is `0x40C`). GNSS age is
+`0x093`, voltage age `0x094`, motion sensor age `0x095`, and network signal age
+`0x096`. A held value is continuous coverage, but it is not a new measurement.
+Unsupported PIDs and values never returned by a sensor are not invented.
+GNSS UTC fields identify the fix; the matching collector adds fix age to
+preserve each sample's capture timeline.
+
+The coverage check exits with status 1 for missing fields, a device-clock reset,
+or intervals above 375 ms. It includes startup omissions and needs explicit
+`--require-pid` arguments to detect a signal absent from the entire trip.

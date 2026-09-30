@@ -25,6 +25,14 @@ PETROL_DENSITY_G_PER_LITRE = 745.0
 # stopped engine look as though it is still running.
 OBD_FRESH_MAX_AGE_SECONDS = 15
 DTC_FRESH_MAX_AGE_SECONDS = 300
+# A trip's time window is its stored timeline bounds plus this margin on each
+# side, so the first and last samples are not drawn on the chart edge. The
+# archive table link and the trips-view time sync both use this window.
+TRIP_WINDOW_PAD_MS = 30_000
+# Business Text (Volkov Labs) runs the trip time sync script. Grafana has no
+# native way to change the dashboard time range when a variable changes, and
+# a variable-driven panel time shift breaks drag-zoom.
+BUSINESS_TEXT_PANEL = "marcusolsson-dynamictext-panel"
 
 
 def target(
@@ -67,6 +75,120 @@ def history_target(sql: str, ref: str = "A", *, format: str = "table") -> dict:
         "timeColumns": ["time"] if format == "time_series" else [],
     }
     return result
+
+
+def trip_archive_sql() -> str:
+    """List every stored trip, with bounds for an exact Grafana drill-down."""
+    return (
+        'SELECT trip_id AS "Trip", device_id AS "Vehicle", '
+        'datetime(timeline_start_ms / 1000, \'unixepoch\') AS "Timeline start", '
+        'datetime(timeline_end_ms / 1000, \'unixepoch\') AS "Timeline end", '
+        f'timeline_start_ms - {TRIP_WINDOW_PAD_MS} AS "Window start", '
+        f'timeline_end_ms + {TRIP_WINDOW_PAD_MS} AS "Window end", '
+        'timestamp_quality AS "Capture timestamp quality", time_basis AS "Display time basis", '
+        'sample_count AS "Samples", gap_count AS "Gaps", gps_fix_count AS "GPS fixes", '
+        'gps_poor_quality_count AS "Poor HDOP", speed_disagreement_count AS "Speed disagreements", '
+        'archive_path AS "Archive" '
+        'FROM trip WHERE device_id = \'$device\' ORDER BY trip_id DESC'
+    )
+
+
+def trip_archive_link() -> dict:
+    return {
+        "matcher": {"id": "byName", "options": "Trip"},
+        "properties": [{"id": "links", "value": [{
+            "title": "Inspect this trip",
+            "url": "/d/freematics-trips?var-device=${__data.fields[\"Vehicle\"]}"
+                   "&var-trip=${__value.raw}"
+                   "&from=${__data.fields[\"Window start\"]}"
+                   "&to=${__data.fields[\"Window end\"]}",
+            "targetBlank": False,
+        }]}],
+    }
+
+
+def trip_archive_overrides() -> list[dict]:
+    # Field overrides hide these columns in the table while retaining them in
+    # the data frame for the row-specific Grafana link.
+    return [
+        trip_archive_link(),
+        by_name("Window start", ("custom.hidden", True)),
+        by_name("Window end", ("custom.hidden", True)),
+        by_name("Archive", ("custom.hidden", True)),
+    ]
+
+
+# Business Text runs this after each render, with `this` kept for the life of
+# the panel. It moves Grafana's own time range, so the time picker, zoom,
+# refresh and shared links keep their normal behaviour. Rules:
+#   * a new trip (dropdown or archive link) always gets its window;
+#   * on first load, an absolute range inside the trip is kept, because it is
+#     a zoom or a shared link; any other range gets the trip window;
+#   * after that, zoom and pan are left alone until the trip changes.
+TRIP_TIME_SYNC_SCRIPT = """\
+const row = context.data || {};
+const start = Number(row.window_start_ms);
+const end = Number(row.window_end_ms);
+if (!row.trip_id || !Number.isFinite(start) || !Number.isFinite(end) || this.trip === row.trip_id) {
+    return;
+}
+const firstRender = this.trip === undefined;
+this.trip = row.trip_id;
+const range = context.grafana.timeRange;
+const from = range.from.valueOf();
+const to = range.to.valueOf();
+const relative = typeof range.raw.from === "string" && range.raw.from.startsWith("now");
+if (!relative && ((from === start && to === end) || (firstRender && from >= start && to <= end))) {
+    return;
+}
+context.grafana.locationService.partial({ from: String(start), to: String(end) }, true);
+"""
+
+
+def trip_time_sync_panel() -> dict:
+    """Show the selected trip window and keep the dashboard time range on it."""
+    sql = (
+        "SELECT trip_id, "
+        f"timeline_start_ms - {TRIP_WINDOW_PAD_MS} AS window_start_ms, "
+        f"timeline_end_ms + {TRIP_WINDOW_PAD_MS} AS window_end_ms "
+        "FROM trip WHERE device_id = '$device' AND trip_id = '$trip' LIMIT 1"
+    )
+    pad_seconds = TRIP_WINDOW_PAD_MS // 1000
+    return {
+        "datasource": HISTORY_DS,
+        "description": (
+            "Sets the dashboard time range to the selected trip, with "
+            f"{pad_seconds} seconds on each side. Zoom and pan are kept until "
+            "another trip is selected. Requires the Business Text panel plugin."
+        ),
+        "gridPos": {"h": 2, "w": 24, "x": 0, "y": 0},
+        "id": 49,
+        "options": {
+            "afterRender": TRIP_TIME_SYNC_SCRIPT,
+            "content": (
+                "{{#if window_start_ms}}"
+                f"Time range follows trip **{{{{trip_id}}}}**, with {pad_seconds} s on each side. "
+                "Zoom in freely; selecting another trip resets the range."
+                "{{else}}"
+                "Trip **{{trip_id}}** has no samples, so it has no time range to show."
+                "{{/if}}"
+            ),
+            "contentPartials": [],
+            "defaultContent": "Select a trip to set the time range.",
+            "editor": {"format": "auto", "language": "markdown"},
+            "editors": ["afterRender"],
+            "externalStyles": [],
+            "helpers": "",
+            "renderMode": "everyRow",
+            "status": "",
+            "styles": "",
+            "wrap": False,
+        },
+        "targets": [history_target(sql)],
+        "title": "",
+        "transparent": True,
+        "type": BUSINESS_TEXT_PANEL,
+    }
 
 
 def thresholds(*steps: tuple[float | None, str]) -> dict:
@@ -432,7 +554,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Average speed",
                 12,
                 3,
-                f"(avg(avg_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                f"(avg(avg_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range:])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
                 description=f"Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
@@ -443,7 +565,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Maximum speed",
                 16,
                 3,
-                f"(max(max_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range])) * {KM_TO_MI})",
+                f"(max(max_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range:])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
                 description=f"Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
@@ -498,7 +620,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Peak acceleration",
                 12,
                 6,
-                f"max(max_over_time({accel_x}[$__range]))",
+                f"max(max_over_time({accel_x}[$__range:]))",
                 unit="accG",
                 decimals=2,
                 description="Peak positive acceleration on device X. Confirm mounting orientation in the car before treating it as longitudinal.",
@@ -509,7 +631,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "Peak braking",
                 16,
                 6,
-                f"abs(min(min_over_time({accel_x}[$__range])))",
+                f"abs(min(min_over_time({accel_x}[$__range:])))",
                 unit="accG",
                 decimals=2,
                 description="Magnitude of peak negative acceleration on device X; mounting orientation must be confirmed.",
@@ -875,7 +997,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "options": {"cellHeight": "sm", "showHeader": True, "sortBy": [{"displayName": "status", "desc": False}]},
             "targets": [
                 target(
-                    f"max_over_time({fresh_diagnostic_info}[$__range])",
+                    f"max_over_time({fresh_diagnostic_info}[$__range:])",
                     "A",
                     "Fault",
                     instant=True,
@@ -1227,45 +1349,6 @@ def build_dashboard(view: str = "combined") -> dict:
 
 
 
-    # Trips uses the durable SQLite projection so historical samples retain
-    # their capture-time evidence instead of depending on Prometheus retention.
-    if view == "trips":
-        panels.append(
-            {
-                "datasource": HISTORY_DS,
-                "description": "Durable trip history from SQLite. Capture-time quality, display-time basis, sample count and archive path remain visible; missing capture timestamps stay unknown.",
-                "fieldConfig": {
-                    "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
-                    "overrides": [],
-                },
-                "gridPos": {"h": 7, "w": 24, "x": 0, "y": 64},
-                "id": 41,
-                "options": {
-                    "cellHeight": "sm",
-                    "footer": {"countRows": True, "fields": "", "reducer": ["count"], "show": True},
-                    "showHeader": True,
-                    "sortBy": [{"displayName": "Start", "desc": True}],
-                },
-                "targets": [
-                    history_target(
-                        "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", "
-                        "datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", "
-                        "datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", "
-                        "timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", "
-                        "sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", "
-                        "gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", "
-                        "archive_path AS \"Archive\" "
-                        "FROM trip "
-                        "WHERE device_id = '$device' "
-                        "AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
-                        "ORDER BY timeline_start_ms DESC",
-                    )
-                ],
-                "title": "Durable trip archive (SQLite)",
-                "type": "table",
-            }
-        )
-
     if view == "trips":
         # Historical panels must read the durable capture-time projection. The
         # archive stores milliseconds and keeps unknown capture timestamps
@@ -1338,17 +1421,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "WHERE device_id = '$device' AND trip_id = '$trip' AND " + historical_range,
             )],
             18: [history_target(metric_aggregate("0x105", "MAX", "Maximum coolant"))],
-            19: [history_target(
-                "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", "
-                "datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", "
-                "datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", "
-                "timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", "
-                "gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", "
-                "speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" "
-                "FROM trip WHERE device_id = '$device' "
-                "AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) "
-                "ORDER BY timeline_start_ms DESC",
-            )],
+            19: [history_target(trip_archive_sql())],
             20: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", "
                 f"s.gps_speed_kph * {KM_TO_MI} AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", "
@@ -1478,6 +1551,11 @@ def build_dashboard(view: str = "combined") -> dict:
                 panel["targets"] = targets
                 if panel["id"] in {19, 20, 31}:
                     panel.pop("transformations", None)
+        trip_index = next(item for item in panels if item["id"] == 19)
+        trip_index["title"] = "Trip archive — click a trip to inspect"
+        trip_index["description"] = "All stored trips. Click a Trip value to set Grafana's time range to that trip's stored start and end."
+        trip_index["fieldConfig"]["overrides"] = trip_archive_overrides()
+        trip_index["options"]["sortBy"] = [{"displayName": "Trip", "desc": True}]
 
         for panel_id, description in {
             7: "Stored display-timeline start for the selected trip. Capture UTC and display-time basis remain in the evidence panel.",
@@ -1657,18 +1735,20 @@ def build_dashboard(view: str = "combined") -> dict:
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 41, 42, 44, 48,
+            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 42, 44, 48,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
+        # Keep the sync panel at the top: Grafana does not load panels outside
+        # the viewport, so a lower panel would not run its script.
+        panels.insert(0, trip_time_sync_panel())
         trips_layout = {
             38: (0, 39, 24, 5),
             31: (0, 44, 24, 10),
             39: (0, 54, 12, 7),
             40: (12, 54, 12, 7),
-            41: (0, 61, 24, 7),
-            42: (0, 68, 24, 8),
-            44: (0, 76, 24, 8),
-            48: (0, 84, 24, 8),
+            42: (0, 61, 24, 8),
+            44: (0, 69, 24, 8),
+            48: (0, 77, 24, 8),
         }
         for panel in panels:
             layout = trips_layout.get(panel["id"])
@@ -1678,6 +1758,16 @@ def build_dashboard(view: str = "combined") -> dict:
     else:
         combined_scan = next(panel for panel in panels if panel["id"] == 47)
         combined_scan["gridPos"] = {"h": 3, "w": 6, "x": 0, "y": 76}
+
+    if view == "combined":
+        trip_index = next(item for item in panels if item["id"] == 19)
+        trip_index["datasource"] = HISTORY_DS
+        trip_index["targets"] = [history_target(trip_archive_sql())]
+        trip_index.pop("transformations", None)
+        trip_index["title"] = "Trip archive — click a trip to inspect"
+        trip_index["description"] = "All stored trips, independent of the live time range. Click a Trip value to inspect its recorded interval."
+        trip_index["fieldConfig"]["overrides"] = trip_archive_overrides()
+        trip_index["options"]["sortBy"] = [{"displayName": "Trip", "desc": True}]
 
     dashboard_title = "Vehicle · Freematics" if view == "combined" else f"Vehicle · {view.title()}"
     dashboard_uid = "freematics-vehicle" if view == "combined" else f"freematics-{view}"
@@ -1709,7 +1799,7 @@ def build_dashboard(view: str = "combined") -> dict:
             "title": "Historical trips view",
             "tooltip": "Open the trip index and route evidence",
             "type": "link",
-            "url": "/d/freematics-trips?var-device=$device" + ("&var-trip=$trip" if view in {"combined", "trips"} else ""),
+            "url": "/d/freematics-trips?var-device=$device",
         },
     ]
     if view in {"combined", "trips"}:
@@ -1845,7 +1935,7 @@ def build_dashboard(view: str = "combined") -> dict:
         "timezone": "browser",
         "title": dashboard_title,
         "uid": dashboard_uid,
-        "version": 1,
+        "version": 11,
         "weekStart": "monday",
     }
 

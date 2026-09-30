@@ -30,7 +30,7 @@
       "title": "Historical trips view",
       "tooltip": "Open the trip index and route evidence",
       "type": "link",
-      "url": "/d/freematics-trips?var-device=$device&var-trip=$trip"
+      "url": "/d/freematics-trips?var-device=$device"
     },
     {
       "asDropdown": false,
@@ -47,6 +47,55 @@
   ],
   "liveNow": false,
   "panels": [
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Sets the dashboard time range to the selected trip, with 30 seconds on each side. Zoom and pan are kept until another trip is selected. Requires the Business Text panel plugin.",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 49,
+      "options": {
+        "afterRender": "const row = context.data || {};\nconst start = Number(row.window_start_ms);\nconst end = Number(row.window_end_ms);\nif (!row.trip_id || !Number.isFinite(start) || !Number.isFinite(end) || this.trip === row.trip_id) {\n    return;\n}\nconst firstRender = this.trip === undefined;\nthis.trip = row.trip_id;\nconst range = context.grafana.timeRange;\nconst from = range.from.valueOf();\nconst to = range.to.valueOf();\nconst relative = typeof range.raw.from === \"string\" && range.raw.from.startsWith(\"now\");\nif (!relative && ((from === start && to === end) || (firstRender && from >= start && to <= end))) {\n    return;\n}\ncontext.grafana.locationService.partial({ from: String(start), to: String(end) }, true);\n",
+        "content": "{{#if window_start_ms}}Time range follows trip **{{trip_id}}**, with 30 s on each side. Zoom in freely; selecting another trip resets the range.{{else}}Trip **{{trip_id}}** has no samples, so it has no time range to show.{{/if}}",
+        "contentPartials": [],
+        "defaultContent": "Select a trip to set the time range.",
+        "editor": {
+          "format": "auto",
+          "language": "markdown"
+        },
+        "editors": [
+          "afterRender"
+        ],
+        "externalStyles": [],
+        "helpers": "",
+        "renderMode": "everyRow",
+        "status": "",
+        "styles": "",
+        "wrap": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "SELECT trip_id, timeline_start_ms - 30000 AS window_start_ms, timeline_end_ms + 30000 AS window_end_ms FROM trip WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} LIMIT 1",
+          "rawQueryText": "SELECT trip_id, timeline_start_ms - 30000 AS window_start_ms, timeline_end_ms + 30000 AS window_end_ms FROM trip WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} LIMIT 1",
+          "queryType": "table",
+          "refId": "A",
+          "timeColumns": []
+        }
+      ],
+      "title": "",
+      "transparent": true,
+      "type": "marcusolsson-dynamictext-panel"
+    },
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -855,7 +904,7 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "One row per collector trip in the dashboard time range. Use the Trip selector for a detailed route and metric investigation.",
+      "description": "All stored trips. Click a Trip value to set Grafana's time range to that trip's stored start and end.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -869,72 +918,54 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Start"
+              "options": "Trip"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "dateTimeAsIso"
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Inspect this trip",
+                    "url": "/d/freematics-trips?var-device=${__data.fields[\"Vehicle\"]}&var-trip=${__value.raw}&from=${__data.fields[\"Window start\"]}&to=${__data.fields[\"Window end\"]}",
+                    "targetBlank": false
+                  }
+                ]
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Duration"
+              "options": "Window start"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "s"
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Distance"
+              "options": "Window end"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "suffix: mi"
-              },
-              {
-                "id": "decimals",
-                "value": 2
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Average speed"
+              "options": "Archive"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Maximum speed"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "suffix: mph"
-              },
-              {
-                "id": "decimals",
-                "value": 1
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -960,7 +991,7 @@
         "showHeader": true,
         "sortBy": [
           {
-            "displayName": "Start",
+            "displayName": "Trip",
             "desc": true
           }
         ]
@@ -971,14 +1002,14 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY timeline_start_ms DESC",
-          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY timeline_start_ms DESC",
+          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
+          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
           "queryType": "table",
           "refId": "A",
           "timeColumns": []
         }
       ],
-      "title": "Trip index",
+      "title": "Trip archive — click a trip to inspect",
       "type": "table"
     },
     {
@@ -2470,64 +2501,6 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "Durable trip history from SQLite. Capture-time quality, display-time basis, sample count and archive path remain visible; missing capture timestamps stay unknown.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 61
-      },
-      "id": 41,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": true,
-          "fields": "",
-          "reducer": [
-            "count"
-          ],
-          "show": true
-        },
-        "showHeader": true,
-        "sortBy": [
-          {
-            "displayName": "Start",
-            "desc": true
-          }
-        ]
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "frser-sqlite-datasource",
-            "uid": "freematics-history"
-          },
-          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY timeline_start_ms DESC",
-          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} AND (timeline_start_ms IS NULL OR timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) ORDER BY timeline_start_ms DESC",
-          "queryType": "table",
-          "refId": "A",
-          "timeColumns": []
-        }
-      ],
-      "title": "Durable trip archive (SQLite)",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "frser-sqlite-datasource",
-        "uid": "freematics-history"
-      },
       "description": "Decoded stored, pending and permanent DTC detail from the raw archive. No rows means no decodable code was recorded; raw fields remain in the metric timeline.",
       "fieldConfig": {
         "defaults": {
@@ -2544,7 +2517,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 76
+        "y": 69
       },
       "id": 44,
       "options": {
@@ -2596,7 +2569,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 61
       },
       "id": 42,
       "options": {
@@ -2741,7 +2714,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 77
       },
       "id": 48,
       "options": {
@@ -2863,6 +2836,6 @@
   "timezone": "browser",
   "title": "Vehicle · Trips",
   "uid": "freematics-trips",
-  "version": 1,
+  "version": 11,
   "weekStart": "monday"
 }

@@ -60,8 +60,11 @@ Grafana's global `$__from` and `$__to` values are milliseconds. `$device` and
 remain inspectable. They must show `capture_utc_ms`, `timeline_ms`,
 `time_basis`, and timestamp quality when the distinction matters.
 
-Trip lists should use the display timeline and include trips with an unknown
-capture timestamp:
+The trip archive should list every session independently of Grafana's current
+time range. It provides millisecond start/end fields for a row-specific data
+link that opens the selected trip with a 30-second margin. Sessions with zero
+complete samples have NULL bounds and cannot produce a time series. Historical
+panels continue to use the selected trip and display timeline:
 
 ```sql
 SELECT trip_id AS "Trip",
@@ -77,9 +80,7 @@ SELECT trip_id AS "Trip",
        archive_path AS "Archive"
 FROM trip
 WHERE device_id = '$device'
-  AND (timeline_start_ms IS NULL OR
-       timeline_start_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER))
-ORDER BY timeline_start_ms DESC;
+ORDER BY trip_id DESC;
 ```
 
 Metric aggregates must join `sample_metric` to `sample` before applying the

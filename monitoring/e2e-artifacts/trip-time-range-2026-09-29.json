@@ -1,0 +1,62 @@
+{
+  "command": "python3 monitoring/e2e_trip_time_range.py --device ZKUCALJ0 --out monitoring/e2e-artifacts/trip-time-range-2026-09-29.json",
+  "ran_at": "2026-09-29T22:55:24+00:00",
+  "grafana_url": "https://grafana.drewett.dev",
+  "grafana_version": "13.2.2",
+  "dashboard": "freematics-trips",
+  "trips": {
+    "20260929-120043": [
+      1790683213000,
+      1790683812113
+    ],
+    "20260929-121013": [
+      1790683773400,
+      1790684940600
+    ]
+  },
+  "results": [
+    {
+      "scenario": "open trip with relative range",
+      "passed": true,
+      "expected": "20260929-120043 window",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-120043&from=2026-09-29T12:00:13.000Z&to=2026-09-29T12:10:12.113Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "select another trip in dropdown",
+      "passed": true,
+      "expected": "20260929-121013 window",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:09:33.400Z&to=2026-09-29T12:29:00.600Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "drag-zoom inside chart",
+      "passed": true,
+      "expected": "sub-range inside 20260929-121013 window",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:14:29.997Z&to=2026-09-29T12:21:30.469Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "refresh keeps zoom",
+      "passed": true,
+      "expected": "unchanged ('2026-09-29T12:14:29.997Z', '2026-09-29T12:21:30.469Z')",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:14:29.997Z&to=2026-09-29T12:21:30.469Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "reload keeps zoom",
+      "passed": true,
+      "expected": "unchanged ('2026-09-29T12:14:29.997Z', '2026-09-29T12:21:30.469Z')",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:14:29.997Z&to=2026-09-29T12:21:30.469Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "browser back",
+      "passed": true,
+      "expected": "20260929-121013 window",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:09:33.400Z&to=2026-09-29T12:29:00.600Z&timezone=browser&refresh=1m"
+    },
+    {
+      "scenario": "relative range resets to trip",
+      "passed": true,
+      "expected": "20260929-121013 window",
+      "url": "https://grafana.drewett.dev/d/freematics-trips/vehicle-c2b7-trips?orgId=1&var-device=ZKUCALJ0&var-trip=20260929-121013&from=2026-09-29T12:09:33.400Z&to=2026-09-29T12:29:00.600Z&timezone=browser&refresh=1m"
+    }
+  ],
+  "passed": true
+}

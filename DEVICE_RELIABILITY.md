@@ -278,3 +278,85 @@ are another cable or USB port, and a known-good SD card to isolate the recurring
 warm-reset fault. The car ignition/OBD check remains unavailable
 because Kieran can use USB only. No card format or deletion of the original
 journal was performed.
+
+## Continuous sampling source change, 30 September 2026
+
+This source change is not installed on the disconnected Model B. The installed
+image evidence above remains historical evidence for `ac15b98`.
+
+The sampler now has absolute 250 ms deadlines and no stationary throttle or
+automatic parked standby. Separate tasks own OBD (including reconnect, VIN and
+DTC requests), GNSS acquisition, MEMS reads, and SD logging/journaling. The
+sampler copies short protected sensor snapshots and publishes a RAM slot.
+External GNSS does not wait for the OBD co-processor lock. Internal ATGPS and
+OBD share that lock, so an internal GNSS reading can become stale during an
+OBD stall; its reported age keeps that visible. Clock checkpoints and SD
+backlog statistics also run outside the sampling thread.
+
+The recorder claims unrecorded RAM slots before the uploader can use them.
+A successful journal append releases RAM; a failed append exposes a recorded
+RAM fallback to the uploader. Failed POSTs restore those slots. The recorder
+can journal retained fallback samples after storage recovers while offline.
+The queue never overwrites captured data. Finite capacity, complete power
+loss before journaling, scheduling overload and hardware failure still bound
+retention; there is no claim of physical zero-loss proof.
+
+Latest successfully measured OBD values remain in every sample with individual
+ages at `0x400 | pid`. GNSS, voltage, MEMS and signal strength have separate age
+fields. The unchanged held GNSS fix time plus age preserves the 250 ms capture
+timeline in the indexer. Diagnostic status records distinguish failed scan
+attempts from known empty DTC lists. Unsupported/never-measured signals are
+omitted instead of invented.
+
+Validation commands:
+
+```bash
+python3 tools/check-sampling-boundary.py
+python3 tools/check-device-lifecycle.py
+python3 tools/check-sd-retention.py
+python3 -m unittest discover -s collector -p history_indexer_test.py
+pio run -e esp32dev
+```
+
+The host check compiles the real snapshot emitter, buffer serializer, queue
+handoff methods and deadline scheduler with deterministic I/O. A complete
+87-PID catalogue plus all DTC slots and conservative remaining sample fields
+fits 2,048-byte RAM slots and the 8,192-byte journal frame limit. Element counts
+are now 16-bit because a rich sample can exceed 255 fields. The PSRAM queue
+retains 1,024 slots. Host scheduling checks cover 2,400 consecutive 250 ms
+slots without accumulating simulated formatting time. These are source/host
+checks, not ESP32 scheduling, SD endurance or physical ECU evidence.
+
+Build artifact: `fullrate-20260930`, 635072 bytes.
+SHA-256: `5e4603a342d9c1d82629e54ed972a9e37963f7845a469d84b1b2d3d47087ba7e`.
+The source changes remain uncommitted. No firmware flash occurred. The two
+collector decoder changes and age metadata were deployed to
+`freematics-history` on bsociety using the targeted `/srv/./up.sh` path. The
+deployed decoder replayed held GNSS fixes at `[0, 250, 500, 750, 1000]` ms,
+reported held samples as anchored, published the age metric catalogue, and
+preserved the 82,280 existing indexed samples. Remote deployment preserved
+the pre-existing per-pass transaction policy rather than deploying unrelated
+local indexer changes.
+
+The live collector was also rebuilt for five PID ranges, enabling the `0x400`
+age fields in the live API. Widening its native channel record exposed a
+saved-layout mismatch. The original `channels.dat` was preserved and restored,
+and compatibility loading was added for the previous four-range layout.
+The local HTTP regression exercises checksum-acknowledged samples, held values
+through the live API and raw archive, disconnect handling, and a restart with
+legacy channel records. The live service is healthy and its `ZKUCALJ0` identity
+was verified after recovery. Source changes preserve explicitly aged live
+values on ECU disconnect while still clearing unaged legacy firmware values.
+The deployed collector already retained disconnect values; only its PID table
+range and channel loader changed during deployment.
+
+```bash
+make -C collector -B
+python3 tools/check-collector-sampling.py
+```
+
+Live collector binary SHA-256:
+`f9ac2f529940523a9a26596805c2f12ebb603ac888a597f056b31d1760a4b513`.
+The full collector Python suite ran 62 checks: 55 passed, 4 optional checks were
+skipped, and 3 Git mirror checks were blocked by the local Git identity proxy's
+refusal to set the fixture bot identity. No Git identity guard was bypassed.
