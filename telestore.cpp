@@ -240,13 +240,27 @@ uint32_t SDLogger::begin()
     if (!guard) return 0;
     m_retentionRoot.close();
     m_file.close();
-    File root = SD.open("/DATA");
-    m_id = getFileID(root);
-    if (m_id == 0) {
-        SD.mkdir("/DATA");
-        m_id = 1;
-    }
     char path[24];
+    // Scanning /DATA for the highest ID opens every file. On 30 September that
+    // took about 100 s per boot, and nothing was recorded until it finished.
+    // A name only needs to be unique (retention reads the .UTC companion), so
+    // use the clock, restored from NVS at boot, and step past any clash.
+    const time_t clock = time(nullptr);
+    if (clock >= 1704067200 && clock <= 2145916799) {
+        if (!SD.exists("/DATA")) SD.mkdir("/DATA");
+        m_id = (uint32_t)clock;
+        for (uint8_t attempt = 0; attempt < 100; attempt++, m_id++) {
+            sprintf(path, "/DATA/%u.CSV", m_id);
+            if (!SD.exists(path)) break;
+        }
+    } else {
+        File root = SD.open("/DATA");
+        m_id = getFileID(root);
+        if (m_id == 0) {
+            SD.mkdir("/DATA");
+            m_id = 1;
+        }
+    }
     sprintf(path, "/DATA/%u.CSV", m_id);
     Serial.print("File: ");
     Serial.println(path);
