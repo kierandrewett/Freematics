@@ -195,6 +195,7 @@ int32_t dataInterval = 1000;
 #if STORAGE != STORAGE_NONE
 int fileid = 0;
 uint16_t lastSizeKB = 0;
+uint32_t lastLogFlush = 0;
 #endif
 
 byte ledMode = 0;
@@ -1521,17 +1522,77 @@ void recordSamples(void*)
       bufman.printStats();
       lastStatsTime = millis();
     }
-    CBuffer* buffer = bufman.getOldest(false);
 #if STORAGE == STORAGE_SD
+    // Take every reading waiting in RAM, up to one SD transaction's worth.
+    // One open, flush and verify per batch keeps the recorder ahead of 4 Hz
+    // even after a stall; per-reading transactions let RAM fill on the road.
+    static char* frameBlock = (char*)heap_caps_malloc(RECORD_BLOCK_SIZE, MALLOC_CAP_SPIRAM);
+    CBuffer* batch[RECORD_BATCH_MAX];
+    const char* frames[RECORD_BATCH_MAX];
+    uint16_t lengths[RECORD_BATCH_MAX];
+    uint8_t count = 0;
+    uint32_t used = 0;
     // Once storage recovers, journal RAM fallback readings even while offline.
-    if (!buffer && durableQueue.ready() && durableQueue.healthy()) buffer = bufman.getOldest(true);
-#endif
+    const bool journalOpen = frameBlock && durableQueue.ready() && durableQueue.healthy();
+    while (count < RECORD_BATCH_MAX) {
+      CBuffer* buffer = bufman.getOldest(false);
+      if (!buffer && journalOpen) buffer = bufman.getOldest(true);
+      if (!buffer) break;
+      if (frameBlock) {
+        CStorageRAM frame;
+        frame.init(frameBlock + used, min((uint32_t)SAMPLE_FRAME_SIZE, (uint32_t)(RECORD_BLOCK_SIZE - used)));
+        frame.timestamp(buffer->timestamp);
+        buffer->serialize(frame);
+        if (frame.overflowed()) {
+          // The block is full. This reading goes first in the next batch.
+          if (count) { bufman.restore(buffer); break; }
+          lengths[count] = 0;
+        } else {
+          frames[count] = frameBlock + used;
+          lengths[count] = frame.length();
+          used += frame.length();
+        }
+      } else {
+        lengths[count] = 0;
+      }
+      batch[count++] = buffer;
+      if (!lengths[count - 1]) break;
+    }
+    if (!count) { delay(5); continue; }
+
+    if (state.check(STATE_STORAGE_READY)) {
+      SDGuard logGuard;
+      for (uint8_t i = 0; i < count; i++) {
+        if (batch[i]->recorded) continue;
+        logger.timestamp(batch[i]->timestamp);
+        batch[i]->serialize(logger);
+      }
+      // The journal is the durable copy; the CSV log only needs a periodic
+      // flush, not one SD sync per reading.
+      uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
+      if (sizeKB != lastSizeKB && millis() - lastLogFlush >= LOG_FLUSH_INTERVAL_MS) {
+        logger.flush();
+        lastLogFlush = millis();
+        lastSizeKB = sizeKB;
+        Serial.print("[FILE] ");
+        Serial.print(sizeKB);
+        Serial.println("KB");
+      }
+    }
+
+    const bool journaled = lengths[count - 1] && durableQueue.ready() &&
+      durableQueue.appendBatch(frames, lengths, count);
+    for (uint8_t i = 0; i < count; i++) {
+      // The SD journal owns these readings. RAM stays the fallback if the
+      // card write fails, and a RAM copy is never logged to CSV twice.
+      if (journaled) bufman.free(batch[i]);
+      else { batch[i]->recorded = true; bufman.restore(batch[i]); }
+    }
+#else
+    CBuffer* buffer = bufman.getOldest(false);
     if (!buffer) { delay(5); continue; }
 #if STORAGE != STORAGE_NONE
-  if (!buffer->recorded && state.check(STATE_STORAGE_READY)) {
-#if STORAGE == STORAGE_SD
-    SDGuard logGuard;
-#endif
+  if (state.check(STATE_STORAGE_READY)) {
     logger.timestamp(buffer->timestamp);
     buffer->serialize(logger);
 #if STORAGE == STORAGE_SPIFFS
@@ -1551,25 +1612,6 @@ void recordSamples(void*)
     }
   }
 #endif
-
-#if STORAGE == STORAGE_SD
-  bool journaled = false;
-  if (durableQueue.ready()) {
-    static char sampleFrame[SAMPLE_FRAME_SIZE];
-    CStorageRAM sampleStore;
-    sampleStore.init(sampleFrame, sizeof(sampleFrame));
-    sampleStore.timestamp(buffer->timestamp);
-    buffer->serialize(sampleStore);
-    if (!sampleStore.overflowed() &&
-        durableQueue.append(sampleStore.buffer(), sampleStore.length())) {
-      // The SD journal owns this reading. Keep RAM as the fallback if the
-      // card write fails.
-      journaled = true;
-      bufman.free(buffer);
-    }
-  }
-  if (!journaled) { buffer->recorded = true; bufman.restore(buffer); }
-#else
   buffer->recorded = true;
   bufman.restore(buffer);
 #endif

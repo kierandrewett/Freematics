@@ -173,6 +173,12 @@
 // power the modem down before light sleep stops the modem UART.
 #define STANDBY_RADIO_OFF_WAIT_MS 45000UL
 #define SAMPLE_FRAME_SIZE 8192
+// The recorder journals every waiting reading in one SD transaction, up to
+// this many readings or bytes. Steady driving still writes one per 250 ms.
+#define RECORD_BATCH_MAX 32
+#define RECORD_BLOCK_SIZE 65536UL
+// The CSV trip log is a convenience copy; the SD journal is the durable one.
+#define LOG_FLUSH_INTERVAL_MS 2000UL
 #define OBD_FAST_INTERVAL_MS 250UL /* target 4 Hz RPM and moving-sample cadence */
 #define OBD_AUX_INTERVAL_MS 250UL /* interleave auxiliary reads with core reads */
 #define OBD_AUX_PIDS_PER_CYCLE 1 /* one bounded auxiliary read per cycle */

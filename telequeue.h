@@ -17,6 +17,9 @@ public:
     bool recover();
     bool damaged() const { return m_corrupt; }
     bool append(const char* frame, uint16_t length);
+    // One open, flush and read-back verify for the whole batch. The recorder
+    // falls behind 4 Hz when every sample pays for its own SD transaction.
+    bool appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count);
     bool peek(char* frame, uint16_t capacity, uint16_t* length);
     bool acknowledge();
     // Keep a record the collector refused permanently in a local reject file,
@@ -36,6 +39,13 @@ private:
     void unlock();
     bool readCursor(const char* path, uint32_t size, uint32_t* value);
     bool writeCursor(const char* path, uint32_t value);
+    bool fillReadCache();
+    void dropReadCache() { m_cacheStart = m_cacheEnd = 0; }
+    // Read-ahead window over the append-only journal, so a replay batch costs
+    // one SD read instead of one open and seek per frame.
+    char* m_cache = nullptr;
+    uint32_t m_cacheStart = 0;
+    uint32_t m_cacheEnd = 0;
     volatile uint32_t m_cachedPending = 0;
     volatile uint32_t m_rejected = 0;
     volatile bool m_cachedHealthy = false;

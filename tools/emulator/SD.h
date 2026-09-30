@@ -20,6 +20,8 @@ inline int64_t cardWriteBudget = -1;
 inline int64_t cardReadBudget = -1;
 inline int cardRenameBudget = -1;
 inline bool cardResetAfterRename = false;
+// Counts File opens, so scenarios can measure SD transactions per reading.
+inline unsigned cardOpens = 0;
 
 class File
 {
@@ -91,6 +93,7 @@ public:
     }
     File open(const char* path, int mode)
     {
+        cardOpens++;
         if (!cardOnline || (mode == FILE_READ && !exists(path))) return {};
         if (!exists(path)) cardFiles[path] = std::make_shared<std::vector<uint8_t>>();
         auto bytes = cardFiles.at(path);

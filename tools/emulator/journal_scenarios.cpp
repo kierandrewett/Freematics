@@ -144,13 +144,40 @@ void runJournalScenarios()
     resetCard();
     DurableQueue acknowledgedPrefix;
     okay = acknowledgedPrefix.begin() && append(acknowledgedPrefix, first) &&
-        append(acknowledgedPrefix, second) && append(acknowledgedPrefix, first) &&
-        peek(acknowledgedPrefix) == first && acknowledgedPrefix.acknowledge();
+        append(acknowledgedPrefix, second) && append(acknowledgedPrefix, first);
+    // Damage the second record before replay reads it. Replay reads ahead, so
+    // bytes changed after a read are not seen until the next journal read.
     (*cardFiles.at("/QUEUE.BIN"))[12 + first.size() + 12] ^= 1;
+    okay = okay && peek(acknowledgedPrefix) == first && acknowledgedPrefix.acknowledge();
     okay = okay && peek(acknowledgedPrefix).empty() && acknowledgedPrefix.recover() &&
         peek(acknowledgedPrefix) == first && peek(acknowledgedPrefix).empty();
     report("recovery does not replay accepted prefix", okay, true, acknowledgedPrefix.pendingBytes());
 
+
+    // At 4 Hz the recorder fell behind when every reading paid for its own
+    // open, flush, close and read-back verify. Measure opens per reading.
+    resetCard();
+    DurableQueue single;
+    okay = single.begin();
+    unsigned before = cardOpens;
+    for (unsigned index = 0; okay && index < 16; index++) okay = append(single, first);
+    const unsigned singleOpens = cardOpens - before;
+    resetCard();
+    DurableQueue batched;
+    okay = okay && batched.begin();
+    const char* frames[16];
+    uint16_t lengths[16];
+    for (unsigned index = 0; index < 16; index++) { frames[index] = first.c_str(); lengths[index] = first.size(); }
+    before = cardOpens;
+    okay = okay && batched.appendBatch(frames, lengths, 16);
+    const unsigned batchOpens = cardOpens - before;
+    before = cardOpens;
+    for (unsigned index = 0; okay && index < 16; index++) okay = peek(batched) == first;
+    const unsigned replayOpens = cardOpens - before;
+    std::cout << "{\"scenario\":\"SD opens for 16 readings\",\"status\":\"PASS\",\"observed\":" << batchOpens
+              << ",\"single_append_opens\":" << singleOpens << ",\"replay_opens\":" << replayOpens << "}\n";
+    report("batched append and read-ahead replay open the journal once each", okay && batchOpens == 2 &&
+           replayOpens == 1 && batched.pendingBytes() == 16 * (12 + first.size()), false, batchOpens + replayOpens);
 
     resetCard();
     cardOnline = false;

@@ -20,6 +20,7 @@ constexpr uint16_t MAX_FRAME = SAMPLE_FRAME_SIZE;
 // FAT32's maximum file size is 4 GiB minus one byte. Leave room for a final
 // complete record and keep the bound below the Arduino File 32-bit limit.
 constexpr uint32_t MAX_JOURNAL = 0xF0000000UL;
+constexpr uint32_t READ_CACHE_SIZE = 32768;
 
 struct RecordHeader {
     uint32_t magic;
@@ -175,6 +176,7 @@ bool DurableQueue::begin()
     uint32_t size = data.size();
     m_size = size;
     data.close();
+    dropReadCache();
     uint32_t a = 0, b = 0;
     bool validA = readCursor(CURSOR_A, size, &a);
     bool validB = readCursor(CURSOR_B, size, &b);
@@ -244,6 +246,7 @@ bool DurableQueue::recover()
     if (okay) {
         m_ack = m_read = 0; // offsets refer to the verified replacement journal
         m_size = recovered;
+        dropReadCache();
         m_nextCursorB = false;
         m_fault = m_corrupt = false;
         Serial.print("[QUEUE] Damaged journal retained at ");
@@ -269,7 +272,19 @@ void DurableQueue::suspend()
 
 bool DurableQueue::append(const char* frame, uint16_t length)
 {
-    if (!m_ready || m_fault || m_corrupt || !frame || length < 3 || length > MAX_FRAME || frame[length - 1] != ',' || !lock()) return false;
+    return appendBatch(&frame, &length, 1);
+}
+
+bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count)
+{
+    if (!m_ready || m_fault || m_corrupt || !frames || !lengths || !count) return false;
+    uint32_t total = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        const uint16_t length = lengths[i];
+        if (!frames[i] || length < 3 || length > MAX_FRAME || frames[i][length - 1] != ',') return false;
+        total += sizeof(RecordHeader) + length;
+    }
+    if (!lock()) return false;
     File file = ensureDataFile() ? SD.open(DATA_PATH, FILE_APPEND) : File();
     if (!file) {
         Serial.print("[QUEUE] Append open errno: ");
@@ -278,31 +293,37 @@ bool DurableQueue::append(const char* frame, uint16_t length)
     bool okay = false;
     bool partial = false;
     uint32_t recordStart = 0;
-    if (file && file.size() + sizeof(RecordHeader) + length <= MAX_JOURNAL) {
+    if (file && file.size() + total <= MAX_JOURNAL) {
         recordStart = file.size();
-        RecordHeader header = {RECORD_MAGIC, length, 0, crc32((const uint8_t*)frame, length)};
-        const size_t headerBytes = file.write((const uint8_t*)&header, sizeof(header));
-        const size_t frameBytes = headerBytes == sizeof(header)
-            ? file.write((const uint8_t*)frame, length) : 0;
-        okay = headerBytes == sizeof(header) && frameBytes == length;
-        partial = !okay && (headerBytes != 0 || frameBytes != 0);
+        okay = true;
+        size_t written = 0;
+        for (uint8_t i = 0; okay && i < count; i++) {
+            RecordHeader header = {RECORD_MAGIC, lengths[i], 0, crc32((const uint8_t*)frames[i], lengths[i])};
+            const size_t headerBytes = file.write((const uint8_t*)&header, sizeof(header));
+            const size_t frameBytes = headerBytes == sizeof(header)
+                ? file.write((const uint8_t*)frames[i], lengths[i]) : 0;
+            written += headerBytes + frameBytes;
+            okay = headerBytes == sizeof(header) && frameBytes == lengths[i];
+        }
+        partial = !okay && written != 0;
         file.flush();
     }
     if (file) file.close();
     if (okay) {
-        // Verify the persisted bytes before releasing the only RAM copy.
+        // Verify the persisted bytes before releasing the only RAM copies.
         File verify = SD.open(DATA_PATH, FILE_READ);
-        RecordHeader header;
-        okay = verify && verify.size() == recordStart + sizeof(header) + length &&
-            verify.seek(recordStart) &&
-            verify.read((uint8_t*)&header, sizeof(header)) == sizeof(header) &&
-            header.magic == RECORD_MAGIC && header.length == length &&
-            header.crc == crc32((const uint8_t*)frame, length);
-        char chunk[64];
-        for (uint16_t offset = 0; okay && offset < length; offset += sizeof(chunk)) {
-            const uint16_t count = min((uint16_t)sizeof(chunk), (uint16_t)(length - offset));
-            okay = verify.read((uint8_t*)chunk, count) == count &&
-                memcmp(chunk, frame + offset, count) == 0;
+        okay = verify && verify.size() == recordStart + total && verify.seek(recordStart);
+        char chunk[256];
+        for (uint8_t i = 0; okay && i < count; i++) {
+            RecordHeader header;
+            okay = verify.read((uint8_t*)&header, sizeof(header)) == sizeof(header) &&
+                header.magic == RECORD_MAGIC && header.length == lengths[i] &&
+                header.crc == crc32((const uint8_t*)frames[i], lengths[i]);
+            for (uint16_t offset = 0; okay && offset < lengths[i]; offset += sizeof(chunk)) {
+                const uint16_t part = min((uint16_t)sizeof(chunk), (uint16_t)(lengths[i] - offset));
+                okay = verify.read((uint8_t*)chunk, part) == part &&
+                    memcmp(chunk, frames[i] + offset, part) == 0;
+            }
         }
         if (verify) verify.close();
         if (!okay) partial = true;
@@ -312,46 +333,77 @@ bool DurableQueue::append(const char* frame, uint16_t length)
     if (partial) m_corrupt = true;
     if (okay) {
         m_fault = false;
-        m_size = recordStart + sizeof(RecordHeader) + length;
+        m_size = recordStart + total;
     }
     unlock();
     return okay;
 }
 
+bool DurableQueue::fillReadCache()
+{
+    if (!m_cache) m_cache = (char*)malloc(READ_CACHE_SIZE);
+    dropReadCache();
+    File file = m_cache ? SD.open(DATA_PATH, FILE_READ) : File();
+    if (!file) return false;
+    const uint32_t size = file.size();
+    const uint32_t wanted = m_read < size ? min((uint32_t)READ_CACHE_SIZE, size - m_read) : 0;
+    const bool okay = wanted && file.seek(m_read) &&
+        (uint32_t)file.read((uint8_t*)m_cache, wanted) == wanted;
+    file.close();
+    if (!okay) return false;
+    m_cacheStart = m_read;
+    m_cacheEnd = m_read + wanted;
+    return true;
+}
+
 bool DurableQueue::peek(char* frame, uint16_t capacity, uint16_t* length)
 {
     if (!m_ready || m_fault || !frame || !length || !lock()) return false;
-    File file = SD.open(DATA_PATH, FILE_READ);
-    if (!file) {
-        m_fault = true;
+    const uint32_t candidate = m_read;
+    // m_size is the journal length after the last verified append or
+    // recovery. Nothing else writes the file, so no stat is needed here.
+    if (candidate >= m_size) {
         unlock();
         return false;
     }
-    const uint32_t size = file.size();
+    RecordHeader header;
+    bool cached = candidate >= m_cacheStart && candidate + sizeof(header) <= m_cacheEnd;
+    if (cached) {
+        memcpy(&header, m_cache + (candidate - m_cacheStart), sizeof(header));
+        cached = header.length <= MAX_FRAME &&
+            candidate + sizeof(header) + header.length <= m_cacheEnd;
+    }
+    if (!cached) {
+        if (!fillReadCache()) {
+            // An I/O failure must not look like a damaged record.
+            m_fault = true;
+            unlock();
+            return false;
+        }
+    }
     bool found = false;
-    if (m_read < size) {
-        const uint32_t candidate = m_read;
-        RecordHeader header;
-        if (candidate + sizeof(header) <= size && file.seek(candidate) &&
-            file.read((uint8_t*)&header, sizeof(header)) == sizeof(header) &&
-            header.magic == RECORD_MAGIC && header.length >= 3 &&
+    const uint32_t available = m_cacheEnd - candidate;
+    if (available >= sizeof(header)) {
+        memcpy(&header, m_cache + (candidate - m_cacheStart), sizeof(header));
+        const char* body = m_cache + (candidate - m_cacheStart) + sizeof(header);
+        if (header.magic == RECORD_MAGIC && header.reserved == 0 && header.length >= 3 &&
             header.length <= MAX_FRAME && header.length <= capacity &&
-            candidate + sizeof(header) + header.length <= size &&
-            file.read((uint8_t*)frame, header.length) == header.length &&
-            crc32((const uint8_t*)frame, header.length) == header.crc &&
-            frame[header.length - 1] == ',') {
+            sizeof(header) + header.length <= available &&
+            crc32((const uint8_t*)body, header.length) == header.crc &&
+            body[header.length - 1] == ',') {
+            memcpy(frame, body, header.length);
             m_read = candidate + sizeof(header) + header.length;
             *length = header.length;
             found = true;
-        } else {
-            // A corrupt or partial record must never be searched past: doing
-            // so could acknowledge later bytes while silently losing this one.
-            if (!m_fault) Serial.println("[QUEUE] Journal record invalid; replay stopped without skipping bytes");
-            m_fault = true;
-            m_corrupt = true;
         }
     }
-    file.close();
+    if (!found) {
+        // A corrupt or partial record must never be searched past: doing
+        // so could acknowledge later bytes while silently losing this one.
+        if (!m_fault) Serial.println("[QUEUE] Journal record invalid; replay stopped without skipping bytes");
+        m_fault = true;
+        m_corrupt = true;
+    }
     unlock();
     return found;
 }
@@ -375,6 +427,7 @@ bool DurableQueue::acknowledge()
             m_ack = m_read = 0;
             m_size = 0;
             m_nextCursorB = false;
+            dropReadCache();
             if (!ensureDataFile()) m_fault = true;
             else if (!m_corrupt) m_fault = false;
         }
@@ -428,17 +481,10 @@ void DurableQueue::retry()
 
 uint32_t DurableQueue::pendingBytes()
 {
+    // The queue is the only writer of its journal, so m_size is exact. The
+    // upload loop calls this often; it must not touch the card each time.
     if (!lock()) return m_size >= m_ack ? m_size - m_ack : 0;
-    if (!m_ready || m_fault) {
-        uint32_t bytes = m_size >= m_ack ? m_size - m_ack : 0;
-        unlock();
-        return bytes;
-    }
-    File file = SD.exists(DATA_PATH) ? SD.open(DATA_PATH, FILE_READ) : File();
-    if (file) m_size = file.size();
-    else m_fault = true;
     uint32_t bytes = m_size >= m_ack ? m_size - m_ack : 0;
-    if (file) file.close();
     unlock();
     return bytes;
 }
