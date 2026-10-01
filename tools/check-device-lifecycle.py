@@ -31,7 +31,7 @@ defines = "\n".join(line for line in config.splitlines() if line.startswith("#de
                         "TRIP_STOP_DELAY_MS", "TRIP_SPEED_FRESH_MS", "TRIP_MOVING_SPEED_KPH",
                         "STANDBY_AFTER_STATIONARY_MS", "HTTP_BATCH_MAX_SAMPLES", "CONFIRM_WINDOW_MS",
                         "OBD_SILENT_MS", "CAR_OFF_CONFIRM_MS", "UPLOAD_WINDOW_MS", "RESTING_VOLTAGE_MAX",
-                        "SAMPLER_STALL_RESTART_MS",
+                        "SAMPLER_STALL_RESTART_MS", "LOW_BATTERY_WAKE_VOLTAGE", "LOW_BATTERY_CONFIRM_SAMPLES",
                         "HTTP_BATCH_MIN_SAMPLES", "HTTP_BATCH_GROW_STEP")))
 support = "\n".join(function(source, signature) for signature in (
     "float readVehicleVoltage()", "bool vehiclePowerPresent()") if signature in source)
@@ -116,6 +116,8 @@ void onTick() {
  if (motionMode==2) moving=tick<10000 || tick>=120000;
  if (motionMode==3 && tick>=10000) speedKnown=false;
  if (motionMode==4) voltage=tick<5000 ? 12.4 : 14.2;
+ if (motionMode==5) voltage=tick<8000 ? 11.5 : 14.1;
+ if (motionMode==6) voltage=tick<1500 ? 11.6 : 12.5;
  vehicleSignals.status=speedKnown;
  vehicleSignals.speed={PID_SPEED,moving ? 20.f : 0.f,speedKnown ? tick : 0};
  if (loginReplies) teleClient.lastSyncTime=tick;
@@ -256,6 +258,11 @@ int main(int argc, char** argv) {
  }
  if(scenario=="ignition") voltage=14.4;
  if(scenario=="charging-edge") {voltage=12.4; motionMode=4;}
+ // Weak battery: someone moves the car while parked, then starts the engine.
+ if(scenario=="low-battery-motion") {voltage=11.5; movement=.12;}
+ if(scenario=="low-battery-start") {voltage=11.5; movement=.12; motionMode=5;}
+ // A short dip (door open, courtesy light) must not latch the guard.
+ if(scenario=="low-battery-dip") {voltage=11.6; movement=.12; motionMode=6;}
  if(scenario=="normal-motion") movement=.12;
  if(scenario=="sensor-failed") {voltage=14.4; sensorOK=false;}
  if(scenario=="sensor-absent") {voltage=14.4; mems=nullptr; state.flags=STATE_STANDBY;}
@@ -321,9 +328,12 @@ int main(int argc, char** argv) {
  }
  limit=20000;
  try {woke=waitMotion(-1,STANDBY_MOTION_THRESHOLD,STANDBY_MOTION_CONFIRM_SAMPLES);} catch(Finished&) {}
- bool pass=(scenario=="parked" || scenario=="ignition" || scenario=="ecu-probe-suppressed" ? !woke : woke) && obd.probes==0;
+ bool pass=(scenario=="parked" || scenario=="ignition" || scenario=="ecu-probe-suppressed" ||
+            scenario=="low-battery-motion" ? !woke : woke) && obd.probes==0;
  // A wake records its reason for the next boot; a maintainer at 14.4 V from the start never wakes.
  if (scenario=="charging-edge") pass=pass && tick>=5000 && tick<6500 && wakeRecord==(WAKE_MAGIC|WAKE_CHARGING);
+ if (scenario=="low-battery-start") pass=pass && tick>=8000 && tick<9500 && wakeRecord==(WAKE_MAGIC|WAKE_CHARGING);
+ if (scenario=="low-battery-dip") pass=pass && wakeRecord==(WAKE_MAGIC|WAKE_MOTION);
  if (scenario=="normal-motion") pass=pass && wakeRecord==(WAKE_MAGIC|WAKE_MOTION);
  std::cout<<scenario<<": woke="<<woke<<" time_ms="<<tick<<" "<<(pass?"PASS":"FAIL")<<"\n";
  return !pass;
@@ -340,7 +350,7 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
                      "login-only", "standby-quiet", "phase-false-wake", "phase-real-wake", "phase-red-light",
                      "phase-ignition-off", "phase-ecu-dropout-charging", "phase-wrap-up", "phase-wrap-up-resume",
                      "phase-bench", "phase-no-obd", "phase-clock-rollover", "charging-edge", "batch-adapt",
-                     "sampler-stall", "wrap-up-pause", "sd-fault", "recording-stall",
+                     "sampler-stall", "wrap-up-pause", "low-battery-motion", "low-battery-start", "low-battery-dip", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):
         failures += subprocess.run([str(binary), scenario], check=False).returncode
     # Moving recording failures remain audible without server alerts or POST.

@@ -183,6 +183,11 @@
 // A standby wake on charging voltage needs a resting reading first, so a
 // battery maintainer holding the voltage up cannot cause repeated wakes.
 #define RESTING_VOLTAGE_MAX 12.9f
+// In standby, a resting battery below this (about 40% charge on lead-acid)
+// turns motion wakes off; only charging voltage (engine running) wakes the
+// device. Entering and leaving the guard each need this many 250 ms polls.
+#define LOW_BATTERY_WAKE_VOLTAGE 11.8f
+#define LOW_BATTERY_CONFIRM_SAMPLES 8
 // Standby waits this long for the telemetry task to send the parked marker and
 // power the modem down before light sleep stops the modem UART.
 #define STANDBY_RADIO_OFF_WAIT_MS 45000UL

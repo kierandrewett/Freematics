@@ -1372,6 +1372,11 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
     uint8_t ignitionHits = 0;
     uint8_t chargeHits = 0;
     bool restingSeen = false;
+    // Low-battery guard with hysteresis: a weak battery takes motion wakes
+    // away, so only a running engine (charging voltage) wakes the device.
+    bool lowBattery = false;
+    uint8_t lowCount = 0;
+    uint8_t okCount = 0;
     const bool initiallyPowered = vehiclePowerPresent();
     do {
       // calculate relative movement
@@ -1401,6 +1406,25 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       // is a passive ADC read, so it costs the car nothing.
       const float voltage = readVehicleVoltage();
       if (voltage >= 6.0f && voltage <= RESTING_VOLTAGE_MAX) restingSeen = true;
+      // Below 6 V is USB or bench power: no car battery to protect. The first
+      // reading sets the guard at once, because motion confirms in 3 polls;
+      // later changes need LOW_BATTERY_CONFIRM_SAMPLES polls either way.
+      const bool firstPoll = millis() - t < STANDBY_POLL_INTERVAL_MS;
+      if (voltage >= 6.0f && voltage < LOW_BATTERY_WAKE_VOLTAGE) {
+        okCount = 0;
+        if (!lowBattery && (firstPoll || ++lowCount >= LOW_BATTERY_CONFIRM_SAMPLES)) {
+          lowBattery = true;
+          Serial.print("[POWER] Battery low (");
+          Serial.print(voltage);
+          Serial.println(" V); motion wakes off until the engine charges");
+        }
+      } else {
+        lowCount = 0;
+        if (lowBattery && voltage >= LOW_BATTERY_WAKE_VOLTAGE + 0.1f && ++okCount >= LOW_BATTERY_CONFIRM_SAMPLES) {
+          lowBattery = false;
+          Serial.println("[POWER] Battery recovered; motion wakes on");
+        }
+      }
       if (!motionSensorReady) {
         // Without MEMS, the voltage input is the only wake source.
         if (voltage >= IGNITION_WAKE_VOLTAGE || (!initiallyPowered && voltage >= 6.0f)) {
@@ -1430,7 +1454,7 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       // Do not add an avoidable delay when BLE is disabled in production.
       processBLE(0);
       // check movement
-      if (motion >= threshold * threshold) {
+      if (motion >= threshold * threshold && !lowBattery) {
         if (motionHits < confirmationSamples) motionHits++;
         if (motionHits >= confirmationSamples) {
           //lastMotionTime = millis();
