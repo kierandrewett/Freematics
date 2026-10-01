@@ -108,6 +108,21 @@ struct MEMSSnapshot {
 };
 MEMSSnapshot memsSnapshot = {};
 
+// Extremes since the previous sample, gathered by the 50 Hz sensor loop. A
+// 250 ms sample otherwise keeps only the latest reading, so a hard brake, a
+// pothole or the engine-cranking voltage dip between samples is lost.
+// Guarded by sensorMux; the sampler takes and resets it in one step, so every
+// reading belongs to exactly one interval.
+struct IntervalExtremes {
+  float accPeak;      // largest |acceleration - bias| in g (gravity removed)
+  float accAtPeak[3];
+  float voltMin;
+  float voltMax;
+  uint16_t accReads;
+  uint16_t voltReads;
+};
+IntervalExtremes intervalExtremes = {};
+
 struct OBDSnapshot {
   PID_POLLING_INFO readings[sizeof(obdData) / sizeof(obdData[0])];
   DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
@@ -1087,6 +1102,53 @@ void processMEMS(CBuffer* buffer)
   buffer->add(PID_MEMS_AGE, ELEMENT_UINT32, &age, sizeof(age));
 }
 
+void noteAcceleration(IntervalExtremes& extremes, const float acceleration[3])
+{
+  const float magnitude = sqrtf(acceleration[0] * acceleration[0] + acceleration[1] * acceleration[1] +
+                                acceleration[2] * acceleration[2]);
+  if (!isfinite(magnitude)) return;
+  if (!extremes.accReads || magnitude > extremes.accPeak) {
+    extremes.accPeak = magnitude;
+    memcpy(extremes.accAtPeak, acceleration, sizeof(extremes.accAtPeak));
+  }
+  if (extremes.accReads < UINT16_MAX) extremes.accReads++;
+}
+
+void noteVoltage(IntervalExtremes& extremes, float voltage)
+{
+  if (!isfinite(voltage)) return;
+  if (!extremes.voltReads || voltage < extremes.voltMin) extremes.voltMin = voltage;
+  if (!extremes.voltReads || voltage > extremes.voltMax) extremes.voltMax = voltage;
+  if (extremes.voltReads < UINT16_MAX) extremes.voltReads++;
+}
+
+IntervalExtremes takeIntervalExtremes()
+{
+  IntervalExtremes extremes;
+  portENTER_CRITICAL(&sensorMux);
+  extremes = intervalExtremes;
+  intervalExtremes = IntervalExtremes();
+  portEXIT_CRITICAL(&sensorMux);
+  return extremes;
+}
+
+// An interval with no sensor reads emits nothing, so a stale peak is never
+// presented as new.
+void emitIntervalExtremes(CBuffer* buffer)
+{
+  IntervalExtremes extremes = takeIntervalExtremes();
+  if (extremes.accReads) {
+    buffer->add(PID_ACC_PEAK, ELEMENT_FLOAT_D2, &extremes.accPeak, sizeof(extremes.accPeak));
+    buffer->add(PID_ACC_PEAK_VECTOR, ELEMENT_FLOAT_D2, extremes.accAtPeak, sizeof(extremes.accAtPeak), 3);
+  }
+  if (extremes.voltReads) {
+    uint16_t low = (uint16_t)(extremes.voltMin * 100);
+    uint16_t high = (uint16_t)(extremes.voltMax * 100);
+    buffer->add(PID_VOLTAGE_MIN, ELEMENT_UINT16, &low, sizeof(low));
+    buffer->add(PID_VOLTAGE_MAX, ELEMENT_UINT16, &high, sizeof(high));
+  }
+}
+
 void calibrateMEMS()
 {
   xSemaphoreTake(memsMutex, portMAX_DELAY);
@@ -1422,6 +1484,7 @@ void collectSample()
 #if ENABLE_MEMS
   processMEMS(buffer);
 #endif
+  emitIntervalExtremes(buffer);
 
   processGPS(buffer);
 
@@ -1809,7 +1872,18 @@ void acquireMEMS(void*)
   uint8_t failures = 0;
   uint32_t lastRetry = 0;
   for (;;) {
-    if (!state.check(STATE_WORKING) || !mems) { delay(50); continue; }
+    if (!state.check(STATE_WORKING)) { delay(50); continue; }
+#if ENABLE_OBD
+    // The Model B voltage input is a passive ADC read. Sampling it here at
+    // 50 Hz catches the cranking dip whether or not the motion sensor works.
+    if (sys.devType > 12) {
+      const float voltage = readVehicleVoltage();
+      portENTER_CRITICAL(&sensorMux);
+      noteVoltage(intervalExtremes, voltage);
+      portEXIT_CRITICAL(&sensorMux);
+    }
+#endif
+    if (!mems) { delay(20); continue; }
     if (!state.check(STATE_MEMS_READY)) {
       if (!lastRetry || millis() - lastRetry >= 5000UL) {
         lastRetry = millis();
@@ -1827,7 +1901,7 @@ void acquireMEMS(void*)
           Serial.println("[MEMS] Sensor recovered; acquisition resumed");
         }
       }
-      if (!state.check(STATE_MEMS_READY)) { delay(50); continue; }
+      if (!state.check(STATE_MEMS_READY)) { delay(20); continue; }
     }
     xSemaphoreTake(memsMutex, portMAX_DELAY);
     MEMSSnapshot snapshot = {};
@@ -1846,6 +1920,7 @@ void acquireMEMS(void*)
       snapshot.timestamp = millis();
       portENTER_CRITICAL(&sensorMux);
       memsSnapshot = snapshot;
+      noteAcceleration(intervalExtremes, snapshot.acceleration);
       portEXIT_CRITICAL(&sensorMux);
     } else if (++failures >= 10) {
       state.clear(STATE_MEMS_READY);
