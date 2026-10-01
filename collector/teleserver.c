@@ -328,7 +328,7 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_rejected_readings gauge\n"
 		"# HELP freematics_device_power_phase Trip lifecycle: 0 confirming a wake, 1 trip, 2 wrap-up upload.\n"
 		"# TYPE freematics_device_power_phase gauge\n"
-		"# HELP freematics_device_wake_reason Why the device booted: 0 power on, 1 motion, 2 charging voltage.\n"
+		"# HELP freematics_device_wake_reason Why the device booted: 0 power on, 1 motion, 2 charging voltage, 3 stall recovery.\n"
 		"# TYPE freematics_device_wake_reason gauge\n"
 		"# HELP freematics_device_sample_rate_per_minute Samples received per minute.\n"
 		"# TYPE freematics_device_sample_rate_per_minute gauge\n"

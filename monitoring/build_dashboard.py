@@ -1344,7 +1344,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 unit="short",
                 description=(
                     "Power phase: 0 confirming a wake (modem off), 1 trip, 2 wrap-up upload after the car turned off. "
-                    "Wake reason: 0 power on, 1 motion, 2 charging voltage. Rejected readings: records the collector "
+                    "Wake reason: 0 power on, 1 motion, 2 charging voltage, 3 restart after a sampling stall. Rejected readings: records the collector "
                     "refused since boot, kept in /QUEUE.REJ on the card. Parked standby sends no data, so the series stop."
                 ),
                 overrides=[

@@ -31,6 +31,7 @@ defines = "\n".join(line for line in config.splitlines() if line.startswith("#de
                         "TRIP_STOP_DELAY_MS", "TRIP_SPEED_FRESH_MS", "TRIP_MOVING_SPEED_KPH",
                         "STANDBY_AFTER_STATIONARY_MS", "HTTP_BATCH_MAX_SAMPLES", "CONFIRM_WINDOW_MS",
                         "OBD_SILENT_MS", "CAR_OFF_CONFIRM_MS", "UPLOAD_WINDOW_MS", "RESTING_VOLTAGE_MAX",
+                        "SAMPLER_STALL_RESTART_MS",
                         "HTTP_BATCH_MIN_SAMPLES", "HTTP_BATCH_GROW_STEP")))
 support = "\n".join(function(source, signature) for signature in (
     "float readVehicleVoltage()", "bool vehiclePowerPresent()") if signature in source)
@@ -149,8 +150,12 @@ volatile uint8_t powerPhase = PHASE_TRIP;
 #define WAKE_POWER_ON 0
 #define WAKE_MOTION 1
 #define WAKE_CHARGING 2
+#define WAKE_RECOVERED 3
 #define WAKE_MAGIC 0x57414B00UL
 uint32_t wakeRecord = 0;
+struct Restarted {};
+uint32_t restartAt = 0;
+struct { void restart() { restartAt = tick; throw Restarted{}; } } ESP;
 struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedReadings() { return ramOnly; } } bufman;
 struct Storage { bool healthy() {return storageHealthy;} uint32_t cachedPendingBytes() {return sdBacklog;} } durableQueue, logger;
 uint32_t fileid = 1;
@@ -276,6 +281,34 @@ int main(int argc, char** argv) {
    std::cout<<scenario<<": tones="<<tones<<" first_ms="<<firstToneAt
      <<" after_recovery="<<tonesAfterRecovery<<" "<<(pass?"PASS":"FAIL")<<"\n";return !pass;
  }
+ if(scenario=="sampler-stall" || scenario=="wrap-up-pause") {
+   // A stalled sampler restarts the device after 60 s and records why. A
+   // 150 s wrap-up (sampling paused on purpose) restarts nothing and raises
+   // no recording fault, even when the car pulls away again.
+   state.flags=STATE_WORKING|STATE_NET_READY|STATE_CELL_CONNECTED;
+   moving=false; onTick();
+   dataReplies=true; teleClient.lastDataSyncTime=tick;
+   storageHealthy=true; storageCheckComplete=true;
+   lastCollectionTime=tick;
+   if (scenario=="wrap-up-pause") powerPhase=PHASE_WRAP_UP;
+   limit=tick+150000;
+   bool restarted=false;
+   try {statusSignals(nullptr);} catch(Finished&) {} catch(Restarted&) {restarted=true;}
+   bool pass=scenario=="sampler-stall"
+     ? restarted && restartAt>=1000+SAMPLER_STALL_RESTART_MS && restartAt<1000+SAMPLER_STALL_RESTART_MS+100 &&
+       wakeRecord==(WAKE_MAGIC|WAKE_RECOVERED)
+     : !restarted && tones==0;
+   if (scenario=="wrap-up-pause" && pass) {
+     // Pulling away: the sampler refreshes the collection time as it leaves
+     // wrap-up, then the car moves. No warning may sound.
+     lastCollectionTime=tick; powerPhase=PHASE_TRIP; collectReplies=true; moving=true;
+     limit=tick+20000;
+     try {statusSignals(nullptr);} catch(Finished&) {} catch(Restarted&) {restarted=true;}
+     pass=!restarted && tones==0;
+   }
+   std::cout<<scenario<<": restarted="<<restarted<<" at_ms="<<restartAt<<" tones="<<tones<<" "<<(pass?"PASS":"FAIL")<<"\n";
+   return !pass;
+ }
  if(scenario=="login-only" || scenario=="standby-quiet") {
    state.flags=scenario=="login-only" ? STATE_WORKING|STATE_NET_READY|STATE_WIFI_CONNECTED : STATE_STANDBY;
    moving=scenario=="login-only"; onTick();
@@ -306,7 +339,8 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
                      "motion-source", "trip-cycle", "traffic-light", "speed-lost", "parked-fault", "parked-server",
                      "login-only", "standby-quiet", "phase-false-wake", "phase-real-wake", "phase-red-light",
                      "phase-ignition-off", "phase-ecu-dropout-charging", "phase-wrap-up", "phase-wrap-up-resume",
-                     "phase-bench", "phase-no-obd", "phase-clock-rollover", "charging-edge", "batch-adapt", "sd-fault", "recording-stall",
+                     "phase-bench", "phase-no-obd", "phase-clock-rollover", "charging-edge", "batch-adapt",
+                     "sampler-stall", "wrap-up-pause", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):
         failures += subprocess.run([str(binary), scenario], check=False).returncode
     # Moving recording failures remain audible without server alerts or POST.

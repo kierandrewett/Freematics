@@ -211,6 +211,7 @@ bool vehicleActivitySeen = false;
 #define WAKE_POWER_ON 0
 #define WAKE_MOTION 1
 #define WAKE_CHARGING 2
+#define WAKE_RECOVERED 3 // supervisor restart after a sampling stall
 #define WAKE_MAGIC 0x57414B00UL
 RTC_NOINIT_ATTR uint32_t wakeRecord;
 uint8_t bootWakeReason = WAKE_POWER_ON;
@@ -564,7 +565,9 @@ void statusSignals(void* inst)
     const bool storageHealthy = durableQueue.healthy() && (!fileid || logger.healthy());
     const bool checked = storageCheckComplete ||
       recordingNow - recordingMonitorSince >= RECORDING_STALL_ALERT_MS;
-    if (!standbyMode && checked) {
+    // Wrap-up pauses sampling on purpose; it is not a recording failure.
+    const bool samplingPaused = standbyMode || powerPhase == PHASE_WRAP_UP;
+    if (!samplingPaused && checked) {
       const bool failed = !storageHealthy || recordingNow - progressAt >= RECORDING_STALL_ALERT_MS;
       if (failed && !recordingFaultActive) {
         recordingFaultActive = true;
@@ -575,6 +578,14 @@ void statusSignals(void* inst)
         lastRecordingAlertAt = 0;
         Serial.println("[STATUS] Fresh local recording restored; fault alarm stopped");
       }
+    }
+    // Supervisor. The OBD port is always powered, so a hung sampler would
+    // record nothing until someone unplugs the device. The SD journal
+    // survives the reboot, and the wake reason records why it happened.
+    if (working && !samplingPaused && capturedAt && recordingNow - capturedAt >= SAMPLER_STALL_RESTART_MS) {
+      Serial.println("[CRITICAL] No reading collected for 60 s; restarting to recover");
+      wakeRecord = WAKE_MAGIC | WAKE_RECOVERED;
+      ESP.restart();
     }
     if (moving && recordingFaultActive &&
         (!lastRecordingAlertAt || recordingNow - lastRecordingAlertAt >= RECORDING_ALERT_REPEAT_MS)) {
@@ -1619,6 +1630,10 @@ void process()
       state.clear(STATE_WORKING);
       return;
     }
+    // Leaving wrap-up: the sampler is running again. Refresh the collection
+    // time before the phase changes, so the status task never sees a trip
+    // with a two-minute-old reading and raises a false fault.
+    if (powerPhase == PHASE_WRAP_UP) lastCollectionTime = now;
     powerPhase = next;
     phaseSince = now;
   }

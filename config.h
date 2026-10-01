@@ -286,6 +286,9 @@
 // Local recording failure remains audible even when cellular uploads succeed.
 #define RECORDING_ALERT_REPEAT_MS 5000UL
 #define RECORDING_STALL_ALERT_MS 15000UL
+// The status task restarts the device if no reading is collected for this
+// long while it should be recording (not standby or wrap-up).
+#define SAMPLER_STALL_RESTART_MS 60000UL
 // Ignore short cellular handovers before announcing a genuine outage.
 #define NETWORK_ALERT_GRACE_MS 15000UL
 // Do not turn a flapping modem into a repeating audible alarm.
