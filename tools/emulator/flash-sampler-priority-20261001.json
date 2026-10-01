@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-01",
+  "device_id": "ZKUCALJ0",
+  "flashed_build": "29a559014a71",
+  "flash_checksum_verified": true,
+  "usb_port": "bus 3 port 1 (bus 1 port 4 was disabled by the hub with -71 errors and 'disabled by hub (EMI?)' on 30 September)",
+  "power_during_checks": "USB bench",
+  "serial_window_s": 150,
+  "uploads_accepted": 39,
+  "uploads_compressed": 39,
+  "compression_examples": ["1814 -> 419 bytes in 13 ms", "8447 -> 1209 bytes in 45 ms"],
+  "deadline_missed_lines": 0,
+  "previous_build_deadline_missed": "1 line in about 70 s while uploading (build 051bbbd, 30 September)",
+  "live_metrics": [
+    {"time": "12:10:17", "missed_readings": 0, "sd_backlog_bytes": 3127, "power_phase": 1, "data_age_s": 3.381},
+    {"time": "12:10:49", "missed_readings": 0, "sd_backlog_bytes": 3643, "power_phase": 1, "data_age_s": 0.068},
+    {"time": "12:11:20", "missed_readings": 0, "sd_backlog_bytes": 6450, "power_phase": 1, "data_age_s": 1.744}
+  ],
+  "limitations": [
+    "Bench check on USB power for about 4 minutes; not yet driven.",
+    "Chimes, car-off detection and the 2-minute wrap-up still need a drive."
+  ]
+}
