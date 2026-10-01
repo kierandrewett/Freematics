@@ -1768,16 +1768,17 @@ void recordSamples(void*)
     }
     if (!count) { delay(5); continue; }
 
-    if (state.check(STATE_STORAGE_READY) && !fileid) {
-      // Deferred from initialize(); readings wait in RAM and the journal
-      // meanwhile, so nothing is lost while the file is created.
+    if (state.check(STATE_STORAGE_READY) && !fileid && powerPhase != PHASE_CONFIRMING) {
+      // Deferred from initialize() until a trip is confirmed, so a false wake
+      // adds no file to /DATA (thousands of per-boot logs made every file
+      // operation there take seconds). Readings meanwhile are in the journal.
       fileid = logger.begin();
       if (!fileid) {
         state.clear(STATE_STORAGE_READY);
         Serial.println("[STORAGE] CSV trip log unavailable; SD retry will follow");
       }
     }
-    if (state.check(STATE_STORAGE_READY)) {
+    if (state.check(STATE_STORAGE_READY) && fileid) {
       SDGuard logGuard;
       for (uint8_t i = 0; i < count; i++) {
         if (batch[i]->recorded) continue;

@@ -115,7 +115,8 @@ struct LoggerStub : CStorage {
     void maintain() {}
     bool healthy() { return true; }
     bool init() { return true; }
-    uint32_t begin() { return 1; }
+    unsigned begins = 0;
+    uint32_t begin() { begins++; return 1; }
     void end() {}
 } logger;
 
@@ -127,6 +128,9 @@ struct {
     void set(unsigned f) { flags |= f; }
     void clear(unsigned f) { flags &= ~f; }
 } state;
+#define PHASE_CONFIRMING 0
+#define PHASE_TRIP 1
+uint8_t powerPhase = PHASE_TRIP;
 CBufferManager bufman;
 DurableQueue durableQueue;
 uint32_t lastStatsTime = 0, lastLogFlush = 0, fileid = 0;
@@ -214,6 +218,25 @@ int main()
     runRecorder(40000);
     okay = bufman.unpersistedReadings() == 0 && logger.lines == 10 && journalHolds(10, 500000);
     std::cout << (okay ? "PASS" : "FAIL") << ": recovered card journals the RAM copies without duplicating CSV lines\n";
+    if (!okay) return 1;
+
+    // A wake that is still being confirmed journals its readings but creates
+    // no CSV file in /DATA; the CSV opens once the trip is confirmed.
+    cardFiles.clear();
+    durableQueue = DurableQueue();
+    assert(durableQueue.begin());
+    fileid = 0;
+    logger.begins = 0;
+    logger.lines = 0;
+    powerPhase = PHASE_CONFIRMING;
+    publish(8, 900000);
+    runRecorder(2000);
+    okay = logger.begins == 0 && fileid == 0 && journalHolds(8, 900000) && bufman.unpersistedReadings() == 0;
+    powerPhase = PHASE_TRIP;
+    publish(4, 902000);
+    runRecorder(2000);
+    okay = okay && logger.begins == 1 && fileid == 1 && logger.lines == 4;
+    std::cout << (okay ? "PASS" : "FAIL") << ": confirming wake journals readings without creating a CSV; the CSV opens on the trip\n";
     return okay ? 0 : 1;
 }
 '''
