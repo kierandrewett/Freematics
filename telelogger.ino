@@ -2080,12 +2080,19 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
   uint8_t count = 0;
   uint32_t previousTick = 0;
   const uint32_t started = millis();
+  // Hold the (recursive) SD lock for the whole batch. Each peek() then
+  // re-enters it instead of queueing behind the recorder up to 40 times; on
+  // the bench that queueing made building a batch take up to 2 s.
+  const bool locked = lockSD();
   while (count < limit) {
     const uint32_t position = queue.readPosition();
     uint16_t length = 0;
     if (!queue.peek(frame, capacity, &length)) {
       if (count && millis() - started < HTTP_BATCH_MAX_WAIT_MS) {
+        // Let the recorder journal the readings we are waiting for.
+        if (locked) unlockSD();
         delay(25);
+        if (locked) lockSD();
         continue;
       }
       break;
@@ -2106,6 +2113,7 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
     *lastLength = length;
     count++;
   }
+  if (locked) unlockSD();
   if (count) store.tailer();
   return count;
 }
@@ -2318,6 +2326,10 @@ void telemetry(void* inst)
       CBuffer* batch[HTTP_BATCH_MAX_SAMPLES];
       uint8_t batchCount = 0;
       bool replaying = false;
+      // Upload timing for the log: time since the last POST finished, and
+      // time spent assembling this batch.
+      static uint32_t lastPostDone = 0;
+      const uint32_t buildStarted = millis();
       store.purge();
 #if SERVER_PROTOCOL == PROTOCOL_UDP
       store.header(devid);
@@ -2376,7 +2388,11 @@ void telemetry(void* inst)
       }
       Serial.print("[UPLOAD] Sending ");
       Serial.print(batchCount);
-      Serial.print(" readings | payload: ");
+      Serial.print(" readings | build ");
+      Serial.print(millis() - buildStarted);
+      Serial.print(" ms | idle ");
+      Serial.print(lastPostDone ? buildStarted - lastPostDone : 0);
+      Serial.print(" ms | payload: ");
       Serial.print(store.length());
       if (replaying) {
 #if STORAGE == STORAGE_SD
@@ -2398,7 +2414,12 @@ void telemetry(void* inst)
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = true;
 #endif
+      const uint32_t postStarted = millis();
       const bool sent = teleClient.transmit(store.buffer(), store.length());
+      Serial.print("[UPLOAD] POST ");
+      Serial.print(millis() - postStarted);
+      Serial.println(" ms");
+      lastPostDone = millis();
 #if ENABLE_NETWORK_STATUS_SIGNALS
       telemetryTransmitActive = false;
 #endif

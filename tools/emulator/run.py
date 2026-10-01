@@ -240,7 +240,10 @@ public:
         for name in ("telequeue.cpp", "telequeue.h"):
             shutil.copyfile(ROOT / name, build / name)
         (build / "config.h").write_text("#define STORAGE_SD 1\n#define STORAGE 1\n#define SAMPLE_FRAME_SIZE 8192\n")
-        (build / "sdaccess.h").write_text("#pragma once\ninline bool lockSD() { return true; }\ninline void unlockSD() {}\n")
+        # Counts top-level acquisitions: the ones that can wait behind another task.
+        (build / "sdaccess.h").write_text("#pragma once\ninline unsigned sdTopLocks = 0;\ninline int sdLockDepth = 0;\n"
+                                          "inline bool lockSD() { if (sdLockDepth++ == 0) sdTopLocks++; return true; }\n"
+                                          "inline void unlockSD() { sdLockDepth--; }\n")
         (build / "freertos").mkdir()
         for name in ("FreeRTOS.h", "semphr.h"):
             (build / "freertos" / name).write_text("#pragma once\n")
@@ -270,7 +273,7 @@ public:
             wire += extract_function(storage, signature) + "\n"
         # The production replay batch builder and acknowledgement policy.
         firmware = (ROOT / "telelogger.ino").read_text()
-        wire += '#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
+        wire += '#include "sdaccess.h"\n#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
         wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength)") + "\n"
         wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n#define HTTP_BATCH_MIN_SAMPLES 4\n#define HTTP_BATCH_GROW_STEP 4\n"
         start = firmware.index("struct ReplayIsolation {")

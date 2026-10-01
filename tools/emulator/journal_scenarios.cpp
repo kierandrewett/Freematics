@@ -179,6 +179,22 @@ void runJournalScenarios()
     report("batched append and read-ahead replay open the journal once each", okay && batchOpens == 2 &&
            replayOpens == 1 && batched.pendingBytes() == 16 * (12 + first.size()), false, batchOpens + replayOpens);
 
+    // Building a 24-frame upload batch takes the SD lock once, not once per
+    // frame; each per-frame acquisition could wait behind the recorder.
+    {
+        resetCard();
+        DurableQueue lockQueue;
+        okay = lockQueue.begin();
+        for (unsigned index = 0; okay && index < 30; index++) okay = append(lockQueue, first);
+        CStorageRAM wire;
+        static char scratch[8192];
+        uint16_t lastLength = 0;
+        const unsigned before = sdTopLocks;
+        const uint8_t built = okay ? buildReplayBatch(lockQueue, wire, scratch, sizeof(scratch), 24, &lastLength) : 0;
+        const unsigned locks = sdTopLocks - before;
+        report("upload batch build takes the SD lock once", built == 24 && locks == 1 && sdLockDepth == 0, false, locks);
+    }
+
     resetCard();
     cardOnline = false;
     DurableQueue absent;
