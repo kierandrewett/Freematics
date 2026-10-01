@@ -101,11 +101,34 @@ it cannot cause repeated wakes. OBD is read after the device wakes.
 If readings exist only in RAM (the SD card failed), standby keeps them through
 light sleep and resumes without the usual wake reboot.
 
-The collector refuses a payload with HTTP 400 when it is malformed. The device
-then halves the batch until it finds the refused record, moves it to
-`/QUEUE.REJ` on the card and continues; the collector logs the reason and keeps
-a copy in `<data>/<device>/rejected.txt`. A reboot boundary in the journal
-always starts a new upload batch, because the device clock restarts.
+In standby a weak battery (resting below 11.8 V) turns motion wakes off; only
+the rise to charging voltage, that is a running engine, wakes the device.
+
+### Uploads and data
+
+* The collector stores a batch sample by sample. A malformed sample goes to
+  `<data>/<device>/rejected.txt` with its reason, and a device clock reset
+  inside a batch starts a new trip archive; the reply counts every field, so
+  the firmware never resends a batch forever. A device that still receives
+  HTTP 400 halves the batch, keeps the refused record in `/QUEUE.REJ` on the
+  card and continues.
+* Batches are zlib-compressed on the device (`teledeflate.cpp`, dynamic
+  Huffman) and posted with `?z=1`: about 5.5x smaller on full-rate data. A
+  refused compressed batch is resent uncompressed. Batches adapt to the link:
+  up to 40 readings, halved after a failed request.
+* The recorder journals every waiting reading in one SD transaction, and
+  replay reads the journal ahead in 32 KB windows.
+* Each sample carries the peak acceleration since the previous sample (0x9A,
+  gravity removed, with its vector in 0x9B) and the minimum and maximum supply
+  voltage (0x9C, 0x9D) read at 50 Hz, so hard braking and the cranking dip
+  between samples are kept. GNSS speed (RMC) updates at 5 Hz.
+* The sampler runs at the highest task priority, so uploads cannot delay a
+  reading. Sampling starts about 5 s after power-on; the CSV trip log opens in
+  the background.
+* If no reading is collected for 60 s while recording, the status task
+  restarts the device (wake reason 3). The SD journal survives the restart.
+* The firmware is built with `-mfix-esp32-psram-cache-issue`, which revision 1
+  ESP32 chips such as this Model B need for correct PSRAM data.
 The USB-connected Model B was flashed on 27 September 2026 with the normal
 `sd-retry-20260927` build (SHA-256
 `f1c697ef310b8b4a5e6d8fd7baf32c6791e4a2e5a34c3f14b06349c229c30fd0`).
