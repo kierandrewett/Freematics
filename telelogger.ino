@@ -2463,7 +2463,9 @@ void telemetry(void* inst)
 
       teleClient.inbound();
 
-      if (state.check(STATE_CELL_CONNECTED) && !teleClient.cell.check(1000)) {
+      // An accepted POST proves the modem is in service; only check it with
+      // an AT round trip after a failure.
+      if (!sent && state.check(STATE_CELL_CONNECTED) && !teleClient.cell.check(1000)) {
         Serial.println("[CELL] Not in service");
         state.clear(STATE_NET_READY | STATE_CELL_CONNECTED);
         break;

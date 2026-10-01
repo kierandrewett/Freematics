@@ -416,10 +416,9 @@ bool DurableQueue::acknowledge()
     if (saved) {
         m_ack = m_read;
         m_nextCursorB = !m_nextCursorB;
-        File file = SD.open(DATA_PATH, FILE_READ);
-        uint32_t size = file ? file.size() : 0;
-        if (file) file.close();
-        if (size && size == m_ack && archiveAcceptedJournal()) {
+        // The queue is the journal's only writer, so m_size is exact and the
+        // file need not be opened on every acknowledgement.
+        if (m_size && m_size == m_ack && archiveAcceptedJournal()) {
             // Only rotate when every record is accepted and its local archive
             // exists. A failed rename never deletes the original journal.
             if (SD.exists(CURSOR_A)) SD.remove(CURSOR_A);
