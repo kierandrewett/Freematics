@@ -153,6 +153,7 @@ volatile uint8_t powerPhase = PHASE_TRIP;
 uint32_t wakeRecord = 0;
 struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedReadings() { return ramOnly; } } bufman;
 struct Storage { bool healthy() {return storageHealthy;} uint32_t cachedPendingBytes() {return sdBacklog;} } durableQueue, logger;
+uint32_t fileid = 1;
 '''
 harness += defines + "\n" + support + "\n"
 harness += function(source, "bool readTripMotion(bool& moving)") + "\n"

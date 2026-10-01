@@ -559,7 +559,9 @@ void statusSignals(void* inst)
     // newer capture as a long recording stall.
     const uint32_t recordingNow = millis();
     const uint32_t progressAt = capturedAt ? capturedAt : recordingMonitorSince;
-    const bool storageHealthy = durableQueue.healthy() && logger.healthy();
+    // A CSV log that has not opened yet (fileid 0) is not a fault; a failed
+    // open clears STATE_STORAGE_READY, which the recorder retries.
+    const bool storageHealthy = durableQueue.healthy() && (!fileid || logger.healthy());
     const bool checked = storageCheckComplete ||
       recordingNow - recordingMonitorSince >= RECORDING_STALL_ALERT_MS;
     if (!standbyMode && checked) {
@@ -1280,6 +1282,13 @@ void initialize()
 #endif
     }
   }
+#if STORAGE == STORAGE_SD
+  // The CSV trip log opens in the recorder task instead. Creating a file in a
+  // /DATA directory holding thousands of logs took about 7 s here on
+  // 1 October, and sampling could not start until it finished. The SD
+  // journal, the durable copy, is already open.
+  fileid = 0;
+#else
   if (state.check(STATE_STORAGE_READY)) {
     fileid = logger.begin();
     if (!fileid) {
@@ -1288,6 +1297,7 @@ void initialize()
       Serial.println("[STORAGE] Local logging unavailable");
     }
   }
+#endif
 #if STORAGE == STORAGE_SD
   storageCheckComplete = true;
 #endif
@@ -1651,7 +1661,7 @@ void recordSamples(void*)
   // for the entire active session. Retry at a bounded rate; an already-open
   // logger must not be reopened just because the journal was unavailable.
   static uint32_t lastSDRetry = 0;
-  if ((!state.check(STATE_STORAGE_READY) || !logger.healthy() || !durableQueue.healthy()) &&
+  if ((!state.check(STATE_STORAGE_READY) || (fileid && !logger.healthy()) || !durableQueue.healthy()) &&
       (lastSDRetry == 0 || millis() - lastSDRetry >= 30000UL)) {
     lastSDRetry = millis();
     Serial.println("[STORAGE] Retrying SD storage");
@@ -1719,6 +1729,15 @@ void recordSamples(void*)
     }
     if (!count) { delay(5); continue; }
 
+    if (state.check(STATE_STORAGE_READY) && !fileid) {
+      // Deferred from initialize(); readings wait in RAM and the journal
+      // meanwhile, so nothing is lost while the file is created.
+      fileid = logger.begin();
+      if (!fileid) {
+        state.clear(STATE_STORAGE_READY);
+        Serial.println("[STORAGE] CSV trip log unavailable; SD retry will follow");
+      }
+    }
     if (state.check(STATE_STORAGE_READY)) {
       SDGuard logGuard;
       for (uint8_t i = 0; i < count; i++) {
