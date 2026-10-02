@@ -20,6 +20,14 @@ def request(base, path, data=None):
         return response.read()
 
 
+def metric_value(metrics, device, pid):
+    prefix = f'freematics_obd_value_age_seconds{{device_id="{device}",'
+    needle = f'pid="0x{pid:03X}"'
+    lines = [line for line in metrics.splitlines() if line.startswith(prefix) and needle in line]
+    assert len(lines) == 1, lines
+    return float(lines[0].rsplit(' ', 1)[1])
+
+
 with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as directory:
     root = Path(directory)
     (root / 'data').mkdir()
@@ -111,6 +119,57 @@ with tempfile.TemporaryDirectory(prefix='freematics-collector-sampling-') as dir
                 assert any(line.startswith(f'freematics_device_{name}{{device_id="PACKED"') and line.endswith(' ' + value)
                            for line in metrics.splitlines()), (name, [l for l in metrics.splitlines() if name in l])
             print('PASS: power phase, wake reason and rejected readings exported as metrics')
+            # A Mode 01 value is repeated in every 250 ms sample. The paired
+            # 0x400 age is the elapsed time since its ECU response, not a
+            # second measurement. Prometheus must publish that acquisition age
+            # plus the small server receipt delay. An old, mismatched 0x400
+            # value must not make a new value look stale; legacy rows retain
+            # the prior sample-timestamp calculation.
+            request(base, '/api/notify/FRESHNESS?EV=1&TS=1000')
+            text = '0:1000,10C:900,40C:10000,89:1'
+            assert b'OK' in request(base, '/api/post/FRESHNESS', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            held_age = metric_value(metrics, 'FRESHNESS', 0x10C)
+            assert 10.0 <= held_age < 10.5, held_age
+            # 1,500 ms must remain 1.5 seconds, rather than be treated as an
+            # already-scaled seconds field.
+            text = '0:1250,10C:900,40C:1500,89:1'
+            assert b'OK' in request(base, '/api/post/FRESHNESS', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            fractional_age = metric_value(metrics, 'FRESHNESS', 0x10C)
+            assert 1.5 <= fractional_age < 2.0, fractional_age
+            live = json.loads(request(base, '/api/get/FRESHNESS'))
+            rpm = next(row for row in live['data'] if int(row[0]) == 0x10C)
+            assert 1500 <= int(rpm[2]) < 2000, rpm
+            channels = json.loads(request(base, '/api/channels/FRESHNESS?data=1'))
+            rpm = next(row for row in channels['data'] if int(row[0]) == 0x10C)
+            assert 1500 <= int(rpm[2]) < 2000, rpm
+            # The 0x400 age is usable only in the sample that contains both
+            # fields. Here the old 1,500 ms age does not apply to the new RPM.
+            text = '0:1500,10C:900,89:1'
+            assert b'OK' in request(base, '/api/post/FRESHNESS', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            mismatched_age = metric_value(metrics, 'FRESHNESS', 0x10C)
+            assert 0.0 <= mismatched_age < 0.5, mismatched_age
+            # Legacy firmware emits no 0x400 field. It still reports age from
+            # the last sample that contained the PID.
+            request(base, '/api/notify/LEGACYAGE?EV=1&TS=1000')
+            for text in ('0:1000,10C:900,89:1', '0:2250,89:1'):
+                assert b'OK' in request(base, '/api/post/LEGACYAGE', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            legacy_age = metric_value(metrics, 'LEGACYAGE', 0x10C)
+            assert 1.25 <= legacy_age < 1.75, legacy_age
+            channels = json.loads(request(base, '/api/channels/LEGACYAGE?data=1'))
+            rpm = next(row for row in channels['data'] if int(row[0]) == 0x10C)
+            assert 1250 <= int(rpm[2]) < 1750, rpm
+            # A valid maximum uint32 age is a stale acquisition and must stay
+            # stale across the device millisecond-clock rollover.
+            text = '0:4294967000,10C:900,40C:4294967295,89:1,0:100,10C:900,40C:4294967295,89:1'
+            assert b'OK' in request(base, '/api/post/FRESHNESS', (text + f'*{sum(text.encode()) & 255:X}').encode())
+            metrics = request(base, '/metrics').decode()
+            rollover_age = metric_value(metrics, 'FRESHNESS', 0x10C)
+            assert 4294967.295 <= rollover_age < 4294967.8, rollover_age
+            print('PASS: paired OBD acquisition ages export in milliseconds, preserve fractional seconds, reject mismatched ages and survive clock rollover')
             # A disconnected ECU must retain explicitly aged values while
             # legacy firmware without ages must still clear stale live data.
             text = '0:2000,10C:900,40C:1000,89:0'

@@ -131,6 +131,7 @@ static int parseFiniteNumber(const char* text, double* value)
 }
 
 static unsigned int tickAgeMs(uint64_t now, uint64_t then);
+static unsigned int obdValueAgeMs(const CHANNEL_DATA* pld, uint16_t pid, unsigned int receiptAge);
 static int channelIsRunning(const CHANNEL_DATA* pld, uint64_t now);
 static int channelIsParked(const CHANNEL_DATA* pld, uint64_t now);
 static int appendFormat(char* buf, int bs, int l, const char* format, ...)
@@ -338,7 +339,7 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_network_transport gauge\n"
 		"# HELP freematics_obd_value Latest decoded value for an ECU-advertised Mode 01 PID.\n"
 		"# TYPE freematics_obd_value gauge\n"
-		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value.\n"
+		"# HELP freematics_obd_value_age_seconds Age of the latest decoded OBD value, including its device-reported acquisition age.\n"
 		"# TYPE freematics_obd_value_age_seconds gauge\n"
 		"# HELP freematics_obd_protocol OBD bridge protocol number, or zero when unknown.\n"
 		"# TYPE freematics_obd_protocol gauge\n"
@@ -346,11 +347,11 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_obd_supported_pids gauge\n"
 		"# HELP freematics_obd_timeouts Cumulative OBD read failures since the active session started.\n"
 		"# TYPE freematics_obd_timeouts counter\n"
-		"# HELP freematics_obd_last_latency_milliseconds Slowest OBD response in the latest collection cycle.\n"
+		"# HELP freematics_obd_last_latency_milliseconds Duration of the latest OBD request.\n"
 		"# TYPE freematics_obd_last_latency_milliseconds gauge\n"
 		"# HELP freematics_obd_state OBD state: 0 disconnected, 1 ready, 2 degraded.\n"
 		"# TYPE freematics_obd_state gauge\n"
-		"# HELP freematics_obd_core_failures Consecutive failed core OBD cycles.\n"
+		"# HELP freematics_obd_core_failures Maximum consecutive RPM or speed request failures.\n"
 		"# TYPE freematics_obd_core_failures gauge\n"
 		"# HELP freematics_acceleration_g Vehicle acceleration by device axis.\n"
 		"# TYPE freematics_acceleration_g gauge\n"
@@ -480,8 +481,7 @@ int uhMetrics(UrlHandlerParam* param)
 			if (!meta) continue;
 			double number;
 			if (!parseFiniteNumber(value->value, &number)) continue;
-			unsigned int valueAge = age;
-			if (pld->deviceTick >= value->ts) valueAge += pld->deviceTick - value->ts;
+			unsigned int valueAge = obdValueAgeMs(pld, pid, age);
 			l = appendFormat(buf, bs, l,
 				"freematics_obd_value{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\",description=\"%s\",unit=\"%s\"} %.10g\n"
 				"freematics_obd_value_age_seconds{device_id=\"%s\",trip_id=\"%s\",pid=\"0x%03X\",name=\"%s\"} %.3f\n",
@@ -1081,6 +1081,42 @@ static unsigned int tickAgeMs(uint64_t now, uint64_t then)
 	uint64_t age = now - then;
 	return age > UINT_MAX ? UINT_MAX : (unsigned int)age;
 }
+
+static unsigned int addAgeMs(unsigned int first, unsigned int second)
+{
+	return first > UINT_MAX - second ? UINT_MAX : first + second;
+}
+
+static unsigned int elapsedDeviceMs(uint32_t current, uint32_t then)
+{
+	if (!then) return 0;
+	uint32_t elapsed = current - then;
+	// A device timestamp is valid for less than half the uint32_t range. This
+	// accepts a normal rollover but rejects an older sample from another trip.
+	return (int32_t)elapsed >= 0 ? elapsed : 0;
+}
+
+static unsigned int obdValueAgeMs(const CHANNEL_DATA* pld, uint16_t pid, unsigned int receiptAge)
+{
+	if (!pld || pid < 0x100 || pid >= 0x200) return receiptAge;
+	const PID_DATA* value = pld->data + pid;
+	if (!value->ts) return receiptAge;
+	const PID_DATA* reported = pld->data + (PID_OBD_AGE_BASE | (pid & 0xFF));
+	double acquisitionAge;
+	unsigned int valueAge = 0;
+	if (reported->ts == value->ts && parseFiniteNumber(reported->value, &acquisitionAge)
+		&& acquisitionAge >= 0 && acquisitionAge <= UINT_MAX && acquisitionAge == floor(acquisitionAge)) {
+		valueAge = (unsigned int)acquisitionAge;
+	}
+	else {
+		// Legacy firmware has no paired per-PID age. Its last value timestamp is
+		// the best available acquisition time.
+		valueAge = 0;
+	}
+	valueAge = addAgeMs(valueAge, elapsedDeviceMs(pld->deviceTick, value->ts));
+	return addAgeMs(valueAge, receiptAge);
+}
+
 static int channelIsRunning(const CHANNEL_DATA* pld, uint64_t now)
 {
 	return pld && (pld->flags & FLAG_RUNNING)
@@ -1446,7 +1482,14 @@ int uhChannels(UrlHandlerParam* param)
 			if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 			for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
 				if (!pld->data[i].ts) continue;
-				l = appendLiveJSONItem(buf, bs, l, i, pld->data[i].value, age + (pld->deviceTick - pld->data[i].ts));
+				unsigned int valueAge;
+				if (i >= 0x100 && i < 0x200) {
+					valueAge = obdValueAgeMs(pld, i, age);
+				} else {
+					valueAge = pld->deviceTick >= pld->data[i].ts
+						? age + pld->deviceTick - pld->data[i].ts : 0;
+				}
+				l = appendLiveJSONItem(buf, bs, l, i, pld->data[i].value, valueAge);
 				if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 			}
 			if (l > 0 && buf[l - 1] == ',') l--;
@@ -1711,8 +1754,13 @@ int uhGet(UrlHandlerParam* param)
 	if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	for (unsigned int i = 0; i < 0x100 * PID_MODES; i++) {
 		if (!pld->data[i].ts) continue;
-		unsigned int age = pld->deviceTick >= pld->data[i].ts
-			? tickAgeMs(tick, pld->serverDataTick) + pld->deviceTick - pld->data[i].ts : 0;
+		unsigned int age;
+		if (i >= 0x100 && i < 0x200) {
+			age = obdValueAgeMs(pld, i, tickAgeMs(tick, pld->serverDataTick));
+		} else {
+			age = pld->deviceTick >= pld->data[i].ts
+				? tickAgeMs(tick, pld->serverDataTick) + pld->deviceTick - pld->data[i].ts : 0;
+		}
 		l = appendLiveJSONItem(buf, bs, l, i, pld->data[i].value, age);
 		if (l < 0) return writeJSONError(param, 500, "{\"error\":\"response too large\"}");
 	}
