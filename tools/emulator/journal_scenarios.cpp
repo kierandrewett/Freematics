@@ -362,3 +362,46 @@ int runRebootDrive(bool strictServer)
     }
     return 0;
 }
+
+// This uses the production durable queue and replay-batch code. The frame has
+// repeated waveform fields so the collector and history indexer can prove that
+// order and each acquisition clock survive an offline restart.
+int runWaveformDrive()
+{
+    resetCard();
+    DurableQueue recording;
+    if (!recording.begin()) return 1;
+#ifndef WAVEFORM_FIXTURE
+#define WAVEFORM_FIXTURE "0:1000,A5:1,A0:990;1234,A1:980,A2:0.100000;0.200000;1.000000,A3:1.000000;2.000000;3.000000,A4:0;0;0;0,"
+#endif
+    // run.py supplies this from tools/check-sampling-boundary.py. It is a
+    // complete CBuffer serialization, not a handwritten waveform payload.
+    const char* waveform = WAVEFORM_FIXTURE;
+    if (!append(recording, waveform)) return 1;
+
+    // Only fake SD bytes survive this simulated device restart.
+    DurableQueue upload;
+    if (!upload.begin()) return 1;
+    static char frame[8192];
+    uint16_t lastLength = 0;
+    ReplayIsolation isolation = {0, 0};
+    unsigned attempts = 0;
+    unsigned delivered = 0;
+    for (; attempts < 4; attempts++) {
+        CStorageRAM wire;
+        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame),
+                                                replayBatchLimit(isolation, 24), &lastLength);
+        if (!count) break;
+        wire.m_cache[wire.m_cacheBytes] = 0;
+        std::cout << "{\"event\":\"waveform-upload\",\"packet\":\"" << wire.m_cache << "\"}" << std::endl;
+        std::string response;
+        if (!std::getline(std::cin, response)) return 1;
+        const unsigned status = strtoul(response.c_str(), nullptr, 10);
+        const bool sent = status == 200;
+        if (sent) delivered += count;
+        settleReplayBatch(upload, isolation, sent, status, count, frame, lastLength);
+    }
+    report("waveform journal replay retries a lost acknowledgement", attempts == 2 && delivered == 1 &&
+           upload.pendingBytes() == 0, false, delivered);
+    return 0;
+}

@@ -15,6 +15,8 @@ from mcp.types import ToolAnnotations
 
 from trip_intelligence import (diagnostic_evidence, evidence_for_trip,
                                matched_maf_baseline, previous_trip_baseline)
+from waveforms import waveform_window, waveform_trip_summary
+from condition_baselines import acquisition_quality, contextual_baselines
 
 HISTORY = Path(os.environ.get("FREEMATICS_HISTORY_DB", "/history/history.sqlite"))
 REPORTS = Path(os.environ.get("FREEMATICS_INTELLIGENCE_DB", "/state/intelligence.sqlite"))
@@ -27,7 +29,7 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
 mcp = FastMCP(
     "freematics-mechanic",
     instructions=("Read-only vehicle telemetry. Start with vehicle_context and list_trips, "
-                  "then inspect named signals, aligned samples, diagnostic codes and baselines. "
+                  "then inspect named signals, aligned samples, sensor_waveforms, diagnostic codes and baselines. "
                   "Report measured evidence, alternative causes and limitations. GPS/collection "
                   "loss is not a vehicle fault. Never guess engine-specific tolerances."),
     host="0.0.0.0", port=8018, streamable_http_path="/mcp",
@@ -207,6 +209,21 @@ def raw_frames(device_id: str, trip_id: str, start_sequence: int = 0,
 
 
 @mcp.tool(annotations=READ_ONLY)
+def sensor_waveforms(device_id: str, trip_id: str, start_sequence: int = 0,
+                     limit: int = 40) -> dict:
+    """Raw voltage and motion acquisitions with timing and loss evidence; up to 100 frames.
+
+    Start before an event sequence to inspect its lead-in. Paginate with
+    next_sequence. Motion includes gravity; voltage is an uncalibrated device
+    input measurement. Missing waveform coverage is not absence of a fault.
+    """
+    device_id, trip_id = ident(device_id), ident(trip_id)
+    with db(HISTORY) as conn:
+        return waveform_window(conn, device_id, trip_id, max(0, int(start_sequence)),
+                               max(1, min(int(limit), 100)))
+
+
+@mcp.tool(annotations=READ_ONLY)
 def dtc_history(device_id: str, limit: int = 30) -> list[dict]:
     """Confirmed stored, pending and permanent code sightings with scan context."""
     device_id = ident(device_id)
@@ -229,12 +246,13 @@ def dtc_history(device_id: str, limit: int = 30) -> list[dict]:
 
 @mcp.tool(annotations=READ_ONLY)
 def compare_baseline(device_id: str, trip_id: str) -> dict:
-    """Compare duration, distance, speed and warm matched-operation MAF with prior trips."""
+    """Compare current readings with earlier sealed same-device operation contexts."""
     device_id, trip_id = ident(device_id), ident(trip_id)
     with db(HISTORY) as conn:
         return {"trip_id": trip_id,
                 "prior_driving_trips": previous_trip_baseline(conn, device_id, trip_id),
                 "matched_maf": matched_maf_baseline(conn, device_id, trip_id),
+                "contextual_condition": contextual_baselines(conn, device_id, trip_id),
                 "limitations": "Same device only; route, engine identity, EGR, boost and temperature may differ. MAF alone does not diagnose a filter."}
 
 
@@ -255,6 +273,8 @@ def data_quality(device_id: str, trip_id: str) -> dict:
         return {"trip_id": trip_id, "timestamp_quality": trip["timestamp_quality"],
                 "time_basis": trip["time_basis"], "sample_count": trip["sample_count"],
                 "gap_count": trip["gap_count"], "metric_coverage": coverage,
+                "acquisition": acquisition_quality(conn, device_id, trip_id),
+                "waveform": waveform_trip_summary(conn, device_id, trip_id),
                 "interpretation": "Capture gaps, GPS drops and absent PIDs describe collection, not mechanical faults."}
 
 

@@ -81,6 +81,12 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0x9B, "acceleration_peak_vector", "Peak acceleration vector", "Three-axis acceleration at the peak since the previous sample, gravity removed.", "g", "freematics/mems", decoder="vector3"),
     MetricDefinition(0x9C, "voltage_min", "Minimum voltage", "Lowest supply voltage since the previous sample, read at 50 Hz; shows the engine-cranking dip.", "volt", "freematics/power", scale=0.01),
     MetricDefinition(0x9D, "voltage_max", "Maximum voltage", "Highest supply voltage since the previous sample, read at 50 Hz.", "volt", "freematics/power", scale=0.01),
+    MetricDefinition(0xA0, "waveform_voltage", "Waveform voltage acquisition", "Passive device-input voltage acquisition encoded as uint32 milliseconds and centivolts. Read the waveform projection to preserve every occurrence.", "millisecond;centivolt", "freematics/condition-monitoring", decoder="waveform_voltage"),
+    MetricDefinition(0xA1, "waveform_motion_timestamp", "Waveform motion acquisition timestamp", "Uint32 device monotonic timestamp for the following adjacent raw motion vectors.", "millisecond", "freematics/condition-monitoring", decoder="integer"),
+    MetricDefinition(0xA2, "waveform_acceleration", "Raw waveform acceleration", "Raw accelerometer vector including gravity. It forms one adjacent waveform motion group with 0x0A1 and 0x0A3.", "g", "freematics/condition-monitoring", decoder="vector3"),
+    MetricDefinition(0xA3, "waveform_angular_rate", "Raw waveform angular rate", "Gyroscope vector. It forms one adjacent waveform motion group with 0x0A1 and 0x0A2.", "degree_per_second", "freematics/condition-monitoring", decoder="vector3"),
+    MetricDefinition(0xA4, "waveform_losses", "Waveform loss counters", "Cumulative voltage overflow, motion overflow, invalid voltage and invalid motion counters since boot.", "count;count;count;count", "freematics/condition-monitoring", decoder="waveform_losses"),
+    MetricDefinition(0xA5, "waveform_format", "Waveform format", "Waveform field format version. Version 1 is required before waveform fields can be decoded.", "version", "freematics/condition-monitoring", decoder="integer"),
     MetricDefinition(0x96, "signal_age", "Network signal value age", "Elapsed time since the last signal-strength measurement; 4294967295 means not measured yet.", "millisecond", "freematics/transport", decoder="integer"),
     MetricDefinition(0x92, "can_frame", "Passive CAN frame", "Raw CAN monitor line encoded as hexadecimal bytes.", "hex", "freematics/can", decoder="string"),
     MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
@@ -208,6 +214,19 @@ def _decode(definition: MetricDefinition, raw: str) -> Any:
         numbers = [_number(part) for part in parts]
         if len(numbers) == 3 and all(isinstance(value, (int, float)) for value in numbers):
             return {axis: value for axis, value in zip(("x", "y", "z"), numbers)}
+        return {"raw": raw, "components": parts}
+    if definition.decoder == "waveform_voltage":
+        parts = [part.strip() for part in raw.split(";")]
+        values = [_number(part) for part in parts]
+        if len(values) == 2 and all(isinstance(value, (int, float)) for value in values):
+            return {"device_monotonic_ms": values[0], "centivolts": values[1]}
+        return {"raw": raw, "components": parts}
+    if definition.decoder == "waveform_losses":
+        parts = [part.strip() for part in raw.split(";")]
+        values = [_number(part) for part in parts]
+        names = ("voltage_overflow", "motion_overflow", "invalid_voltage", "invalid_motion")
+        if len(values) == 4 and all(isinstance(value, (int, float)) for value in values):
+            return dict(zip(names, values))
         return {"raw": raw, "components": parts}
     numeric = _number(raw)
     if numeric is None:

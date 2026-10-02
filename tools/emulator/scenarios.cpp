@@ -10,6 +10,7 @@ void runJournalScenarios();
 void runMEMSScenarios();
 int runJournalDrive();
 int runRebootDrive(bool strictServer);
+int runWaveformDrive();
 
 class DummyBridge : public CLink
 {
@@ -51,6 +52,7 @@ int main(int argc, char** argv)
     if (argc == 2 && std::string(argv[1]) == "--drive") return runJournalDrive();
     if (argc == 2 && std::string(argv[1]) == "--drive-reboot") return runRebootDrive(false);
     if (argc == 2 && std::string(argv[1]) == "--drive-reboot-strict") return runRebootDrive(true);
+    if (argc == 2 && std::string(argv[1]) == "--drive-waveforms") return runWaveformDrive();
     DummyBridge bridge;
     COBD obd;
     obd.begin(&bridge);

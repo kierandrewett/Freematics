@@ -187,6 +187,145 @@ def drive_reboot(executable, strict=False):
         return results
 
 
+def index_waveform_replay(archive_root, fixture):
+    """Index a real collector archive and check ordered waveform fields.
+
+    Failure cases checked here were declared in CONDITION_MONITORING_PLAN.md:
+    an offline restart, a lost acknowledgement, repeated PID fields, and
+    acquisition clocks that differ from the enclosing frame clock.
+    """
+    sys.path.insert(0, str(ROOT / "collector"))
+    from history_indexer import HistoryIndexer, normalise_pid, numeric, parse_frames
+    from waveforms import waveform_window
+    import asyncio
+    import mechanic_mcp
+
+    archives = list(archive_root.rglob("*.txt"))
+    if len(archives) != 1:
+        raise RuntimeError(f"Expected one collector archive, found {len(archives)}")
+    archive = archives[0]
+    database = archive_root.parent / "history.sqlite"
+    indexer = HistoryIndexer(archive_root, database,
+                             now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000)
+    if indexer.index_once() != 1:
+        raise RuntimeError("History indexer did not index the waveform archive")
+    import sqlite3
+    with sqlite3.connect(database) as connection:
+        samples = list(connection.execute(
+            "SELECT sequence,device_monotonic_ms FROM sample WHERE device_id='EMULATOR' ORDER BY sequence"))
+        fields = list(connection.execute(
+            """SELECT sequence,ordinal,pid,numeric_value,text_value
+               FROM sample_field WHERE device_id='EMULATOR' ORDER BY sequence,ordinal"""))
+        trip_id = connection.execute("SELECT trip_id FROM trip WHERE device_id='EMULATOR'").fetchone()[0]
+        decoded = waveform_window(connection, "EMULATOR", trip_id, 0, 10)
+    expected = parse_frames(fixture, include_final=True)
+    if len(expected) != 1:
+        raise RuntimeError("Production waveform fixture must contain one complete frame")
+    expected_timestamp = expected[0].device_monotonic_ms
+    expected_group = [(normalise_pid(pid), numeric(value) if numeric(value) is not None else value)
+                      for pid, value in expected[0].ordered_fields]
+    observed_groups = [[(pid, numeric_value if text_value is None else text_value)
+                        for row_sequence, _ordinal, pid, numeric_value, text_value in fields
+                        if row_sequence == sequence]
+                       for sequence, _timestamp in samples]
+    if samples != [(0, expected_timestamp), (1, expected_timestamp)] or observed_groups != [expected_group, expected_group]:
+        raise RuntimeError("Waveform replay projection changed field order or values")
+    voltage = decoded["voltage"]
+    motion = decoded["motion"]
+    if len(voltage) != 32 or len(motion) != 32 or any(point["centivolts"] != 980 for point in voltage[7::16]):
+        raise RuntimeError("Indexed production waveform lost a voltage dip or motion observations")
+    if any(point["offset_ms"] != -299 + index * 20 for index, point in enumerate(motion[:16])):
+        raise RuntimeError("Indexed motion acquisition timestamps no longer match the production fixture")
+    # Use the registered MCP tool, not its implementation function. This is
+    # the read-only access path used by diagnosis clients.
+    mechanic_mcp.HISTORY = database
+    mcp_result = asyncio.run(mechanic_mcp.mcp.call_tool("sensor_waveforms", {
+        "device_id": "EMULATOR", "trip_id": trip_id, "start_sequence": 0, "limit": 10,
+    }))
+    if isinstance(mcp_result, dict):
+        mcp_waveforms = mcp_result
+    elif len(mcp_result) == 1 and hasattr(mcp_result[0], "text"):
+        mcp_waveforms = json.loads(mcp_result[0].text)
+    else:
+        raise RuntimeError("Registered sensor_waveforms MCP tool returned an unexpected result")
+    if len(mcp_waveforms.get("voltage", [])) != 32 or len(mcp_waveforms.get("motion", [])) != 32:
+        raise RuntimeError("Registered sensor_waveforms MCP tool lost replayed waveform observations")
+    quality = mechanic_mcp.data_quality("EMULATOR", trip_id)
+    if quality["waveform"]["voltage"]["readings"] != 16 or quality["waveform"]["motion"]["readings"] != 16:
+        raise RuntimeError("Summary counted a retried waveform as a new acquisition")
+    if "acquisition_coverage" not in quality["acquisition"]:
+        raise RuntimeError("Data-quality tool omitted acquisition coverage")
+    return {"scenario": "production waveform replay retains repeated fields, order and acquisition clocks through collector indexing",
+            "status": "PASS", "observed": len(samples)}
+
+
+def drive_waveforms(executable, fixture):
+    """Replay waveform frames after a simulated restart into the local collector."""
+    with tempfile.TemporaryDirectory(prefix="freematics-waveform-replay-") as directory:
+        root = Path(directory)
+        (root / "data").mkdir()
+        (root / "log").mkdir()
+        with socket.socket() as port_socket:
+            port_socket.bind(("127.0.0.1", 0))
+            port = port_socket.getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+        command = [str(ROOT / "collector/teleserver"), "-g", "-p", str(port), "-u", "0",
+                   "-w", "emulator-fixture-only", "-d", str(root / "data"), "-l", str(root / "log")]
+        server = child = None
+        results, packets = [], []
+        with (root / "collector.log").open("wb") as log:
+            try:
+                server = subprocess.Popen(command, cwd=root, stdout=log, stderr=log)
+                for _attempt in range(60):
+                    try:
+                        request(base, "/api/test")
+                        break
+                    except OSError:
+                        if server.poll() is not None:
+                            raise RuntimeError("Local collector exited")
+                        time.sleep(0.05)
+                else:
+                    raise RuntimeError("Local collector did not start")
+                request(base, "/api/notify/EMULATOR?EV=1&TS=1000")
+                child = subprocess.Popen([str(executable), "--drive-waveforms"], stdin=subprocess.PIPE,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                for line in child.stdout:
+                    event = json.loads(line)
+                    if event.get("event") != "waveform-upload":
+                        results.append(event)
+                        continue
+                    packet = event["packet"]
+                    body = request(base, "/api/post/EMULATOR", packet.encode())
+                    if not body.startswith(b"OK "):
+                        raise RuntimeError(f"Collector rejected waveform replay: {body!r}")
+                    packets.append(packet)
+                    # The collector wrote the first packet, but its response is lost.
+                    # The production replay logic must retain and resend the exact batch.
+                    response = "503 simulated-lost-acknowledgement" if len(packets) == 1 else "200 " + body.decode().strip()
+                    child.stdin.write(response + "\n")
+                    child.stdin.flush()
+                child.wait(timeout=5)
+                if child.returncode:
+                    raise RuntimeError(f"Waveform drive exited with {child.returncode}: {child.stderr.read()}")
+                if len(packets) != 2 or packets[0] != packets[1]:
+                    raise RuntimeError("Lost acknowledgement did not replay the identical waveform batch")
+                live = json.loads(request(base, "/api/get/EMULATOR"))
+                live_pids = {int(row[0]) for row in live["data"]}
+                if any(pid in live_pids for pid in range(0xA0, 0xA5)) or 0xA5 not in live_pids:
+                    raise RuntimeError("Legacy live data retained a partial waveform field or lost its format version")
+                results.append(index_waveform_replay(root / "data", fixture))
+            finally:
+                for process in (child, server):
+                    if process is not None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+        return results, packets
+
+
 def extract_function(source, signature):
     start = source.index(signature + "\n{")
     opening = source.index("{", start)
@@ -204,8 +343,15 @@ def main():
     parser.add_argument("--report", type=Path, help="Save a JSON evidence report")
     parser.add_argument("--collector", action="store_true", help="Replay the offline drive into a real local collector")
     parser.add_argument("--sanitize", action="store_true", help="Check native memory access and undefined behaviour")
+    parser.add_argument("--waveform-fixture", type=Path,
+                        help="CBuffer waveform frame from check-sampling-boundary.py")
     parser.add_argument("--compiler", default="c++", help="C++ compiler executable")
     args = parser.parse_args()
+    if args.waveform_fixture and not args.collector:
+        parser.error("--waveform-fixture requires --collector")
+    waveform_fixture = args.waveform_fixture.read_text() if args.waveform_fixture else None
+    if waveform_fixture is not None and not waveform_fixture.endswith(","):
+        raise RuntimeError("Waveform fixture must be a comma-terminated serialized frame")
     compiler = args.compiler
     if args.collector:
         subprocess.run(["make", "-C", str(ROOT / "collector")], check=True, capture_output=True, text=True, timeout=60)
@@ -280,6 +426,8 @@ public:
         wire += firmware[start:firmware.index("};", start) + 2] + "\n"
         wire += extract_function(firmware, "uint8_t replayBatchLimit(const ReplayIsolation& isolation, uint8_t linkLimit)") + "\n"
         wire += extract_function(firmware, "void settleReplayBatch(DurableQueue& queue, ReplayIsolation& isolation, bool sent, uint16_t status,\n                       uint8_t count, const char* frame, uint16_t length)") + "\n"
+        if waveform_fixture is not None:
+            wire += "\n#define WAVEFORM_FIXTURE " + json.dumps(waveform_fixture) + "\n"
         (build / "wire_scenario.h").write_text(wire)
         mems_header = (ROOT / "lib/FreematicsPlus/FreematicsMEMS.h").read_text()
         class_start = mems_header.index("class ICM_42627 :")
@@ -314,6 +462,10 @@ class MEMS_I2C {};
         if args.collector:
             drive_results += drive_reboot(executable)
             drive_results += drive_reboot(executable, strict=True)
+            if waveform_fixture is not None:
+                waveform_results, waveform_packets = drive_waveforms(executable, waveform_fixture)
+                drive_results += waveform_results
+                packets += waveform_packets
     results = [json.loads(line) for line in output.splitlines()]
     results.extend(drive_results)
     sources = [client, ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp",
@@ -323,13 +475,16 @@ class MEMS_I2C {};
                ROOT / "lib/FreematicsPlus/FreematicsMEMS.cpp", ROOT / "lib/FreematicsPlus/FreematicsMEMS.h",
                ROOT / "lib/FreematicsPlus/utility/ICM_42627.h", HERE / "mems_scenarios.cpp",
                HERE / "journal_scenarios.cpp", HERE / "scenarios.cpp", Path(__file__).resolve()]
+    if args.waveform_fixture:
+        sources.append(args.waveform_fixture)
     if args.collector:
         sources.append(ROOT / "collector/teleserver")
     report = {
         "command": shlex.join([sys.executable, *sys.argv]),
         "environment": platform.platform(),
         "compiler": subprocess.run([compiler, "--version"], check=True, capture_output=True, text=True).stdout.splitlines()[0],
-        "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},
+        "sources": {str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path):
+                    hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},
         "coverage": "Actual OBD decoder, queue methods, wire checksum, IMU methods and journal with fake SD; no ESP32 boot or concurrent tasks",
         "results": results,
         "drive_packets": packets,

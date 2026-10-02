@@ -18,6 +18,14 @@ The sketch collects following data.
 
 Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While powered, the sampler records a row every 250 ms from background sensor snapshots. Each held value includes its acquisition age. The OBD worker makes consecutive sequential requests. It targets a fresh reading within 250 ms for RPM and speed and within 1,000 ms for every other supported Mode 01 PID. It selects the PID that has used the greatest fraction of its freshness interval and releases the bridge between requests. Failed reads retain their last successful timestamp and retry no faster than once per second. These are acquisition targets; ECU latency, timeouts and bridge contention can exceed them. The recorded per-PID ages and the Grafana OBD age metric expose that shortfall. Trouble-code scans retain their separate two-minute cadence. Their existing bridge exchange can pause live acquisition for several seconds; include those gaps in any freshness report. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
   
+The passive voltage and motion worker also retains each successful acquisition at
+its nominal 50 Hz cadence. Each point has its own device timestamp. Raw motion
+includes gravity; voltage is the uncalibrated device input. Each 250 ms frame
+carries up to 16 readings from each sensor, through the same journal and upload
+path. Overflow and invalid-input counters make losses visible. Recording stops
+during parked upload wrap-up after pending points drain. Actual cadence still
+depends on the hardware and task load.
+
 Data Transmission
 -----------------
 
@@ -169,6 +177,21 @@ The host `collector/trip_intelligence.py` runs a fast event worker and a separat
 The analysis worker runs the Codex CLI with a ChatGPT subscription and `gpt-6-sol`; the CLI investigates via the authenticated, read-only MCP server at `https://freematics.drewett.dev/mcp`. Its tools expose the full PID catalogue, per-PID time series, aligned sample windows, and source-order raw fields including repeated PIDs. It measures consecutive OBD speed changes where sampling is close enough and compares episode rates with earlier driving trips when enough are available. These summaries guide investigation; the model must inspect underlying samples before making a finding. Stored earlier reports provide hypotheses for later reviews but are not treated as evidence without checking the data. The investigation may be detailed, but the owner report is capped at one short conclusion, three brief measured observations, two supported issues, and two material limitations. Reports exceeding that format are rejected and retried. It stores each report and its model receipt before notification, retries failed calls with backoff, and alerts when analysis is delayed. Older indexed trips with a prior report are re-screened one at a time without retrospective push notifications.
 
 The MCP tools expose the vehicle's observed standard OBD PIDs with named units, aligned raw samples, timestamped signal series, chronological trip summaries, prior driving-trip comparisons, fault-code history, data quality and stored reports. Codex can ask follow-up questions of the data and use live web search for relevant standards or manufacturer information. These comparisons identify candidates for investigation, not a failed part by themselves. A MAF change can also reflect temperature, EGR, boost, sensor or route differences. Generic Mode 01 data does not contain per-cylinder misfire counts, and vehicle-specific tolerances require a verified engine variant and applicable documentation. Bench sessions and tiny fragments do not produce trip reports. Missing GPS fixes, data gaps, absent signals and uncertain wall-clock timestamps are excluded from vehicle fault analysis. Provider credentials and the MCP bearer token stay on the host; neither belongs in the firmware.
+
+`sensor_waveforms` returns original voltage and motion acquisitions around an
+event, with per-point timing and collection-quality evidence. Use its
+`start_sequence`, `limit` and `next_sequence` fields to inspect the lead-in and
+recovery. Waveforms are read from the ordered archive; the legacy live API and
+Prometheus gauges do not contain those high-rate vectors. Trip summaries include
+voltage range, motion candidates, cadence and losses.
+
+`compare_baseline` also compares cold idle, warm idle, cold driving and warm
+driving with up to 30 earlier sealed trips from the same device. Driving
+comparisons match RPM, load and speed bins. A comparison needs five reference
+trips and adequate independent acquisitions. Missing ages, stale values and
+insufficient coverage stay explicit. Temperature and idle-RPM boundaries are
+analysis rules, not manufacturer specifications. A difference from earlier
+trips is a reason to investigate; it does not identify a failed part.
 
 Jev is the low-cost trip screen, not the mechanic diagnosing faults or calculating measurements. It returns typed judgments with probabilities; application code decides whether to request a full report. Screening decisions are retained so thresholds and missed cases can be reviewed as the labeled trip archive grows. Numeric measurements and comparisons stay in code, and Codex reads the underlying samples for any escalated trip. The Jev screen requires `OPENROUTER_API_KEY`; without it, non-DTC screening retries rather than silently treating a trip as uninteresting.
 

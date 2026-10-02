@@ -5,6 +5,8 @@ Run from the repository root:
 ```sh
 python3 tools/emulator/run.py --strict --report /tmp/freematics-emulator.json
 python3 tools/emulator/run.py --strict --collector --report /tmp/freematics-emulator-collector.json
+FREEMATICS_WAVEFORM_FIXTURE_OUT=/tmp/freematics-waveform.txt python3 tools/check-sampling-boundary.py
+python3 tools/emulator/run.py --strict --collector --waveform-fixture /tmp/freematics-waveform.txt --report /tmp/freematics-waveform-replay.json
 ```
 
 Requires Python 3 and a C++ compiler (`c++`). No device, credentials or network are required.
@@ -63,6 +65,13 @@ restarts, and then replays the journal. It does not use the production sampling 
 It deliberately loses 12 acknowledgements after acceptance. The collector run verifies all 240 timestamps in the raw
 archive and the final RPM through the live API. It checks each response's exact field count before acknowledgement.
 Retries create duplicate requests. This proves retention for this scenario, not exactly-once ingestion.
+
+The waveform replay command first produces a full production `CBuffer` frame with 16 voltage and motion observations.
+It appends that exact frame to the production durable queue, restarts the fake device, loses the first collector
+acknowledgement after the archive write, then replays the same batch. The check indexes the real collector archive
+with `HistoryIndexer`. It proves that duplicate waveform PID fields retain source order and that each acquisition
+clock, including the 9.80 V short dip, remains available after replay. It does not prove hardware sensor cadence,
+physical microSD persistence or voltage calibration.
 
 A next stage can run the production sampler and recorder together with dummy GNSS, IMU, storage and HTTP inputs.
 That stage must test task ordering, contention and the window between capture and journal persistence.

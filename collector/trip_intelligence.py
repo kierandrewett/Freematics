@@ -23,13 +23,16 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from condition_baselines import contextual_baselines
+from waveforms import waveform_trip_summary
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MOVING_KPH = 5.0
 STOPPED_KPH = 1.0
 STOP_SECONDS = 45
 LOCATION_SECONDS = 15 * 60
 FRESH_MS = 5 * 60 * 1000
-ANALYSIS_REVISION = 4
+ANALYSIS_REVISION = 5
 COLLECTION_LIMIT_TERMS = (
     "gps fix", "gps drop", "missing gps", "no gps", "data gap", "gap count",
     "timestamp", "missing obd", "obd absence", "incomplete logging", "sensor communication failure",
@@ -861,6 +864,8 @@ def evidence_for_trip(history: sqlite3.Connection, trip: sqlite3.Row) -> dict:
         "distance_km": round(max(0, distance_max - distance_min), 2)
             if distance_min is not None and distance_max is not None else None,
         "recent_trip_baseline": previous_trip_baseline(history, device, trip_id),
+        "contextual_condition_baseline": contextual_baselines(history, device, trip_id),
+        "sensor_waveform_summary": waveform_trip_summary(history, device, trip_id),
         "observed_vehicle_signals": signals,
         "driving_dynamics": driving_dynamics(history, device, trip_id),
         "all_observed_obd_pids": obd_metric_inventory(history, device, trip_id),

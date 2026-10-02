@@ -83,3 +83,47 @@ query results. Run the firmware build and focused existing regression checks.
 Apply the similarity-checks skill to changed Python. Commit validated increments.
 Hardware scheduler, SD power-loss behaviour, voltage calibration, actual sensor
 cadence and physical deployment remain separate evidence requirements.
+
+## Verified result, 2 October 2026
+
+- Firmware build passes. Full-catalogue sample plus 16 voltage and 16 motion
+  points uses 2858 RAM bytes and 5052 encoded bytes, within 3072/8192 limits.
+- Production FIFO, buffer and serializer checks cover overflow, invalid input,
+  timestamp zero and rollover, full destination capacity, retry, independent
+  sensor failures, raw motion precision, and wrap-up drain/resume.
+- 38 focused Python checks pass: 11 baseline, 11 waveform and 16 indexer cases.
+- The strict emulator/collector run passes all 53 checks. The new waveform path
+  uses production-serialised input, durable queue restart, lost acknowledgement,
+  real local HTTP ingestion, raw archive indexing and the registered MCP tool.
+- Raw repeated uploads remain auditable. The waveform summary removes exact
+  retries within a bounded recent-frame cache and reports that scope.
+- Registered `compare_baseline`, `data_quality` and `trip_summary` calls pass
+  against indexed synthetic earlier/current trips. Old trips without waveform
+  records report unavailable coverage.
+- `similarity-py collector` ran. Matches in the new production files were shared
+  control/return shapes, not duplicated decoding or baseline implementations.
+  Repeated fixture setup in the E2E tests is intentional.
+
+The full Python discovery run also found one existing GMLAN timestamp assertion
+failure and three Git-mirror tests blocked by this environment's Git identity
+configuration restriction. The GMLAN failure was reproduced from unmodified
+commit `e31f336`; it is separate from these changes. Four Scapy tests were skipped
+because the optional dependency is absent. The full suite is not reported green.
+
+The legacy live-value/cache path omits A0-A4 because its 23-character values
+would truncate vectors and loss counters. It still acknowledges every archived
+field. The new `sensor_waveforms` tool reads complete ordered fields. The A5
+format scalar remains visible in the live API.
+
+Queue payload allocation grows by 1 MiB on PSRAM builds. The maximum test frame
+adds 1599 encoded bytes for 16 pairs; continuous waveforms therefore increase
+storage and upload traffic. Compression and the existing durable queue still
+apply. No finite buffer guarantees recording during a prolonged storage outage.
+
+Local evidence, commands, environment and source hashes are in
+`/home/kieran/vehicle-review-20261002/condition-validation.json`,
+`condition-replay.json`, `condition-mcp.json` and the adjacent check logs. These
+private working files are not part of the repository. No hardware was attached.
+The firmware has not been flashed, and the production collector/analysis services
+have not been updated in this change. Next validation is deployment plus an
+in-car acquisition/cadence and sensor-loss check.

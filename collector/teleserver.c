@@ -909,6 +909,15 @@ int processPayload(char* payload, CHANNEL_DATA* pld, uint16_t eventID)
 			// no valid timestamp yet
 			continue;
 		}
+		/* Waveform groups belong to the ordered archive, written above. The
+		 * legacy current-value/cache slots hold only 23 characters, so they
+		 * cannot represent these vectors and counters without truncation.
+		 * Keep the ACK count complete; use the waveform MCP projection for
+		 * all acquisitions and their own timestamps. A5 is a scalar version. */
+		if (pid >= 0xA0 && pid <= 0xA4) {
+			count++;
+			continue;
+		}
 		// store in table
 		int m = pid >> 8;
 		if (m < PID_MODES) {
