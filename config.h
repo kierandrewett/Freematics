@@ -70,11 +70,11 @@
 **************************************/
 #if BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 2048 /* bytes per slot; retain complete rich samples */
+#define BUFFER_LENGTH 3072 /* bytes per slot; retain complete rich samples and waveform groups */
 #define SERIALIZE_BUFFER_SIZE 49152 /* bytes; one POST, below the collector's 64 KB limit */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
-#define BUFFER_LENGTH 2048 /* bytes per slot */
+#define BUFFER_LENGTH 3072 /* bytes per slot */
 #define SERIALIZE_BUFFER_SIZE 16384 /* bytes */
 #endif
 

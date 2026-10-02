@@ -66,6 +66,14 @@
 #define PID_ACC_PEAK_VECTOR 0x9B
 #define PID_VOLTAGE_MIN 0x9C
 #define PID_VOLTAGE_MAX 0x9D
+// Condition-monitoring waveform format 1. Repeated fields retain raw sensor
+// acquisitions in source order inside an ordinary telemetry frame.
+#define PID_WAVEFORM_VOLTAGE 0xA0
+#define PID_WAVEFORM_MOTION_TIMESTAMP 0xA1
+#define PID_WAVEFORM_RAW_ACCELERATION 0xA2
+#define PID_WAVEFORM_GYRO 0xA3
+#define PID_WAVEFORM_LOSSES 0xA4
+#define PID_WAVEFORM_FORMAT 0xA5
 #define PID_OBD_AGE_BASE 0x400
 #define PID_DTC_AGE_BASE 0x360
 #define DTC_CODE_SLOTS 15

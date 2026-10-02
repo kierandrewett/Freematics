@@ -26,6 +26,7 @@
 #endif
 #include "telestore.h"
 #include "teleclient.h"
+#include "sensorwaveform.h"
 #include "telequeue.h"
 #include "sdaccess.h"
 #if BOARD_HAS_PSRAM
@@ -122,6 +123,7 @@ struct IntervalExtremes {
   uint16_t voltReads;
 };
 IntervalExtremes intervalExtremes = {};
+SensorWaveforms sensorWaveforms;
 
 struct OBDSnapshot {
   PID_POLLING_INFO readings[sizeof(obdData) / sizeof(obdData[0])];
@@ -1545,6 +1547,13 @@ void collectSample()
     buffer->add(PID_WAKE_REASON, ELEMENT_UINT8, &bootWakeReason, sizeof(bootWakeReason));
   }
 
+  // Drain after all ordinary fields. The acquisition task and this boundary
+  // share sensorMux. Pending readings remain in their FIFOs when this frame
+  // has no available capacity.
+  portENTER_CRITICAL(&sensorMux);
+  sensorWaveforms.emit(buffer);
+  portEXIT_CRITICAL(&sensorMux);
+
   buffer->timestamp = startTime;
 
   bufman.publish(buffer);
@@ -1647,8 +1656,14 @@ void process()
     phaseSince = now;
   }
   if (powerPhase == PHASE_WRAP_UP) {
-    // The trip is over. Stop adding readings so the upload window can empty
-    // the backlog; the acquisition tasks keep watching for a resumed trip.
+    // The trip is over. Drain only acquisitions captured before this phase.
+    // The acquisition worker keeps watcher snapshots and interval extrema
+    // current, but does not add waveform points until recording resumes.
+    bool waveformPending;
+    portENTER_CRITICAL(&sensorMux);
+    waveformPending = sensorWaveforms.hasPending();
+    portEXIT_CRITICAL(&sensorMux);
+    if (waveformPending) collectSample();
     vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
     return;
   }
@@ -1923,8 +1938,10 @@ void acquireMEMS(void*)
     // 50 Hz catches the cranking dip whether or not the motion sensor works.
     if (sys.devType > 12) {
       const float voltage = readVehicleVoltage();
+      const uint32_t acquiredMs = millis();
       portENTER_CRITICAL(&sensorMux);
       noteVoltage(intervalExtremes, voltage);
+      if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordVoltage(acquiredMs, voltage);
       portEXIT_CRITICAL(&sensorMux);
     }
 #endif
@@ -1961,11 +1978,14 @@ void acquireMEMS(void*)
     xSemaphoreGive(memsMutex);
     if (success) {
       failures = 0;
+      float rawAcceleration[3];
+      memcpy(rawAcceleration, snapshot.acceleration, sizeof(rawAcceleration));
       for (byte i = 0; i < 3; i++) snapshot.acceleration[i] -= accBias[i];
       snapshot.timestamp = millis();
       portENTER_CRITICAL(&sensorMux);
       memsSnapshot = snapshot;
       noteAcceleration(intervalExtremes, snapshot.acceleration);
+      if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordMotion(snapshot.timestamp, rawAcceleration, snapshot.gyro);
       portEXIT_CRITICAL(&sensorMux);
     } else if (++failures >= 10) {
       state.clear(STATE_MEMS_READY);

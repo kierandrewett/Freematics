@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Guard the firmware sampling boundary against synchronous sensor/storage I/O."""
 from pathlib import Path
+import os
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,8 +39,7 @@ assert 'vTaskDelayUntil' in function('void process()'), 'Sampler needs a fixed d
 process_body = function('void process()')
 assert re.search(r'if \(next == PHASE_STANDBY\) \{\s*state\.clear\(STATE_WORKING\);', process_body), \
     'Sampler may stop only through nextPowerPhase()'
-assert re.search(r'if \(powerPhase == PHASE_WRAP_UP\) \{[^}]*return;', process_body), \
-    'Sampler may pause only in wrap-up'
+assert 'if (powerPhase == PHASE_WRAP_UP)' in process_body, 'Sampler may pause only in wrap-up'
 assert process_body.count('STATE_WORKING') == 1, 'Unexpected extra sampler state change'
 print('PASS: sampler boundary excludes OBD/GNSS acquisition, reconnect, storage and stationary throttling')
 
@@ -72,8 +72,11 @@ code = r'''
 #include <cstdio>
 #include <cassert>
 #include <iostream>
+#include <fstream>
+#include <cmath>
 #include <algorithm>
 using byte=uint8_t;
+using std::isfinite;
 using TickType_t=uint32_t;
 using portMUX_TYPE=int;
 #define portMUX_INITIALIZER_UNLOCKED 0
@@ -90,16 +93,31 @@ void vTaskDelayUntil(TickType_t* deadline, TickType_t interval) { *deadline+=int
 int32_t dataInterval=0;
 void processBLE(int) {}
 uint32_t formattingMs=17;
-void collectSample() {tick+=formattingMs;} // formatting work, no OBD/storage I/O
+void collectSample();
 '''
 code += '\n'.join(line for line in base.splitlines() if line.startswith('#define PID_') or line.startswith('#define DTC_CODE')) + '\n'
 code += '\n'.join(line for line in client_header.splitlines() if line.startswith('#define ')) + '\n'
 # Host exercises the complete full-size device queue/buffer, without allocating
 # the entire PSRAM inventory. Allocation is tested separately by the build.
-code += '#define BUFFER_SLOTS 3\n#define BUFFER_LENGTH 2048\n'
+code += '#define BUFFER_SLOTS 3\n'
+code += re.search(r'^#define BUFFER_LENGTH .*$', config, re.MULTILINE).group(0) + '\n'
 code += '\n'.join(line for line in config.splitlines() if line.startswith('#define SAMPLE_')) + '\n'
 code += storage_header[storage_header.index('class CStorage {'):storage_header.index('class FileLogger')]
 code += client_header[client_header.index('typedef struct {'):client_header.index('class TeleClient\n')]
+code += '#include "sensorwaveform.h"\n'
+code += '''
+SensorWaveforms sensorWaveforms;
+bool collectionBlocked=false;
+unsigned collectionCalls=0;
+void collectSample() {
+    ++collectionCalls;
+    if(!collectionBlocked) {
+        uint8_t memory[BUFFER_LENGTH]; CBuffer sample(memory);
+        sensorWaveforms.emit(&sample);
+    }
+    tick+=formattingMs;
+}
+'''
 code += "#define DTC_STATUS_NO_RESPONSE 0\n#define PID_SPEED 0x0D\n#define PID_RPM 0x0C\n"
 code += source[source.index('typedef struct {'):source.index('CBufferManager bufman;')]
 code += source[source.index('struct OBDSnapshot {'):source.index('OBDSnapshot obdSnapshot = {};')+len('OBDSnapshot obdSnapshot = {};')]
@@ -136,10 +154,11 @@ code += 'uint32_t lastCollectionTime = 0;\n'
 code += 'bool vehicleActivityNow(uint32_t, uint32_t* obd) { *obd = millis(); return true; }\n'
 code += 'float readVehicleVoltage() { return 14.2f; }\n'
 code += 'struct { uint32_t cachedPendingBytes() { return 0; } } durableQueue;\n'
-code += 'uint8_t nextPowerPhase(uint8_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, float, uint32_t, uint16_t) { return PHASE_TRIP; }\n'
+code += 'uint8_t nextPhase=PHASE_TRIP;\n'
+code += 'uint8_t nextPowerPhase(uint8_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, float, uint32_t, uint16_t) { return nextPhase; }\n'
 code += function('void process()') + '\n'
 code += r'''
-int main() {
+int main(int argc, char** argv) {
   CBufferManager queue; queue.init();
   auto* sample=queue.getFree(); sample->timestamp=100;
   queue.publish(sample);
@@ -176,21 +195,117 @@ int main() {
       PID_DEVICE_TEMP,PID_QUEUE_READINGS,PID_QUEUE_BYTES,PID_MISSED_READINGS,PID_DURABLE_QUEUE_BYTES,PID_DURABLE_QUEUE_HEALTH})
       assert(rich.add(pid,ELEMENT_UINT32,&scalar,sizeof(scalar)));
   assert(rich.total>255); // validates widened element count
+  // Waveform failure cases: preserve short excursions between frame times,
+  // timestamp zero/rollover, both sensors independently, raw signed vectors,
+  // invalid inputs, FIFO saturation, and insufficient destination capacity.
+  // The checks run the production FIFO, CBuffer and text serializer together.
+  SensorWaveforms waveform;
+  for (unsigned i=0; i<16; ++i) {
+    const float rawAcc[3]={0.001234f, -0.987654f, 1.012345f};
+    const float rawGyro[3]={-3999.123f, 12.123456f, 0.000123f};
+    assert(waveform.recordVoltage(tick-300+i*20, i==7 ? 9.8f : 14.2f));
+    assert(waveform.recordMotion(tick-299+i*20,rawAcc,rawGyro));
+  }
+  waveform.emit(&rich);
   char frame[SAMPLE_FRAME_SIZE]; CStorageRAM store;store.init(frame,sizeof(frame));
   store.timestamp(tick);rich.serialize(store);
   assert(!store.overflowed());
   std::string encoded(frame,store.length());
   assert(encoded.find("40C:3999999999,")!=std::string::npos); // stale RPM remains explicit
-  std::cout<<"PASS: complete catalogue + ages + DTCs: "<<rich.total<<" fields, "<<rich.offset<<" RAM bytes, "<<store.length()<<" wire bytes\n";
+  auto occurrences=[](const std::string& text,const std::string& needle) {
+    unsigned count=0; size_t position=0;
+    while((position=text.find(needle,position))!=std::string::npos){++count;position+=needle.size();}
+    return count;
+  };
+  assert(occurrences(encoded,",A0:")==16 && occurrences(encoded,",A1:")==16);
+  assert(encoded.find("A2:0.001234;-0.987654;1.012345,")!=std::string::npos);
+  assert(encoded.find("A0:3999999840;980,")!=std::string::npos);
+  assert(encoded.find("A4:0;0;0;0,")!=std::string::npos);
+  assert(encoded.find("A5:1,")!=std::string::npos);
+  std::cout<<"PASS: complete catalogue + ages + DTCs + 16 waveform pairs: "<<rich.total<<" fields, "<<rich.offset<<" RAM bytes, "<<store.length()<<" wire bytes\n";
+  if(argc>1){std::ofstream file(argv[1]);file<<encoded;}
+
+  auto serialise=[&](CBuffer& buffer) {
+    store.purge(); store.timestamp(20); buffer.serialize(store);
+    assert(!store.overflowed()); return std::string(frame,store.length());
+  };
+  auto drain=[&](SensorWaveforms& waves) {
+    rich.purge(); waves.emit(&rich); return serialise(rich);
+  };
+  assert(occurrences(drain(waveform),",A0:")==0); // consumed exactly once
+  SensorWaveforms wrap;
+  const float acceleration[3]={0,0,1}, gyro[3]={0,0,0};
+  for(uint32_t stamp: {0xfffffff0u,0u,20u}) {
+    assert(wrap.recordVoltage(stamp,14));
+    assert(wrap.recordMotion(stamp,acceleration,gyro));
+  }
+  rich.purge(); rich.offset=BUFFER_LENGTH-2; // cannot even fit contract fields
+  const auto oldTotal=rich.total;
+  wrap.emit(&rich);
+  assert(rich.total==oldTotal && rich.offset==BUFFER_LENGTH-2);
+  std::string wrapEncoded=drain(wrap);
+  assert(occurrences(wrapEncoded,",A0:")==3 && occurrences(wrapEncoded,",A1:")==3);
+  assert(wrapEncoded.find("A0:4294967280;1400,")!=std::string::npos);
+  assert(wrapEncoded.find("A1:0,A2:")!=std::string::npos);
+  // Limited space must not emit part of a motion group or consume the FIFO.
+  assert(wrap.recordMotion(40,acceleration,gyro));
+  rich.purge(); rich.offset=BUFFER_LENGTH-30;
+  wrap.emit(&rich);
+  assert(drain(wrap).find("A1:40,A2:")!=std::string::npos);
+  assert(occurrences(drain(wrap),",A1:")==0);
+
+  SensorWaveforms full;
+  for(unsigned i=0;i<128;++i) {
+    assert(full.recordVoltage(i*20,14));
+    assert(full.recordMotion(i*20,acceleration,gyro));
+  }
+  assert(!full.recordVoltage(9999,14));
+  assert(!full.recordMotion(9999,acceleration,gyro));
+  const float invalid[3]={NAN,0,0};
+  assert(!full.recordVoltage(10000,NAN));
+  assert(!full.recordMotion(10000,invalid,gyro));
+  unsigned voltageCount=0,motionCount=0;
+  std::string all;
+  for(unsigned i=0;i<8;++i) {
+    const auto chunk=drain(full);
+    assert(occurrences(chunk,",A0:")==16 && occurrences(chunk,",A1:")==16);
+    voltageCount+=occurrences(chunk,",A0:");motionCount+=occurrences(chunk,",A1:");all+=chunk;
+  }
+  assert(voltageCount==128 && motionCount==128);
+  assert(all.find("A4:1;1;1;1,")!=std::string::npos);
+  assert(all.find("A1:9999,")==std::string::npos);
+  assert(drain(full).find("A4:1;1;1;1,")!=std::string::npos);
+  assert(full.recordVoltage(11000,12.6f));
+  assert(occurrences(drain(full),",A0:")==1);
+  assert(full.recordMotion(11020,acceleration,gyro));
+  const auto motionOnly=drain(full);
+  assert(occurrences(motionOnly,",A0:")==0 && occurrences(motionOnly,",A1:")==1);
+  std::cout<<"PASS: waveform drain exactly once, raw precision, independent sensors, rollover, no partial groups, saturation and invalid-input loss counters\n";
   tick=1000;
   for(int i=0;i<2400;i++){uint32_t before=tick;process();assert(tick-before==250);}
   std::cout<<"PASS: 2400 fixed 250ms deadlines without accumulated 17ms formatting drift\n";
   formattingMs=600;process();assert(bufman.missedReadings()==2);
   std::cout<<"PASS: sampling overload records skipped deadlines rather than fabricating catch-up readings\n";
+  formattingMs=17;
+  for(unsigned i=0;i<32;++i) assert(sensorWaveforms.recordVoltage(tick+i,14));
+  nextPhase=PHASE_WRAP_UP;
+  collectionBlocked=true;
+  unsigned beforeCalls=collectionCalls;
+  process(); // RAM queue unavailable on transition: preserve FIFO, retry later
+  assert(sensorWaveforms.hasPending() && collectionCalls==beforeCalls+1);
+  collectionBlocked=false;
+  process(); assert(sensorWaveforms.hasPending());
+  process(); assert(!sensorWaveforms.hasPending());
+  beforeCalls=collectionCalls;
+  process(); assert(collectionCalls==beforeCalls); // parked state adds no empty samples
+  nextPhase=PHASE_TRIP;
+  process(); assert(powerPhase==PHASE_TRIP && collectionCalls==beforeCalls+1);
+  std::cout<<"PASS: wrap-up retries a blocked final drain, drains pending waveform segments, pauses when empty and resumes collection\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='freematics-sampling-') as directory:
     cpp, binary = Path(directory) / 'sampling.cpp', Path(directory) / 'sampling'
     cpp.write_text(code)
     subprocess.run(['g++', '-std=c++17', '-I', str(ROOT), str(cpp), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    output = os.environ.get("FREEMATICS_WAVEFORM_FIXTURE_OUT")
+    subprocess.run([str(binary), *([output] if output else [])], check=True)
