@@ -16,7 +16,7 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While powered, the sampler records a row every 250 ms from background sensor snapshots. Each held value includes its acquisition age. The OBD worker targets a 250 ms cycle for RPM, speed and rotating core PIDs, with one auxiliary PID interleaved per cycle. This continuously reports every ECU-advertised Mode 01 PID over a rotating scan; the ECU's serial diagnostic link and response latency bound the actual per-PID rate. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
+Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While powered, the sampler records a row every 250 ms from background sensor snapshots. Each held value includes its acquisition age. The OBD worker makes consecutive sequential requests. It targets a fresh reading within 250 ms for RPM and speed and within 1,000 ms for every other supported Mode 01 PID. It selects the PID that has used the greatest fraction of its freshness interval and releases the bridge between requests. Failed reads retain their last successful timestamp and retry no faster than once per second. These are acquisition targets; ECU latency, timeouts and bridge contention can exceed them. The recorded per-PID ages and the Grafana OBD age metric expose that shortfall. Trouble-code scans retain their separate two-minute cadence. Their existing bridge exchange can pause live acquisition for several seconds; include those gaps in any freshness report. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
   
 Data Transmission
 -----------------
@@ -200,8 +200,9 @@ bearer token used by the Caddy-protected collector. Keep these committed
 sampling settings unchanged unless the vehicle test plan records a new
 cadence:
 
-* `OBD_FAST_INTERVAL_MS=250UL`, with RPM plus two rotating core PIDs per cycle
-* `OBD_AUX_INTERVAL_MS=250UL`, with one interleaved auxiliary PID per cycle
+* `OBD_FAST_INTERVAL_MS=250UL`, the RPM and speed freshness target
+* `OBD_PID_INTERVAL_MS=1000UL`, the target for every other supported Mode 01 PID
+* `OBD_FAILED_RETRY_MS=1000UL`, the minimum retry interval after a failed PID
 * `STANDBY_POLL_INTERVAL_MS=250UL`
 
 Copy `.env.example` to the ignored `.env` file once. Set `PRODUCTION_BUILD=1`

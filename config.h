@@ -88,7 +88,6 @@
 // maximum consecutive OBD access errors before entering standby
 #define MAX_OBD_ERRORS 3
 #define OBD_RETRY_INTERVAL_MS 5000UL
-#define OBD_FAST_PIDS_PER_CYCLE 3 /* RPM plus two rotating core metrics */
 // Passive CAN capture is opt-in and bounded. It never transmits a CAN frame.
 #ifndef ENABLE_CAN_CAPTURE
 #define ENABLE_CAN_CAPTURE 0
@@ -198,9 +197,9 @@
 #define RECORD_BLOCK_SIZE 65536UL
 // The CSV trip log is a convenience copy; the SD journal is the durable one.
 #define LOG_FLUSH_INTERVAL_MS 2000UL
-#define OBD_FAST_INTERVAL_MS 250UL /* target 4 Hz RPM and moving-sample cadence */
-#define OBD_AUX_INTERVAL_MS 250UL /* interleave auxiliary reads with core reads */
-#define OBD_AUX_PIDS_PER_CYCLE 1 /* one bounded auxiliary read per cycle */
+#define OBD_FAST_INTERVAL_MS 250UL /* RPM and speed freshness target */
+#define OBD_PID_INTERVAL_MS 1000UL /* freshness target for every other supported Mode 01 PID */
+#define OBD_FAILED_RETRY_MS 1000UL /* do not use spare capacity to hammer a failed PID */
 #define DTC_SCAN_INTERVAL_MS 120000UL /* stored, pending and permanent code scan */
 #define OBD_PID_READ_WARN_MS 200UL /* log a slow Mode 01 response at most once per 10 s */
 

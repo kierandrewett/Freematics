@@ -347,7 +347,7 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_obd_supported_pids gauge\n"
 		"# HELP freematics_obd_timeouts Cumulative OBD read failures since the active session started.\n"
 		"# TYPE freematics_obd_timeouts counter\n"
-		"# HELP freematics_obd_last_latency_milliseconds Duration of the latest OBD request.\n"
+		"# HELP freematics_obd_last_latency_milliseconds Duration of the latest Mode 01 request; older firmware reports the cycle maximum.\n"
 		"# TYPE freematics_obd_last_latency_milliseconds gauge\n"
 		"# HELP freematics_obd_state OBD state: 0 disconnected, 1 ready, 2 degraded.\n"
 		"# TYPE freematics_obd_state gauge\n"

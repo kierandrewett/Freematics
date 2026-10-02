@@ -226,8 +226,14 @@ uint32_t timeoutsNet = 0;
 uint32_t lastStatsTime = 0;
 #if ENABLE_OBD
 byte dtcScanIndex = 0;
-byte fastOBDIndex = 0;
-uint32_t lastOBDFastPoll = 0;
+struct OBDPollState {
+    uint32_t lastAttempt;
+    bool attempted;
+    byte failures;
+};
+OBDPollState obdPollState[sizeof(obdData) / sizeof(obdData[0])] = {};
+byte nextOBDPollIndex = 0;
+uint32_t obdScheduleStarted = 0;
 byte fastOBDFailureCycles = 0;
 uint16_t supportedOBDPIDs = 0;
 uint32_t lastOBDReadLatency = 0;
@@ -320,7 +326,7 @@ void printTimeoutStats()
 #if ENABLE_OBD
 void reportOBDReadFailure(byte pid, const char* tier)
 {
-  // A failing ECU can produce several failures in one polling cycle. One
+  // A failing ECU can cause repeated requests to fail. One
   // rate-limited record gives the operator the cause without hiding useful
   // cellular, GNSS or power messages in repeated counter lines.
   static uint32_t lastReportTime = 0;
@@ -338,28 +344,18 @@ void reportOBDReadFailure(byte pid, const char* tier)
 
 void reportOBDCapabilities()
 {
-  byte supported = 0;
-  byte fast = 0;
-  byte auxiliary = 0;
-  byte inventory = 0;
-  const byte count = sizeof(obdData) / sizeof(obdData[0]);
-  for (byte i = 0; i < count; i++) {
-    if (!obd.isValidPID(obdData[i].pid)) continue;
-    supported++;
-    if (obdData[i].priority == 1) fast++;
-    else if (obdData[i].priority == 2) auxiliary++;
-    else inventory++;
-  }
-  supportedOBDPIDs = supported;
-  Serial.print("[OBD] ECU supports ");
-  Serial.print(supported);
-  Serial.print(" tracked PIDs: ");
-  Serial.print(fast);
-  Serial.print(" fast, ");
-  Serial.print(auxiliary);
-  Serial.print(" auxiliary, ");
-  Serial.print(inventory);
-  Serial.println(" inventory");
+    uint16_t supported = 0;
+    for (const auto& item : obdData) {
+        if (obd.isValidPID(item.pid)) supported++;
+    }
+    supportedOBDPIDs = supported;
+    Serial.print("[OBD] ECU supports ");
+    Serial.print(supported);
+    Serial.print(" tracked PIDs; freshness targets ");
+    Serial.print(OBD_FAST_INTERVAL_MS);
+    Serial.print(" ms RPM/speed, ");
+    Serial.print(OBD_PID_INTERVAL_MS);
+    Serial.println(" ms other live PIDs");
 }
 
 void reportSlowOBDRead(byte pid, const char* tier, uint32_t elapsed)
@@ -376,6 +372,13 @@ void reportSlowOBDRead(byte pid, const char* tier, uint32_t elapsed)
   Serial.print(" response took ");
   Serial.print(elapsed);
   Serial.println(" ms");
+}
+
+void resetOBDSchedule()
+{
+    memset(obdPollState, 0, sizeof(obdPollState));
+    nextOBDPollIndex = 0;
+    obdScheduleStarted = millis();
 }
 
 void clearOBDReadings()
@@ -404,8 +407,7 @@ void clearOBDReadings()
   dtcData[2].statusPid = PID_DTC_PERMANENT_STATUS;
   dtcData[2].status = DTC_STATUS_NO_RESPONSE;
   dtcScanIndex = 0;
-  fastOBDIndex = 0;
-  lastOBDFastPoll = 0;
+  resetOBDSchedule();
   fastOBDFailureCycles = 0;
   supportedOBDPIDs = 0;
   lastOBDReadLatency = 0;
@@ -829,127 +831,110 @@ void emitOBDSnapshot(CBuffer* buffer)
   buffer->add(PID_OBD_FAST_FAILURES, ELEMENT_UINT8, &snapshot.failures, sizeof(snapshot.failures));
 }
 
+int selectOBDPID(uint32_t now)
+{
+    const byte count = sizeof(obdData) / sizeof(obdData[0]);
+    int selected = -1;
+    uint32_t greatestAge = 0;
+    uint32_t selectedInterval = 1;
+    for (byte offset = 0; offset < count; offset++) {
+        const byte index = (nextOBDPollIndex + offset) % count;
+        const auto& item = obdData[index];
+        const auto& poll = obdPollState[index];
+        if (!obd.isValidPID(item.pid)) continue;
+        // Failed requests retain their last successful value and age. Retry
+        // them at a bounded rate even when every other deadline is in future.
+        if (poll.attempted && poll.failures && now - poll.lastAttempt < OBD_FAILED_RETRY_MS) continue;
+        const uint32_t interval = item.pid == PID_RPM || item.pid == PID_SPEED ?
+            OBD_FAST_INTERVAL_MS : OBD_PID_INTERVAL_MS;
+        const uint32_t age = now - (poll.attempted ? poll.lastAttempt : obdScheduleStarted);
+        // Compare the fraction of each freshness budget already used. Core
+        // signals age four times faster, including during the first sweep.
+        // Cross multiplication avoids rounding and floating-point scheduling.
+        if (selected < 0 || (uint64_t)age * selectedInterval > (uint64_t)greatestAge * interval) {
+            selected = index;
+            greatestAge = age;
+            selectedInterval = interval;
+        }
+    }
+    // Use available capacity before deadlines expire. One request per worker
+    // iteration releases the bridge mutex between reads, including timeouts.
+    return selected;
+}
+
 void pollOBD()
 {
-  static byte auxIndex = 0;
-  static uint32_t lastAuxPoll = 0;
-  static bool cadenceReported = false;
-  const byte count = sizeof(obdData) / sizeof(obdData[0]);
+    const uint32_t now = millis();
+    const int selected = selectOBDPID(now);
+    int32_t selectedLateness = 0;
+    if (selected >= 0) {
+        const auto& item = obdData[selected];
+        const auto& poll = obdPollState[selected];
+        const uint32_t interval = item.pid == PID_RPM || item.pid == PID_SPEED ?
+            OBD_FAST_INTERVAL_MS : OBD_PID_INTERVAL_MS;
+        selectedLateness = (int32_t)(now - ((poll.attempted ? poll.lastAttempt : obdScheduleStarted) + interval));
+    }
 
-  if (!cadenceReported) {
-    Serial.print("[OBD] Polling ");
-    Serial.print(OBD_FAST_PIDS_PER_CYCLE);
-    Serial.print(" fast PIDs every ");
-    Serial.print(OBD_FAST_INTERVAL_MS);
-    Serial.print(" ms; rotating auxiliary PIDs every ");
-    Serial.print(OBD_AUX_INTERVAL_MS);
-    Serial.println(" ms");
-    cadenceReported = true;
-  }
-
-  const uint32_t now = millis();
-  const bool fastDue = !lastOBDFastPoll || now - lastOBDFastPoll >= OBD_FAST_INTERVAL_MS;
-  bool fastReadFailed = false;
-  if (fastDue) {
-    lastOBDFastPoll = now;
-    lastOBDReadLatency = 0;
-    byte sampled = 0;
-    // Poll RPM and speed every fast cycle; rotate the remaining core PIDs.
-    for (byte rpmIndex = 0; rpmIndex < count; rpmIndex++) {
-      PID_POLLING_INFO& rpm = obdData[rpmIndex];
-      if ((rpm.pid != PID_RPM && rpm.pid != PID_SPEED) || !obd.isValidPID(rpm.pid)) continue;
-      sampled++;
-      float value;
-      const uint32_t readStarted = millis();
-      const bool read = obd.readPID(rpm.pid, value);
-      const uint32_t elapsed = millis() - readStarted;
-      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
-      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(rpm.pid, "Fast", elapsed);
-      if (!read) {
-        timeoutsOBD++;
-        reportOBDReadFailure(rpm.pid, "Fast");
-        fastReadFailed = true;
-      } else {
-        rpm.ts = millis();
-        rpm.value = value;
+    // Code scans remain periodic jobs. Their existing multi-request bridge
+    // exchange can exceed the live freshness target. Do not interleave live
+    // commands within it without verifying the bridge response contract.
+    const byte diagnostics = sizeof(dtcData) / sizeof(dtcData[0]);
+    int diagnostic = -1;
+    int32_t diagnosticLateness = 0;
+    for (byte offset = 0; offset < diagnostics; offset++) {
+        const byte index = (dtcScanIndex + offset) % diagnostics;
+        const uint32_t due = dtcData[index].lastScan ?
+            dtcData[index].lastScan + DTC_SCAN_INTERVAL_MS : obdScheduleStarted + OBD_PID_INTERVAL_MS;
+        const int32_t lateness = (int32_t)(now - due);
+        if (lateness >= 0 && (selected < 0 || lateness >= selectedLateness) &&
+            (diagnostic < 0 || lateness > diagnosticLateness)) {
+            diagnostic = index;
+            diagnosticLateness = lateness;
+        }
+    }
+    if (diagnostic >= 0) {
+        dtcScanIndex = diagnostic;
+        scanDiagnostics();
         publishOBDSnapshot();
-      }
+        return;
     }
-    byte visited = 0;
-    while (sampled < OBD_FAST_PIDS_PER_CYCLE && visited < count) {
-      if (fastOBDIndex >= count) fastOBDIndex = 0;
-      PID_POLLING_INFO& item = obdData[fastOBDIndex++];
-      visited++;
-      if (item.priority != 1 || item.pid == PID_RPM || item.pid == PID_SPEED || !obd.isValidPID(item.pid)) continue;
-      sampled++;
-      float value;
-      const uint32_t readStarted = millis();
-      const bool read = obd.readPID(item.pid, value);
-      const uint32_t elapsed = millis() - readStarted;
-      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
-      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Fast", elapsed);
-      if (!read) {
+    if (selected < 0) return;
+
+    auto& item = obdData[selected];
+    auto& poll = obdPollState[selected];
+    nextOBDPollIndex = (selected + 1) % (sizeof(obdData) / sizeof(obdData[0]));
+    poll.lastAttempt = millis();
+    poll.attempted = true;
+    float value;
+    const bool read = obd.readPID(item.pid, value);
+    lastOBDReadLatency = millis() - poll.lastAttempt;
+    if (lastOBDReadLatency >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Live", lastOBDReadLatency);
+    if (read) {
+        item.ts = millis();
+        item.value = value;
+        poll.failures = 0;
+    } else {
+        if (poll.failures < 255) poll.failures++;
         timeoutsOBD++;
-        reportOBDReadFailure(item.pid, "Fast");
-        fastReadFailed = true;
-        continue;
-      }
-      item.ts = millis();
-      item.value = value;
-      publishOBDSnapshot();
-
+        reportOBDReadFailure(item.pid, "Live");
     }
-  }
 
-  if (fastDue && fastReadFailed) {
-    if (++fastOBDFailureCycles >= MAX_OBD_ERRORS) {
-      Serial.println("[OBD] Fast PID failures persisted; clearing ECU session");
-      state.clear(STATE_OBD_READY);
+    // Auxiliary success must not conceal repeated failures on either signal
+    // used to decide whether the engine runs or the vehicle moves.
+    fastOBDFailureCycles = 0;
+    for (byte index = 0; index < sizeof(obdData) / sizeof(obdData[0]); index++) {
+        if ((obdData[index].pid == PID_RPM || obdData[index].pid == PID_SPEED) &&
+            obd.isValidPID(obdData[index].pid) && obdPollState[index].failures > fastOBDFailureCycles) {
+            fastOBDFailureCycles = obdPollState[index].failures;
+        }
     }
-    // Do not add lower-priority traffic while the fast probe is unstable.
-    return;
-  }
-  if (fastDue) fastOBDFailureCycles = 0;
-
-  // Interleave auxiliary reads with the core schedule so a large burst cannot
-  // stall collection. Bound attempted reads, including timeouts, so an ECU
-  // that stops responding cannot turn one cycle into a full-catalogue scan.
-  if (!lastAuxPoll || now - lastAuxPoll >= OBD_AUX_INTERVAL_MS) {
-    lastAuxPoll = now;
-    byte sampled = 0;
-    byte visited = 0;
-    while (sampled < OBD_AUX_PIDS_PER_CYCLE && visited < count) {
-      if (auxIndex >= count) auxIndex = 0;
-      PID_POLLING_INFO& item = obdData[auxIndex++];
-      visited++;
-      if (item.priority == 1 || !obd.isValidPID(item.pid)) continue;
-      sampled++;
-      float value;
-      const uint32_t readStarted = millis();
-      const bool read = obd.readPID(item.pid, value);
-      const uint32_t elapsed = millis() - readStarted;
-      if (elapsed > lastOBDReadLatency) lastOBDReadLatency = elapsed;
-      if (elapsed >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Auxiliary", elapsed);
-      if (!read) {
-        timeoutsOBD++;
-        reportOBDReadFailure(item.pid, "Auxiliary");
-        continue;
-      }
-      item.ts = millis();
-      item.value = value;
-      publishOBDSnapshot();
+    if (fastOBDFailureCycles >= MAX_OBD_ERRORS) {
+        Serial.println("[OBD] Core PID failures persisted; clearing ECU session");
+        state.clear(STATE_OBD_READY);
     }
-  }
-
-  for (byte offset = 0; offset < sizeof(dtcData) / sizeof(dtcData[0]); offset++) {
-    const byte index = (dtcScanIndex + offset) % (sizeof(dtcData) / sizeof(dtcData[0]));
-    if (!dtcData[index].lastScan || millis() - dtcData[index].lastScan >= DTC_SCAN_INTERVAL_MS) {
-      dtcScanIndex = index;
-      scanDiagnostics();
-      break;
-    }
-  }
+    publishOBDSnapshot();
 }
+
 #endif
 
 bool initGPS()
@@ -1851,6 +1836,7 @@ void acquireOBD(void*)
         if (vehiclePowerPresent() && obd.init(PROTO_AUTO, true)) {
           state.set(STATE_OBD_READY);
           fastOBDFailureCycles = 0;
+          resetOBDSchedule();
           reportOBDCapabilities();
           char buf[128];
           if (obd.getVIN(buf, sizeof(buf))) {

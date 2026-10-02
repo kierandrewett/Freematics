@@ -209,9 +209,29 @@ by Caddy on both public and private ingress, so production firmware must be
 built with the device's 64-character bearer token obtained through the
 authorised server-secret process. Keep the committed production cadence:
 
-* `OBD_FAST_INTERVAL_MS=250UL`, with RPM plus two rotating core PIDs per cycle
-* `OBD_AUX_INTERVAL_MS=250UL`, with one interleaved auxiliary PID per cycle
+* `OBD_FAST_INTERVAL_MS=250UL`, the RPM and speed freshness target
+* `OBD_PID_INTERVAL_MS=1000UL`, the target for every other supported Mode 01 PID
+* `OBD_FAILED_RETRY_MS=1000UL`, the minimum retry interval after a failed PID
 * `STANDBY_POLL_INTERVAL_MS=250UL`
+
+The 2 October source change replaces the one-auxiliary-read-per-250-ms quota
+with consecutive sequential requests. Select readings by the fraction of their
+freshness interval already used. Release the bridge between requests. Keep
+stored, pending and permanent code scans on their two-minute cadence. A code
+scan can pause live acquisition for several seconds. Include it in the measured
+gaps; do not claim continuous one-second coverage from a run that omits it.
+
+After flashing, verify all supported live PIDs at warm idle and during a drive.
+For each recorded row, subtract the PID's acquisition age (0x400 | PID) from
+the row timestamp. Repeated acquisition timestamps are held readings. Measure
+gaps only between distinct acquisitions and handle uint32 clock rollover.
+The acceptance target is a maximum 1,000 ms gap for every supported live PID,
+and 250 ms for RPM and speed where link capacity permits. Include initial
+acquisition, fault-code scan windows and recovery after an ECU timeout in the
+report. An ECU timeout may exceed the target; retain and report that gap.
+The `freematics_obd_value_age_seconds` metric includes device acquisition age
+and elapsed time at the collector; network outages add delivery delay.
+A host scheduler check is not proof that the installed car meets these targets.
 
 Build the image, record its hash, then flash it. Before running this block,
 manually confirm that `local_config.h` contains the intended deployment server
