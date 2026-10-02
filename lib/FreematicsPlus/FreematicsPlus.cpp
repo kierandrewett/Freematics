@@ -278,8 +278,10 @@ int CLink_UART::receive(char* buffer, int bufsize, unsigned int timeout)
 		if (len < 0) break;
 		if (len == 0) continue;
 		buffer[n + len] = 0;
-		if (strstr(buffer + n, "\r>")) {
-			n = n + len - 1;
+		const char* prompt = strstr(buffer, "\r>");
+		if (prompt) {
+			// Retain the response's final CR, as the previous single-read path did.
+			n = prompt - buffer + 1;
 			buffer[n] = 0;
 			break;
 		}
