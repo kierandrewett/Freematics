@@ -94,6 +94,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_version_policy.cpp -o /tmp/test_ota_version_policy
 /tmp/test_ota_version_policy
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \\
+  tools/test_ota_stage_policy.cpp -o /tmp/test_ota_stage_policy
+/tmp/test_ota_stage_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 ```
 

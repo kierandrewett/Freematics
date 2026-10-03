@@ -4,6 +4,7 @@
 #include "config.h"
 #include "ota_release_policy.h"
 #include "ota_sha256_sidecar.h"
+#include "ota_stage_policy.h"
 #include "ota_version_policy.h"
 
 #include <esp_ota_ops.h>
@@ -170,6 +171,22 @@ void eraseDigest(const char* key)
   nvs_close(handle);
 }
 
+struct StageOperations {
+  FirmwareWriter& firmware;
+  const uint8_t* digest;
+  const esp_partition_t* partition;
+
+  void abortImage() { esp_ota_abort(firmware.handle); }
+  bool finishImage() { return esp_ota_end(firmware.handle) == ESP_OK; }
+  bool writePendingDigest() {
+    return writeDigest(kPendingDigestKey, digest);
+  }
+  void erasePendingDigest() { eraseDigest(kPendingDigestKey); }
+  bool selectBootPartition() {
+    return esp_ota_set_boot_partition(partition) == ESP_OK;
+  }
+};
+
 } // namespace
 
 #if ENABLE_OTA
@@ -272,21 +289,19 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     esp_ota_abort(firmware.handle);
     return OTA_ATTEMPT_CANCELLED;
   }
-  if (esp_ota_end(firmware.handle) != ESP_OK) {
+  StageOperations stage = {firmware, calculatedDigest, updatePartition};
+  const freematics::ota::StageResult staged =
+      freematics::ota::stageVerifiedImage(stage, cancelRequested);
+  if (staged == freematics::ota::kStageCancelled) return OTA_ATTEMPT_CANCELLED;
+  if (staged == freematics::ota::kStageImageFinishFailed) {
     Serial.println("[OTA] Image validation failed");
     return OTA_ATTEMPT_FAILED;
   }
-  if (cancelled(cancelRequested)) return OTA_ATTEMPT_CANCELLED;
-  if (!writeDigest(kPendingDigestKey, calculatedDigest)) {
+  if (staged == freematics::ota::kStagePendingDigestFailed) {
     Serial.println("[OTA] Could not journal pending release identity");
     return OTA_ATTEMPT_FAILED;
   }
-  if (cancelled(cancelRequested)) {
-    eraseDigest(kPendingDigestKey);
-    return OTA_ATTEMPT_CANCELLED;
-  }
-  if (esp_ota_set_boot_partition(updatePartition) != ESP_OK) {
-    eraseDigest(kPendingDigestKey);
+  if (staged == freematics::ota::kStageBootSelectionFailed) {
     Serial.println("[OTA] Could not select the inactive image");
     return OTA_ATTEMPT_FAILED;
   }
