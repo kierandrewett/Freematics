@@ -3,6 +3,7 @@
 #include "config.h"
 #include "sdaccess.h"
 #include "sdarchive.h"
+#include <errno.h>
 #include <time.h>
 
 void CStorage::log(uint16_t pid, uint8_t values[], uint8_t count)
@@ -209,14 +210,25 @@ bool SDLogger::init()
     Serial.println("[STORAGE] SD provisioning image: unformatted card may be formatted now");
     mounted = SD.begin(PIN_SD_CS, SPI, SPI_FREQ, "/sd", 5, true);
 #else
-    // Power and SPI can settle after the ESP32 starts. Retry the mount before
-    // falling back to the finite RAM queue; never format a production card.
+    // Power and SPI can settle after the ESP32 starts. Retry the mount, but
+    // never format a production card or treat RAM as durable fallback storage.
     for (uint8_t attempt = 0; attempt < 3 && !mounted; attempt++) {
         if (attempt) {
             SD.end();
             delay(250);
         }
+        const uint32_t started = millis();
+        Serial.print("[SD-DIAG] mount begin attempt=");
+        Serial.print(attempt + 1);
+        Serial.print("/3 spi_hz=");
+        Serial.println(SPI_FREQ);
         mounted = SD.begin(PIN_SD_CS, SPI, SPI_FREQ);
+        Serial.print("[SD-DIAG] mount ");
+        Serial.print(mounted ? "ok" : "failed");
+        Serial.print(" attempt=");
+        Serial.print(attempt + 1);
+        Serial.print(" elapsed_ms=");
+        Serial.println(millis() - started);
     }
 #endif
     if (mounted) {
@@ -266,7 +278,8 @@ uint32_t SDLogger::begin()
     Serial.println(path);
     m_file = SD.open(path, FILE_WRITE);
     if (!m_file) {
-        Serial.println("File error");
+        Serial.print("[SD-DIAG] csv open failed errno=");
+        Serial.println(errno);
         m_id = 0;
     }
     m_dataCount = 0;

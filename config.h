@@ -43,6 +43,9 @@
 #ifndef FREEMATICS_BUILD_ID
 #define FREEMATICS_BUILD_ID "unknown"
 #endif
+#ifndef FREEMATICS_TOKEN_EMBEDDED
+#define FREEMATICS_TOKEN_EMBEDDED 0
+#endif
 
 /**************************************
 * Configuration Definitions
@@ -65,15 +68,30 @@
 #endif
 #endif
 
+// Keep unattended OTA opt-in until the cellular and car-off hardware tests
+// have been completed. The ota-test PlatformIO environment enables it only
+// for validation builds.
+#ifndef ENABLE_OTA
+#define ENABLE_OTA 0
+#endif
+#ifndef FREEMATICS_OTA_RELEASE_BUILD
+#define FREEMATICS_OTA_RELEASE_BUILD 0
+#endif
+
 /**************************************
 * Circular Buffer Configuration
 **************************************/
-#if BOARD_HAS_PSRAM
+#if STORAGE == STORAGE_SD
+#define BUFFER_SLOTS 8 /* bounded sampler-to-journal handoff; never an outage spool */
+#elif BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
-#define BUFFER_LENGTH 3072 /* bytes per slot; retain complete rich samples and waveform groups */
-#define SERIALIZE_BUFFER_SIZE 49152 /* bytes; one POST, below the collector's 64 KB limit */
 #else
 #define BUFFER_SLOTS 32 /* max number of buffer slots */
+#endif
+#if BOARD_HAS_PSRAM
+#define BUFFER_LENGTH 3072 /* bytes; retain complete rich samples and waveform groups */
+#define SERIALIZE_BUFFER_SIZE 49152 /* bytes; one POST, below the collector's 64 KB limit */
+#else
 #define BUFFER_LENGTH 3072 /* bytes per slot */
 #define SERIALIZE_BUFFER_SIZE 16384 /* bytes */
 #endif
@@ -202,6 +220,10 @@
 #define OBD_FAILED_RETRY_MS 1000UL /* do not use spare capacity to hammer a failed PID */
 #define DTC_SCAN_INTERVAL_MS 120000UL /* stored, pending and permanent code scan */
 #define OBD_PID_READ_WARN_MS 200UL /* log a slow Mode 01 response at most once per 10 s */
+
+// OTA is checked only while parked, after the separate one-hour motion/OBD
+// gate. This is a cadence, not a local-time window.
+#define OTA_CHECK_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
 
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */

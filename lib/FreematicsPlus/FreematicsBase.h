@@ -10,6 +10,11 @@
 
 #include <Arduino.h>
 
+// The RTC value restored from NVS is only a hint until synchronized during
+// this boot. Capture timestamps must not claim UTC validity before then.
+bool freematicsSystemTimeTrusted();
+void freematicsMarkSystemTimeTrusted();
+
 // non-OBD/custom PIDs (no mode number)
 #define PID_GPS_LATITUDE 0xA
 #define PID_GPS_LONGITUDE 0xB
@@ -54,6 +59,8 @@
 #define PID_DURABLE_QUEUE_BYTES 0x8D
 #define PID_MISSED_READINGS 0x8E
 #define PID_DURABLE_QUEUE_HEALTH 0x8F
+#define PID_CAPTURE_UTC_SECONDS 0x90
+#define PID_CAPTURE_UTC_MILLISECONDS 0x91
 #define PID_CAN_FRAME 0x92
 #define PID_GPS_AGE 0x93
 #define PID_VOLTAGE_AGE 0x94
@@ -119,6 +126,7 @@ public:
 class CFreematics
 {
 public:
+	typedef bool (*ContinueCheck)(void* context);
 	virtual void begin() {}
 	// start xBee UART communication
 	virtual bool xbBegin(unsigned long baudrate = 115200L, int pinRx = 0, int pinTx = 0) = 0;
@@ -131,6 +139,13 @@ public:
 	virtual void xbWrite(const char* data, int len) = 0;
 	// receive data from xBee UART (returns 0/1/2)
 	virtual int xbReceive(char* buffer, int bufsize, unsigned int timeout = 1000, const char** expected = 0, byte expectedCount = 0) = 0;
+	// Additive cancellable receive; legacy device implementations remain compatible.
+	virtual int xbReceiveCancellable(char* buffer, int bufsize, unsigned int timeout,
+		const char** expected, byte expectedCount, ContinueCheck continueCheck, void* context) {
+		if (continueCheck && !continueCheck(context)) return -2;
+		int result = xbReceive(buffer, bufsize, timeout, expected, expectedCount);
+		return continueCheck && !continueCheck(context) ? -2 : result;
+	}
 	// purge xBee UART buffer
 	virtual void xbPurge() = 0;
 	// toggle xBee module power

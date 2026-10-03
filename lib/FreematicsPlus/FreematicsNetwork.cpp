@@ -10,11 +10,22 @@ on
 #include <time.h>
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
+#include "esp_sntp.h"
+
+namespace {
+bool waitCellularDelay(unsigned durationMs, CFreematics::ContinueCheck check, void* context)
+{
+    for (unsigned waited = 0; waited < durationMs; waited += 25) {
+        if (check && !check(context)) return false;
+        delay(min(25U, durationMs - waited));
+    }
+    return !check || check(context);
+}
+}
 #include "FreematicsCellTLS.h"
 
-// ISRG Root X1 is the trust anchor for the RSA Let's Encrypt chain used by the
-// production telemetry endpoint. Keep this as a root CA rather than pinning a
-// short-lived leaf certificate so normal certificate renewal keeps working.
+// CA bundle for the production Let's Encrypt endpoint and GitHub OTA releases.
+// Keep trust anchors here rather than pinning short-lived leaf certificates.
 static const char TLS_ROOT_CA[] PROGMEM = R"CERT(-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
 TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
@@ -46,22 +57,42 @@ oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
 mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
 emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIICOjCCAcGgAwIBAgIQQvLM2htpN0RfFf51KBC49DAKBggqhkjOPQQDAzBfMQsw
+CQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMTYwNAYDVQQDEy1T
+ZWN0aWdvIFB1YmxpYyBTZXJ2ZXIgQXV0aGVudGljYXRpb24gUm9vdCBFNDYwHhcN
+MjEwMzIyMDAwMDAwWhcNNDYwMzIxMjM1OTU5WjBfMQswCQYDVQQGEwJHQjEYMBYG
+A1UEChMPU2VjdGlnbyBMaW1pdGVkMTYwNAYDVQQDEy1TZWN0aWdvIFB1YmxpYyBT
+ZXJ2ZXIgQXV0aGVudGljYXRpb24gUm9vdCBFNDYwdjAQBgcqhkjOPQIBBgUrgQQA
+IgNiAAR2+pmpbiDt+dd34wc7qNs9Xzjoq1WmVk/WSOrsfy2qw7LFeeyZYX8QeccC
+WvkEN/U0NSt3zn8gj1KjAIns1aeibVvjS5KToID1AZTc8GgHHs3u/iVStSBDHBv+
+6xnOQ6OjQjBAMB0GA1UdDgQWBBTRItpMWfFLXyY4qp3W7usNw/upYTAOBgNVHQ8B
+Af8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNnADBkAjAn7qRa
+qCG76UeXlImldCBteU/IvZNeWBj7LRoAasm4PdCkT0RHlAFWovgzJQxC36oCMB3q
+4S6ILuH5px0CMk7yn2xVdOOurvulGu7t0vzCAxHrRVxgED1cf5kDW21USAGKcw==
+-----END CERTIFICATE-----
 )CERT";
+
+static void onSystemTimeSync(struct timeval* tv)
+{
+  if (tv && tv->tv_sec >= 1704067200) freematicsMarkSystemTimeTrusted();
+}
 
 static bool systemTimeIsValid()
 {
   time_t now;
   time(&now);
-  if (now >= 1704067200) return true; // 2024-01-01
+  if (freematicsSystemTimeTrusted() && now >= 1704067200) return true; // 2024-01-01
 
   Serial.println("[TIME] Synchronising ESP32 clock by NTP over Wi-Fi");
+  sntp_set_time_sync_notification_cb(onSystemTimeSync);
   configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
   uint32_t started = millis();
   do {
     delay(100);
     time(&now);
-  } while (now < 1704067200 && millis() - started < 10000);
-  bool valid = now >= 1704067200;
+  } while ((!freematicsSystemTimeTrusted() || now < 1704067200) && millis() - started < 10000);
+  bool valid = freematicsSystemTimeTrusted() && now >= 1704067200;
   if (valid) Serial.println("[TIME] ESP32 clock synchronised by NTP over Wi-Fi");
   return valid;
 }
@@ -284,14 +315,18 @@ bool CellSIMCOM::begin(CFreematics* device)
   getBuffer();
   m_device = device;
   for (byte n = 0; n < 30; n++) {
+    if (!shouldContinue()) return false;
     device->xbPurge();
     // sys.begin() already powers the module. Toggling a responding module
     // starts a shutdown while the following AT commands can still succeed.
     if (!check(1000)) {
+      if (!shouldContinue()) return false;
       device->xbTogglePower(200);
-      delay(1500);
+      for (unsigned waited = 0; waited < 1500 && shouldContinue(); waited += 25) delay(25);
     }
+    if (!shouldContinue()) return false;
     if (!check(2000)) continue;
+    if (!shouldContinue()) return false;
     if (sendCommand("ATE0\r") && sendCommand("ATI\r")) {
       // retrieve module info
       //Serial.print(m_buffer);
@@ -334,24 +369,31 @@ bool CellSIMCOM::begin(CFreematics* device)
 
 void CellSIMCOM::end()
 {
+  if (!shouldContinue()) {
+    // Cancellation must not wait on modem UART replies; force the parked radio
+    // down before returning the shared coprocessor to vehicle acquisition.
+    if (m_device) m_device->xbTogglePower(2510);
+    return;
+  }
   setGPS(false);
   if (m_type == CELL_SIM7070) {
     if (!sendCommand("AT+CPOWD=1\r", 1000, "NORMAL POWER DOWN")) {
       if (m_device) m_device->xbTogglePower(2510);
     } else {
-      delay(1500);
+      waitCellularDelay(1500, m_continueCheck, m_continueContext);
     }
   } else {
     if (!sendCommand("AT+CPOF\r")) {
       if (m_device) m_device->xbTogglePower(2510);
     } else {
-      delay(1500);
+      waitCellularDelay(1500, m_continueCheck, m_continueContext);
     }
   }
 }
 
 bool CellSIMCOM::setup(const char* apn, const char* username, const char* password, unsigned int timeout)
 {
+  if (!shouldContinue()) return false;
   uint32_t t = millis();
   bool success = false;
   if (m_type == CELL_SIM7670) sendCommand("AT+CTZU=1\r");
@@ -362,7 +404,7 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
         success = false;
         sendCommand("AT+CFUN=1\r");
         do {
-          delay(500);
+          if (!waitCellularDelay(500, m_continueCheck, m_continueContext)) return false;
           if (sendCommand("AT+CGREG?\r",1000, "+CGREG: 0,")) {
             char *p = strstr(m_buffer, "+CGREG: 0,");
             if (p) {
@@ -370,11 +412,11 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
               success = ret == '1' || ret == '5';
             }
           }
-        } while (!success && millis() - t < timeout);
+        } while (!success && shouldContinue() && millis() - t < timeout);
         if (!success) break;
         success = sendCommand("AT+CGACT?\r", 1000, "+CGACT: 1,");
         break;
-      } while (millis() - t < timeout);
+      } while (shouldContinue() && millis() - t < timeout);
       if (!success) break;
 
       sendCommand("AT+CGNAPN\r");
@@ -393,27 +435,29 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
   } else {
     do {
       do {
+        if (!shouldContinue()) return false;
         m_device->xbWrite("AT+CPSI?\r");
         m_buffer[0] = 0;
         const char* answers[] = {"NO SERVICE", ",Online", ",Offline", ",Low Power Mode"};
-        int ret = m_device->xbReceive(m_buffer, RECV_BUF_SIZE, 500, answers, 4);
+        int ret = m_device->xbReceiveCancellable(m_buffer, RECV_BUF_SIZE, 500, answers, 4,
+            m_continueCheck, m_continueContext);
         if (ret == 2) {
           success = true;
           break;
         }
         if (ret == -1 || ret == 4) break;
-        delay(500);
-      } while (millis() - t < timeout);
+        if (!waitCellularDelay(500, m_continueCheck, m_continueContext)) return false;
+      } while (shouldContinue() && millis() - t < timeout);
       if (!success) break;
 
       success = false;
       do {
-        delay(100);
+        if (!waitCellularDelay(100, m_continueCheck, m_continueContext)) return false;
         if (sendCommand("AT+CREG?\r", 1000, "+CREG: 0,")) {
           char *p = strstr(m_buffer, "+CREG: 0,");
           success = p && (*(p + 9) == '1' || *(p + 9) == '5' || *(p + 9) == '6');
         }
-      } while (!success && millis() - t < timeout);
+      } while (!success && shouldContinue() && millis() - t < timeout);
       if (!success) break;
       
       /*
@@ -425,7 +469,7 @@ bool CellSIMCOM::setup(const char* apn, const char* username, const char* passwo
             char *p = strstr(m_buffer, "+CGREG: 0,");
             success = (p && (*(p + 10) == '1' || *(p + 10) == '5'));
           }
-        } while (!success && millis() - t < timeout);
+      } while (!success && shouldContinue() && millis() - t < timeout);
         if (!success) break;
       }
       */
@@ -600,19 +644,23 @@ bool CellSIMCOM::check(unsigned int timeout)
 {
   uint32_t t = millis();
   do {
+      if (!shouldContinue()) return false;
       if (sendCommand("AT\rAT\r", 250)) return true;
-  } while (millis() - t < timeout);
+  } while (shouldContinue() && millis() - t < timeout);
   return false;
 }
 
 bool CellSIMCOM::checkSIM(const char* pin)
 {
+  if (!shouldContinue()) return false;
   bool success;
   if (pin && *pin) {
     snprintf(m_buffer, RECV_BUF_SIZE, "AT+CPIN=\"%s\"\r", pin);
     sendCommand(m_buffer);
   }
-  for (byte n = 0; n < 20 && !(success = sendCommand("AT+CPIN?\r", 500, ": READY")); n++);
+  for (byte n = 0; n < 20 && shouldContinue() &&
+       !(success = sendCommand("AT+CPIN?\r", 500, ": READY")); n++);
+  if (!shouldContinue()) return false;
   if (!success) {
     // avoid SIM card lockout
     sendCommand("AT+RPMPARAM=0\r");
@@ -657,13 +705,16 @@ String CellSIMCOM::queryIP(const char* host)
 
 bool CellSIMCOM::sendCommand(const char* cmd, unsigned int timeout, const char* expected)
 {
+  if (!m_device || !shouldContinue()) return false;
   if (cmd) {
     m_device->xbWrite(cmd);
     delay(10);
   }
   m_buffer[0] = 0;
   const char* answers[] = {"\r\nOK", "\r\nERROR"};
-  byte ret = m_device->xbReceive(m_buffer, RECV_BUF_SIZE, timeout, expected ? &expected : answers, expected ? 1 : 2);
+  int ret = m_device->xbReceiveCancellable(m_buffer, RECV_BUF_SIZE, timeout,
+      expected ? &expected : answers, expected ? 1 : 2,
+      m_continueCheck, m_continueContext);
   inbound();
   return ret == 1;
 }
@@ -863,6 +914,7 @@ void CellHTTP::init()
     // out of the path and verify HTTPS on the ESP32 over cellular TCP.
     if (!m_cellTLS) m_cellTLS = new CellularTLS;
     m_cellTLS->begin(m_device);
+    m_cellTLS->setContinueCheck(m_continueCheck, m_continueContext);
     m_cellTLS->close();
     m_clockRefreshed = false;
     m_tlsReady = true;
@@ -873,6 +925,12 @@ void CellHTTP::init()
   } else {
     m_tlsReady = true;
   }
+}
+
+void CellHTTP::setContinueCheck(CFreematics::ContinueCheck check, void* context)
+{
+  CellSIMCOM::setContinueCheck(check, context);
+  if (m_cellTLS) m_cellTLS->setContinueCheck(check, context);
 }
 
 bool CellHTTP::open(const char* host, uint16_t port)
@@ -1019,6 +1077,69 @@ bool CellHTTP::send(HTTP_METHOD method, const char* host, uint16_t port, const c
   Serial.println(m_buffer);
   m_state = HTTP_ERROR;
   return false;
+}
+
+bool CellHTTP::getStream(const char* host, uint16_t port, const char* path,
+                         uint32_t maxContentLength, CellHTTPBodyWriter writer,
+                         void* context, CellHTTPStreamResponse* response,
+                         unsigned timeout, CellHTTPContinueCheck continueCheck,
+                         void* continueContext)
+{
+  if (!host || !*host || !path || path[0] != '/' || !writer || !response ||
+      port != 443 || m_type != CELL_SIM7670 || !m_cellTLS || !m_tlsReady) {
+    m_state = HTTP_ERROR;
+    return false;
+  }
+  // Callers supply fixed/allowlisted hosts and validated paths. Also enforce
+  // HTTP-line safety here so this API cannot inject headers accidentally.
+  for (const char* p = host; *p; p++) {
+    if ((unsigned char)*p <= 0x20 || *p == 0x7f || *p == '"' || *p == '\\') {
+      m_state = HTTP_ERROR;
+      return false;
+    }
+  }
+  for (const char* p = path; *p; p++) {
+    if ((unsigned char)*p <= 0x20 || *p == 0x7f || *p == '\r' || *p == '\n') {
+      m_state = HTTP_ERROR;
+      return false;
+    }
+  }
+
+  memset(response, 0, sizeof(*response));
+  m_cellTLS->setContinueCheck(continueCheck, continueContext);
+  struct ContinueCheckReset {
+    CellularTLS* tls;
+    CFreematics::ContinueCheck check;
+    void* context;
+    ~ContinueCheckReset() { if (tls) tls->setContinueCheck(check, context); }
+  } resetCheck = {m_cellTLS, m_continueCheck, m_continueContext};
+  if (!open(host, port)) return false;
+
+  char request[4096];
+  const int requestLength = snprintf(request, sizeof(request),
+      "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Freematics-OTA/1\r\n"
+      "Accept: application/octet-stream\r\nAccept-Encoding: identity\r\n"
+      "Connection: close\r\n\r\n", path, host);
+  if (requestLength <= 0 || (size_t)requestLength >= sizeof(request) ||
+      !m_cellTLS->write(request, (size_t)requestLength)) {
+    close();
+    m_state = HTTP_ERROR;
+    return false;
+  }
+
+  CellularTLS::HTTPResponseInfo streamInfo = {};
+  const bool received = m_cellTLS->streamResponse(maxContentLength, writer, context,
+                                                   &streamInfo, timeout);
+  response->status = streamInfo.status;
+  response->contentLength = streamInfo.contentLength;
+  memcpy(response->location, streamInfo.location, sizeof(response->location));
+  if (!received) {
+    close();
+    m_state = HTTP_ERROR;
+    return false;
+  }
+  m_state = HTTP_SENT;
+  return true;
 }
 
 char* CellHTTP::receive(int* pbytes, unsigned int timeout)

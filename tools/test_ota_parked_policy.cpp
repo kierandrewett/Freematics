@@ -1,0 +1,136 @@
+#include "../ota_parked_policy.h"
+
+#include <assert.h>
+#include <stdio.h>
+
+typedef OTAParkedPolicy Policy;
+
+static Policy::Signal signal(float value, uint32_t sampledAt, uint32_t maxAge = 1000) {
+  Policy::Signal result = {true, true, sampledAt, maxAge, value};
+  return result;
+}
+
+static Policy::Observation parked(uint32_t sampledAt) {
+  Policy::Observation result = {
+      false, false, true, true,
+      signal(0.0f, sampledAt), signal(0.0f, sampledAt), signal(12.5f, sampledAt),
+  };
+  return result;
+}
+
+static void quietSamples(Policy& policy, uint32_t start, uint32_t end) {
+  for (uint32_t at = start; (uint32_t)(at - start) <= (uint32_t)(end - start); at += 250)
+    policy.observeMotionSample(at, true, false);
+}
+
+static void testRequiresAnHourOfContinuousSensorEvidence() {
+  Policy policy;
+  policy.beginBoot(100);
+  Policy::Observation state = parked(100 + Policy::kRequiredQuietMs);
+  assert(policy.observe(100 + Policy::kRequiredQuietMs, state) == Policy::kMotionUnavailable);
+
+  quietSamples(policy, 100, 100 + Policy::kRequiredQuietMs - 1);
+  state = parked(100 + Policy::kRequiredQuietMs - 1);
+  assert(policy.observe(100 + Policy::kRequiredQuietMs - 1, state) == Policy::kQuietPeriod);
+  policy.observeMotionSample(100 + Policy::kRequiredQuietMs, true, false);
+  state = parked(100 + Policy::kRequiredQuietMs);
+  assert(policy.observe(100 + Policy::kRequiredQuietMs, state) == Policy::kEligible);
+}
+
+static void testMotionInvalidSampleAndLongGapRestartTimer() {
+  Policy policy;
+  policy.beginBoot(0);
+  quietSamples(policy, 0, Policy::kRequiredQuietMs);
+  uint32_t at = Policy::kRequiredQuietMs + 250;
+  policy.observeMotionSample(at, true, true);
+  assert(policy.quietDurationMs(at) == 0);
+  quietSamples(policy, at + 250, at + 250 + Policy::kRequiredQuietMs);
+  assert(policy.observe(at + 250 + Policy::kRequiredQuietMs,
+                        parked(at + 250 + Policy::kRequiredQuietMs)) == Policy::kEligible);
+
+  at += Policy::kRequiredQuietMs + 500;
+  policy.observeMotionSample(at, false, false);
+  assert(!policy.motionProofCurrent(at));
+  assert(policy.observe(at, parked(at)) == Policy::kMotionUnavailable);
+  policy.observeMotionSample(at + 250, true, false);
+  assert(policy.quietDurationMs(at + 250) == 0);
+  at += 250 + Policy::kMotionSampleMaxGapMs + 1;
+  policy.observeMotionSample(at, true, false);
+  assert(policy.quietDurationMs(at) == 0);
+  assert(policy.observe(at, parked(at)) == Policy::kQuietPeriod);
+}
+
+static void testActivityAndRebootResetTimer() {
+  Policy policy;
+  policy.beginBoot(1000);
+  quietSamples(policy, 1000, 2000);
+  Policy::Observation state = parked(2000);
+  state.confirmedMotionWake = true;
+  assert(policy.observe(2000, state) == Policy::kMotionWake);
+  policy.observeMotionSample(2000, true, true);
+  quietSamples(policy, 2250, 2000 + Policy::kRequiredQuietMs - 1);
+  state = parked(2000 + Policy::kRequiredQuietMs - 1);
+  assert(policy.observe(2000 + Policy::kRequiredQuietMs - 1, state) == Policy::kQuietPeriod);
+  policy.observeMotionSample(2000 + Policy::kRequiredQuietMs, true, false);
+  state = parked(2000 + Policy::kRequiredQuietMs);
+  state.activity = true;
+  assert(policy.observe(2000 + Policy::kRequiredQuietMs, state) == Policy::kActivity);
+
+  policy.beginBoot(50);
+  state = parked(50 + Policy::kRequiredQuietMs);
+  assert(policy.observe(50 + Policy::kRequiredQuietMs, state) == Policy::kMotionUnavailable);
+}
+
+static void testVehicleSignalsAndReadinessRemainFailClosed() {
+  const uint32_t start = 5000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  Policy::Observation state = parked(checkAt);
+  state.speedKph.supported = false;
+  assert(policy.observe(checkAt, state) == Policy::kSpeedUnavailable);
+  state = parked(checkAt);
+  state.rpm.valid = false;
+  assert(policy.observe(checkAt, state) == Policy::kRpmUnavailable);
+  state = parked(checkAt);
+  state.modelBSupplyVolts.sampledAtMs = start;
+  assert(policy.observe(checkAt, state) == Policy::kSupplyUnavailable);
+  state = parked(checkAt);
+  state.durableStorageHealthy = false;
+  assert(policy.observe(checkAt, state) == Policy::kStorageUnavailable);
+  state = parked(checkAt);
+  state.telemetryCredentialPersisted = false;
+  assert(policy.observe(checkAt, state) == Policy::kCredentialUnavailable);
+  state = parked(checkAt);
+  state.speedKph.value = 1.0f;
+  assert(policy.observe(checkAt, state) == Policy::kSpeedNotZero);
+  state = parked(checkAt);
+  state.rpm.value = 1.0f;
+  assert(policy.observe(checkAt, state) == Policy::kRpmNotZero);
+  state = parked(checkAt);
+  state.modelBSupplyVolts.value = 13.2f;
+  assert(policy.observe(checkAt, state) == Policy::kSupplyCharging);
+  state = parked(checkAt);
+  assert(policy.observe(checkAt, state) == Policy::kEligible);
+}
+
+static void testWrapSafeContinuousQuietTimer() {
+  const uint32_t start = UINT32_MAX - 120000UL;
+  const uint32_t boundary = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, boundary);
+  assert(policy.observe(boundary, parked(boundary)) == Policy::kEligible);
+  assert(policy.quietDurationMs(boundary) == Policy::kRequiredQuietMs);
+}
+
+int main() {
+  testRequiresAnHourOfContinuousSensorEvidence();
+  testMotionInvalidSampleAndLongGapRestartTimer();
+  testActivityAndRebootResetTimer();
+  testVehicleSignalsAndReadinessRemainFailClosed();
+  testWrapSafeContinuousQuietTimer();
+  puts("OTA parked eligibility: all tests passed");
+  return 0;
+}

@@ -163,13 +163,20 @@ bool DurableQueue::begin()
         m_ready = false;
         m_fault = true;
         unlock();
+        Serial.print("[SD-DIAG] journal recovery promote failed errno=");
+        Serial.println(errno);
         return false;
     }
-    File data = ensureDataFile() ? SD.open(DATA_PATH, FILE_APPEND) : File();
+    const bool dataFileReady = ensureDataFile();
+    File data = dataFileReady ? SD.open(DATA_PATH, FILE_APPEND) : File();
     if (!data) {
         m_ready = false;
         m_fault = true;
         unlock();
+        Serial.print("[SD-DIAG] journal ");
+        Serial.print(dataFileReady ? "open" : "create");
+        Serial.print(" failed errno=");
+        Serial.println(errno);
         Serial.println("[QUEUE] SD journal unavailable");
         return false;
     }
@@ -292,41 +299,73 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
     }
     bool okay = false;
     bool partial = false;
+    const char* failureStage = nullptr;
     uint32_t recordStart = 0;
-    if (file && file.size() + total <= MAX_JOURNAL) {
-        recordStart = file.size();
-        okay = true;
-        size_t written = 0;
-        for (uint8_t i = 0; okay && i < count; i++) {
-            RecordHeader header = {RECORD_MAGIC, lengths[i], 0, crc32((const uint8_t*)frames[i], lengths[i])};
-            const size_t headerBytes = file.write((const uint8_t*)&header, sizeof(header));
-            const size_t frameBytes = headerBytes == sizeof(header)
-                ? file.write((const uint8_t*)frames[i], lengths[i]) : 0;
-            written += headerBytes + frameBytes;
-            okay = headerBytes == sizeof(header) && frameBytes == lengths[i];
+    uint32_t observedSize = 0;
+    if (!file) {
+        failureStage = "append-open";
+    } else {
+        recordStart = observedSize = file.size();
+        if ((uint64_t)recordStart + total > MAX_JOURNAL) {
+            failureStage = "journal-capacity";
+        } else {
+            okay = true;
+            size_t written = 0;
+            for (uint8_t i = 0; okay && i < count; i++) {
+                RecordHeader header = {RECORD_MAGIC, lengths[i], 0, crc32((const uint8_t*)frames[i], lengths[i])};
+                const size_t headerBytes = file.write((const uint8_t*)&header, sizeof(header));
+                const size_t frameBytes = headerBytes == sizeof(header)
+                    ? file.write((const uint8_t*)frames[i], lengths[i]) : 0;
+                written += headerBytes + frameBytes;
+                okay = headerBytes == sizeof(header) && frameBytes == lengths[i];
+                if (!okay) failureStage = headerBytes != sizeof(header) ? "append-header-write" : "append-frame-write";
+            }
+            partial = !okay && written != 0;
+            file.flush();
         }
-        partial = !okay && written != 0;
-        file.flush();
     }
     if (file) file.close();
     if (okay) {
         // Verify the persisted bytes before releasing the only RAM copies.
         File verify = SD.open(DATA_PATH, FILE_READ);
-        okay = verify && verify.size() == recordStart + total && verify.seek(recordStart);
+        if (!verify) {
+            okay = false;
+            failureStage = "readback-open";
+        } else if (verify.size() != recordStart + total || !verify.seek(recordStart)) {
+            okay = false;
+            failureStage = "readback-position";
+        }
         char chunk[256];
         for (uint8_t i = 0; okay && i < count; i++) {
             RecordHeader header;
-            okay = verify.read((uint8_t*)&header, sizeof(header)) == sizeof(header) &&
+            const size_t headerBytes = verify.read((uint8_t*)&header, sizeof(header));
+            okay = headerBytes == sizeof(header) &&
                 header.magic == RECORD_MAGIC && header.length == lengths[i] &&
                 header.crc == crc32((const uint8_t*)frames[i], lengths[i]);
+            if (!okay) failureStage = headerBytes != sizeof(header) ? "readback-header" : "readback-header-mismatch";
             for (uint16_t offset = 0; okay && offset < lengths[i]; offset += sizeof(chunk)) {
                 const uint16_t part = min((uint16_t)sizeof(chunk), (uint16_t)(lengths[i] - offset));
-                okay = verify.read((uint8_t*)chunk, part) == part &&
-                    memcmp(chunk, frames[i] + offset, part) == 0;
+                const size_t readBytes = verify.read((uint8_t*)chunk, part);
+                okay = readBytes == part;
+                if (!okay) failureStage = "readback-short-frame";
+                else if (memcmp(chunk, frames[i] + offset, part) != 0) {
+                    okay = false;
+                    failureStage = "readback-frame-mismatch";
+                }
             }
         }
         if (verify) verify.close();
         if (!okay) partial = true;
+    }
+    if (!okay) {
+        Serial.print("[SD-DIAG] append failed stage=");
+        Serial.print(failureStage ? failureStage : "unknown");
+        Serial.print(" size=");
+        Serial.print(observedSize);
+        Serial.print(" add_bytes=");
+        Serial.print(total);
+        Serial.print(" errno=");
+        Serial.println(errno);
     }
     if (!okay && !m_fault) Serial.println("[QUEUE] SD append failed or journal full; retaining RAM reading");
     if (!okay) m_fault = true;

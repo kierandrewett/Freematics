@@ -1,0 +1,117 @@
+{
+  "baud": 115200,
+  "capture_interval_ms": {
+    "max": 1000,
+    "median": 250,
+    "over_300ms_count": 23,
+    "p95": 500
+  },
+  "corrupt_ft1_records": 27,
+  "device_metrics_start_end": {
+    "0x87": [
+      0,
+      1
+    ],
+    "0x8E": [
+      0,
+      0
+    ],
+    "0x8F": [
+      1,
+      1
+    ],
+    "0x97": [
+      0,
+      0
+    ]
+  },
+  "device_restarts": 0,
+  "device_usb_drops_during_capture": 0,
+  "estimated_uart_wire_utilization_pct": 56.2,
+  "measurement_seconds": 45.0,
+  "non_telemetry_lines": 82,
+  "partial_record_bytes_at_end": 1600,
+  "pid_freshness_and_updates": {
+    "calculated_engine_load": {
+      "age_ms_max": 9784,
+      "age_ms_median": 2103,
+      "age_ms_p95": 7784,
+      "frames_over_freshness_target": 82,
+      "freshness_target_ms": 1000,
+      "inferred_successful_update_intervals_ms": 7,
+      "sampled_frames": 107,
+      "update_interval_ms_max": 9897,
+      "update_interval_ms_median": 3569,
+      "update_interval_ms_p95": 9897
+    },
+    "coolant_temperature": {
+      "age_ms_max": 9716,
+      "age_ms_median": 2114,
+      "age_ms_p95": 7716,
+      "frames_over_freshness_target": 81,
+      "freshness_target_ms": 1000,
+      "inferred_successful_update_intervals_ms": 7,
+      "sampled_frames": 106,
+      "update_interval_ms_max": 9898,
+      "update_interval_ms_median": 3568,
+      "update_interval_ms_p95": 9898
+    },
+    "ecu_control_module_voltage": {
+      "age_ms_max": 9928,
+      "age_ms_median": 2065,
+      "age_ms_p95": 8178,
+      "frames_over_freshness_target": 82,
+      "freshness_target_ms": 1000,
+      "inferred_successful_update_intervals_ms": 7,
+      "sampled_frames": 110,
+      "update_interval_ms_max": 10035,
+      "update_interval_ms_median": 3637,
+      "update_interval_ms_p95": 10035
+    },
+    "engine_rpm": {
+      "age_ms_max": 4510,
+      "age_ms_median": 636,
+      "age_ms_p95": 3010,
+      "frames_over_freshness_target": 97,
+      "freshness_target_ms": 250,
+      "inferred_successful_update_intervals_ms": 27,
+      "sampled_frames": 122,
+      "update_interval_ms_max": 4875,
+      "update_interval_ms_median": 962,
+      "update_interval_ms_p95": 3345
+    },
+    "throttle_position": {
+      "age_ms_max": 9192,
+      "age_ms_median": 1982,
+      "age_ms_p95": 7442,
+      "frames_over_freshness_target": 83,
+      "freshness_target_ms": 1000,
+      "inferred_successful_update_intervals_ms": 8,
+      "sampled_frames": 114,
+      "update_interval_ms_max": 9562,
+      "update_interval_ms_median": 2903,
+      "update_interval_ms_p95": 9562
+    },
+    "vehicle_speed": {
+      "age_ms_max": 5122,
+      "age_ms_median": 596,
+      "age_ms_p95": 3372,
+      "frames_over_freshness_target": 91,
+      "freshness_target_ms": 250,
+      "inferred_successful_update_intervals_ms": 26,
+      "sampled_frames": 118,
+      "update_interval_ms_max": 5321,
+      "update_interval_ms_median": 962,
+      "update_interval_ms_p95": 3204
+    }
+  },
+  "port": "/dev/ttyUSB1",
+  "privacy": "No VIN, coordinates, or sensor values are included.",
+  "received_bytes": 291359,
+  "usb_frame_arrival_interval_ms": {
+    "max": 991.2680950001231,
+    "median": 250.8,
+    "p95": 574.75
+  },
+  "valid_frames": 126
+}

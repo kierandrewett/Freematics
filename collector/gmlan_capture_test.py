@@ -69,7 +69,7 @@ class CaptureInputTests(unittest.TestCase):
         self.assertEqual(capture.frames[0].timestamp_ms, 200)
 
     def test_archive_counts_records_rejected_by_history_parser(self) -> None:
-        raw = archive_record(0xFFFFFFFF, "5E8 03 5A 90 00 00 00 00 00")
+        raw = archive_record(0x100000000, "5E8 03 5A 90 00 00 00 00 00")
         with tempfile.NamedTemporaryFile("w", encoding="ascii") as archive:
             archive.write(raw)
             archive.flush()

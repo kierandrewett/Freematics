@@ -27,6 +27,8 @@ class TelemetryGitMirrorTests(unittest.TestCase):
                 {"pid": "0x085", "value": "6"},
                 {"pid": "0x089", "value": "2"},
                 {"pid": "0x08C", "value": "128"},
+                {"pid": "0x090", "value": "1791030012"},
+                {"pid": "0x091", "value": "345"},
                 {"pid": "0x092", "value": "3745452038203130203430"},
                 {"pid": "0x310", "value": "2"},
             ]
@@ -39,6 +41,8 @@ class TelemetryGitMirrorTests(unittest.TestCase):
         self.assertEqual(metrics["network_transport"]["value"], {"code": 2, "name": "cellular"})
         self.assertEqual(metrics["obd_state"]["value"], {"code": 2, "name": "degraded"})
         self.assertEqual(metrics["queue_bytes"]["value"], 128)
+        self.assertEqual(metrics["capture_utc_seconds"]["value"], 1791030012)
+        self.assertEqual(metrics["capture_utc_milliseconds"]["value"], 345)
         self.assertEqual(metrics["can_frame"]["value"], "3745452038203130203430")
         self.assertEqual(metrics["stored_dtc_read_status"]["value"], {"code": 2, "name": "codes"})
         self.assertEqual(metrics["obd_protocol"]["value"], {"code": 6, "name": "iso15765_11bit_500k"})
@@ -46,6 +50,8 @@ class TelemetryGitMirrorTests(unittest.TestCase):
     def test_catalog_covers_shared_standard_odometer_and_unknown_fields(self) -> None:
         catalog = metric_catalog()
         self.assertEqual(catalog[0x1A6].key, "odometer")
+        self.assertEqual(catalog[0x90].key, "capture_utc_seconds")
+        self.assertEqual(catalog[0x91].key, "capture_utc_milliseconds")
         metrics = readable_metrics([{"pid": "0x1A6", "value": "123456.7"}, {"pid": "0x7EE", "value": "abc"}])
         self.assertEqual(metrics["odometer"]["value"], 123456.7)
         self.assertEqual(metrics["pid_7EE"]["namespace"], "unknown")

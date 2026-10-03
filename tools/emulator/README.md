@@ -129,9 +129,10 @@ Remaining limits:
 
 - Bytes that fail the record CRC remain in the original recovery archive. The firmware cannot reconstruct an
   unknown measurement. The recovery log reports the number of damaged bytes.
-- An abrupt power loss destroys samples still in RAM while they wait for the recorder. The simulator does not
-  measure this persistence window. A failed or full SD card plus a network outage can exhaust the finite RAM queue.
-  Large journal repairs also use the storage worker and SD lock; sampling continues into that finite queue.
+- An abrupt power loss can destroy the one in-flight sampler/recorder handoff before journal verification. The
+  simulator does not measure this short persistence window. SD faults do not accumulate a RAM outage spool:
+  samples without a verified journal append are counted as missed and discarded. Large journal repairs use the
+  storage worker and SD lock; sampling remains independent and live USB continues.
 - The MEMS worker replaces one snapshot about every 20 ms. The sampler records the latest snapshot every 250 ms.
   This does not preserve every sensor acquisition. A short acceleration peak can occur between recorded snapshots.
 - Cached fields carry their acquisition ages. A continuous graph does not prove that the ECU or sensor responded

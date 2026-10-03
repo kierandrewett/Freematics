@@ -1524,6 +1524,16 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"FROM sample WHERE {trip_where} AND {historical_range} ORDER BY time",
                 format="time_series",
             )],
+            50: [history_target(
+                "SELECT s.timeline_ms / 1000.0 AS time, "
+                "MAX(CASE WHEN m.pid = '0x024' THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", "
+                "MAX(CASE WHEN m.pid = '0x042' THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" "
+                "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
+                "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+                f"WHERE {sample_trip_where} AND s.{historical_range} "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+                format="time_series",
+            )],
             31: [history_target(
                 "SELECT m.pid AS \"PID\", COALESCE(c.name, 'Unknown metric') AS \"Metric\", "
                 "c.description AS \"Description\", c.unit AS \"Unit\", "
@@ -1591,6 +1601,32 @@ def build_dashboard(view: str = "combined") -> dict:
                     })
                 if panel["id"] in {19, 20, 31}:
                     panel.pop("transformations", None)
+        voltage_panel = timeseries(
+            50,
+            "Device input and ECU voltage",
+            0,
+            32,
+            24,
+            7,
+            historical_targets[50],
+            unit="volt",
+            description=(
+                "Archived Model B power-input voltage (PID 0x024) and ECU control module voltage "
+                "(OBD PID 0x042), plotted at the stored sample display-timeline time. Receipt and "
+                "archive-arrival times are not used. Missing sample values remain visible as gaps."
+            ),
+            overrides=[
+                by_name("Model B input voltage (PID 0x024)", ("color", {"fixedColor": "blue", "mode": "fixed"})),
+                by_name("ECU control module voltage (PID 0x042)", ("color", {"fixedColor": "orange", "mode": "fixed"})),
+            ],
+        )
+        voltage_panel["datasource"] = HISTORY_DS
+        voltage_panel["fieldConfig"]["defaults"]["custom"].update({
+            "insertNulls": False,
+            "showPoints": "always",
+            "spanNulls": False,
+        })
+        panels.append(voltage_panel)
         trip_index = next(item for item in panels if item["id"] == 19)
         trip_index["title"] = "Trip archive — click a trip to inspect"
         trip_index["description"] = "All stored trips. Click a Trip value to set Grafana's time range to that trip's stored start and end."
@@ -1610,6 +1646,7 @@ def build_dashboard(view: str = "combined") -> dict:
             16: "Largest stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable; no speed-derived value is inferred.",
             17: "Magnitude of the most negative stored X-axis acceleration in the selected range. A missing MEMS vector remains unavailable.",
             18: "Maximum stored coolant temperature in the selected range. Missing PID 0x105 remains unavailable.",
+            50: "Stored device power-input voltage (PID 0x024) and ECU control module voltage (OBD PID 0x042), plotted using each archive sample's display-timeline timestamp. Null samples break the lines; collector receipt and archive arrival times are not used.",
             23: "Stored engine load and throttle position in the selected range. Missing PID samples remain gaps.",
             22: "Stored MEMS acceleration X, Y and Z components. Missing vectors remain gaps rather than zero.",
             24: "Stored coolant and intake-air temperatures in the selected range. Missing PID samples remain gaps.",
@@ -1775,20 +1812,21 @@ def build_dashboard(view: str = "combined") -> dict:
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 42, 44, 48,
+            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 42, 44, 48, 50,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
         # Keep the sync panel at the top: Grafana does not load panels outside
         # the viewport, so a lower panel would not run its script.
         panels.insert(0, trip_time_sync_panel())
         trips_layout = {
-            38: (0, 39, 24, 5),
-            31: (0, 44, 24, 10),
-            39: (0, 54, 12, 7),
-            40: (12, 54, 12, 7),
-            42: (0, 61, 24, 8),
-            44: (0, 69, 24, 8),
-            48: (0, 77, 24, 8),
+            50: (0, 39, 24, 7),
+            38: (0, 46, 24, 5),
+            31: (0, 51, 24, 10),
+            39: (0, 61, 12, 7),
+            40: (12, 61, 12, 7),
+            42: (0, 68, 24, 8),
+            44: (0, 76, 24, 8),
+            48: (0, 84, 24, 8),
         }
         for panel in panels:
             layout = trips_layout.get(panel["id"])

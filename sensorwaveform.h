@@ -1,5 +1,5 @@
 /*
- * Bounded passive sensor waveform retention.
+ * Bounded passive sensor waveform handoff.
  *
  * Format 1 emits repeated groups in acquisition order:
  *   0xA0: milliseconds;centivolts (two uint32 values)
@@ -31,6 +31,18 @@ public:
   // cumulative loss counters do not keep the sampler in wrap-up.
   bool hasPending() const { return m_voltageCount || m_motionCount; }
 
+  // Drop waveform samples that cannot be journaled. Their loss is reported in
+  // the existing cumulative drop counters; stale RAM samples are never replayed.
+  void discardPending()
+  {
+    saturatingAdd(m_voltageDropped, m_voltageCount);
+    saturatingAdd(m_motionDropped, m_motionCount);
+    m_voltageHead = m_voltageTail;
+    m_motionHead = m_motionTail;
+    m_voltageCount = 0;
+    m_motionCount = 0;
+  }
+
   bool recordVoltage(uint32_t acquiredMs, float voltage)
   {
     // uint32 centivolts is the wire type. The physical envelope is much
@@ -40,7 +52,7 @@ public:
       return false;
     }
     if (m_voltageCount == kCapacity) {
-      saturatingIncrement(m_voltageOverflow);
+      saturatingIncrement(m_voltageDropped);
       return false;
     }
     VoltageReading& reading = m_voltage[m_voltageTail];
@@ -58,7 +70,7 @@ public:
       return false;
     }
     if (m_motionCount == kCapacity) {
-      saturatingIncrement(m_motionOverflow);
+      saturatingIncrement(m_motionDropped);
       return false;
     }
     MotionReading& reading = m_motion[m_motionTail];
@@ -78,7 +90,7 @@ public:
     // This prevents a full frame from containing unlabelled waveform data.
     const uint16_t markerBytes = elementBytes(sizeof(uint32_t) * 4) + elementBytes(sizeof(uint8_t));
     if (remaining(destination) < markerBytes) return;
-    uint32_t losses[4] = {m_voltageOverflow, m_motionOverflow, m_invalidVoltage, m_invalidMotion};
+    uint32_t losses[4] = {m_voltageDropped, m_motionDropped, m_invalidVoltage, m_invalidMotion};
     uint8_t version = kFormatVersion;
     if (!destination->add(PID_WAVEFORM_LOSSES, ELEMENT_UINT32, losses, sizeof(losses), 4) ||
         !destination->add(PID_WAVEFORM_FORMAT, ELEMENT_UINT8, &version, sizeof(version))) return;
@@ -124,6 +136,10 @@ private:
   static uint16_t elementBytes(uint16_t valueBytes) { return sizeof(ELEMENT_HEAD) + valueBytes; }
   static uint16_t remaining(const CBuffer* destination) { return BUFFER_LENGTH - destination->offset; }
   static void saturatingIncrement(uint32_t& value) { if (value != UINT32_MAX) ++value; }
+  static void saturatingAdd(uint32_t& value, uint32_t amount)
+  {
+    value = amount > UINT32_MAX - value ? UINT32_MAX : value + amount;
+  }
   static bool withinMotionEnvelope(const float acceleration[3], const float gyro[3])
   {
     for (uint8_t i = 0; i < 3; ++i) {
@@ -141,8 +157,8 @@ private:
   uint8_t m_motionHead = 0;
   uint8_t m_motionTail = 0;
   uint8_t m_motionCount = 0;
-  uint32_t m_voltageOverflow = 0;
-  uint32_t m_motionOverflow = 0;
+  uint32_t m_voltageDropped = 0;
+  uint32_t m_motionDropped = 0;
   uint32_t m_invalidVoltage = 0;
   uint32_t m_invalidMotion = 0;
 };

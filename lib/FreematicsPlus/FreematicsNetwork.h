@@ -121,6 +121,11 @@ public:
     int RSSI();
     String getOperatorName();
     bool checkSIM(const char* pin = 0);
+    // OTA-only cooperative cancellation. Normal modem users leave this unset.
+    void setContinueCheck(CFreematics::ContinueCheck check, void* context) {
+        m_continueCheck = check;
+        m_continueContext = context;
+    }
     virtual String queryIP(const char* host);
     virtual bool getLocation(GPS_DATA** pgd);
     bool check(unsigned int timeout = 0);
@@ -129,6 +134,9 @@ public:
     char IMEI[16] = {0};
 protected:
     bool sendCommand(const char* cmd, unsigned int timeout = 1000, const char* expected = 0);
+    bool shouldContinue() const {
+        return !m_continueCheck || m_continueCheck(m_continueContext);
+    }
     virtual void inbound();
     virtual void checkGPS();
     float parseDegree(const char* s);
@@ -138,6 +146,8 @@ protected:
     GPS_DATA* m_gps = 0;
     CELL_TYPE m_type = CELL_SIM7600;
     int m_incoming = 0;
+    CFreematics::ContinueCheck m_continueCheck = nullptr;
+    void* m_continueContext = nullptr;
 };
 
 class CellUDP : public CellSIMCOM
@@ -154,14 +164,32 @@ protected:
 
 class CellularTLS;
 
+struct CellHTTPStreamResponse {
+    uint16_t status = 0;
+    uint32_t contentLength = 0;
+    // Keep this at least as large as CellularTLS::HTTP_LOCATION_CAPACITY.
+    char location[2048] = {0};
+};
+typedef bool (*CellHTTPBodyWriter)(void* context, const unsigned char* data, size_t length);
+typedef bool (*CellHTTPContinueCheck)(void* context);
+
 class CellHTTP : public HTTPClient, public CellSIMCOM
 {
 public:
+    void setContinueCheck(CFreematics::ContinueCheck check, void* context);
     void init();
     bool open(const char* host = 0, uint16_t port = 0);
     bool close();
     bool send(HTTP_METHOD method, const char* host, uint16_t port, const char* path, const char* payload = 0, int payloadSize = 0);
     char* receive(int* pbytes = 0, unsigned int timeout = HTTP_CONN_TIMEOUT);
+    // Cellular OTA only: strict SIM7670 ESP32-TLS GET, without telemetry
+    // bearer credentials, streaming a fixed-length 200 response to a sink.
+    bool getStream(const char* host, uint16_t port, const char* path,
+                   uint32_t maxContentLength, CellHTTPBodyWriter writer,
+                   void* context, CellHTTPStreamResponse* response,
+                   unsigned timeout = 60000,
+                   CellHTTPContinueCheck continueCheck = nullptr,
+                   void* continueContext = nullptr);
 private:
     bool m_tlsReady = false;
     bool m_clockRefreshed = false;

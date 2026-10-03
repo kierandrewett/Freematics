@@ -64,6 +64,9 @@ using std::isfinite;
 #define STATE_WIFI_CONNECTED 128
 uint32_t tick = 1000, limit = 90000;
 float voltage = 0, movement = 0;
+// OTA policy timing has its own host tests; this lifecycle harness isolates
+// wake behavior and only needs the reset notification symbol to link.
+void noteOtaResetEvent(uint32_t, bool) {}
 int sensorMux = 0; float cachedVoltage = 0;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)

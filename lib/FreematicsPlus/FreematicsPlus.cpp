@@ -41,6 +41,17 @@ static int pinGPSRx = PIN_GPS_UART_RXD;
 static int pinGPSTx = PIN_GPS_UART_TXD;
 static Task taskGPS;
 static GPS_DATA gpsData = {0};
+static volatile bool systemTimeTrusted = false;
+
+bool freematicsSystemTimeTrusted()
+{
+    return systemTimeTrusted;
+}
+
+void freematicsMarkSystemTimeTrusted()
+{
+    systemTimeTrusted = true;
+}
 // u-blox M10 UBX-CFG-VALSET: GGA and RMC every 2nd epoch (5 Hz), NAV_PVT off.
 // RMC carries speed. It was every 10th epoch (1 Hz), so on the 29 September
 // drive GNSS speed changed on only 26% of 250 ms samples while position
@@ -809,6 +820,50 @@ int FreematicsESP32::xbReceive(char* buffer, int bufsize, unsigned int timeout, 
 	} while (millis() - t < timeout);
 	buffer[bytesRecv] = 0;
 	return bytesRecv == 0 ? 0 : -1;
+}
+
+int FreematicsESP32::xbReceiveCancellable(char* buffer, int bufsize, unsigned int timeout,
+    const char** expected, byte expectedCount,
+    CFreematics::ContinueCheck continueCheck, void* context)
+{
+    int bytesRecv = 0;
+    uint32_t t = millis();
+    do {
+        if (continueCheck && !continueCheck(context)) {
+            buffer[bytesRecv] = 0;
+            return -2;
+        }
+        if (bytesRecv >= bufsize - 16) {
+            bytesRecv -= dumpLine(buffer, bytesRecv);
+        }
+        int n = xbRead(buffer + bytesRecv, bufsize - bytesRecv - 1, 50);
+        if (continueCheck && !continueCheck(context)) {
+            buffer[bytesRecv] = 0;
+            return -2;
+        }
+        if (n > 0) {
+#if VERBOSE_XBEE
+            Serial.print("=== RECV@");
+            Serial.print(millis());
+            Serial.println(" ===");
+            buffer[bytesRecv + n] = 0;
+            Serial.print(buffer + bytesRecv);
+            Serial.println("==================");
+#endif
+            bytesRecv += n;
+            buffer[bytesRecv] = 0;
+            for (byte i = 0; i < expectedCount; i++) {
+                if (expected[i] && strstr(buffer, expected[i])) return i + 1;
+            }
+        } else if (n == -1) {
+#if VERBOSE_XBEE
+            Serial.print("RECV ERROR");
+#endif
+            break;
+        }
+    } while (millis() - t < timeout);
+    buffer[bytesRecv] = 0;
+    return bytesRecv == 0 ? 0 : -1;
 }
 
 void FreematicsESP32::xbPurge()

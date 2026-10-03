@@ -2074,7 +2074,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 46
       },
       "id": 38,
       "options": {
@@ -2179,7 +2179,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 51
       },
       "id": 31,
       "options": {
@@ -2335,7 +2335,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 61
       },
       "id": 39,
       "options": {
@@ -2432,7 +2432,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 54
+        "y": 61
       },
       "id": 40,
       "options": {
@@ -2501,6 +2501,135 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
+      "description": "Stored device power-input voltage (PID 0x024) and ECU control module voltage (OBD PID 0x042), plotted using each archive sample's display-timeline timestamp. Null samples break the lines; collector receipt and archive arrival times are not used.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "volt"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Model B input voltage (PID 0x024)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ECU control module voltage (PID 0x042)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "id": 50,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x024' THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", MAX(CASE WHEN m.pid = '0x042' THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "rawQueryText": "SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x024' THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", MAX(CASE WHEN m.pid = '0x042' THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "Device input and ECU voltage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
       "description": "Decoded stored, pending and permanent DTC detail from the raw archive. No rows means no decodable code was recorded; raw fields remain in the metric timeline.",
       "fieldConfig": {
         "defaults": {
@@ -2517,7 +2646,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 69
+        "y": 76
       },
       "id": 44,
       "options": {
@@ -2569,7 +2698,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 68
       },
       "id": 42,
       "options": {
@@ -2714,7 +2843,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 84
       },
       "id": 48,
       "options": {

@@ -16,13 +16,13 @@ The sketch collects following data.
 * Cellular or WiFi network signal level
 * Device temperature
 
-Collected readings first occupy up to 1,024 PSRAM queue slots. The SD build then writes each complete reading to a CRC-checked append-only journal before releasing its RAM slot. Acknowledgements advance a separate checksummed cursor; a failed upload or restart replays unacknowledged readings. A full or failed card leaves readings in finite RAM and raises a health fault. If both stores fill, collection cycles are counted as missed and logged as critical rather than overwriting older captured readings. Finite storage, card failure and loss of power still prevent an absolute zero-loss guarantee. While powered, the sampler records a row every 250 ms from background sensor snapshots. Each held value includes its acquisition age. The OBD worker makes consecutive sequential requests. It targets a fresh reading within 250 ms for RPM and speed and within 1,000 ms for every other supported Mode 01 PID. It selects the PID that has used the greatest fraction of its freshness interval and releases the bridge between requests. Failed reads retain their last successful timestamp and retry no faster than once per second. These are acquisition targets; ECU latency, timeouts and bridge contention can exceed them. The recorded per-PID ages and the Grafana OBD age metric expose that shortfall. Trouble-code scans retain their separate two-minute cadence. Their existing bridge exchange can pause live acquisition for several seconds; include those gaps in any freshness report. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
+In the SD build, a small eight-slot PSRAM handoff decouples the 250 ms sampler from the recorder; it is not an outage spool. Each sample is released for upload only after a CRC-checked append-only SD journal write is verified. Acknowledgements advance a separate checksummed cursor; failed uploads or restarts replay unacknowledged SD records. If the journal becomes unhealthy, new readings continue to the live USB dashboard but are not queued in RAM or uploaded; affected readings are counted as missed, waveform samples are discarded with loss counters, and the recording fault alarm remains active. A short in-flight handoff is unavoidable, but it is never treated as durable storage. Card failure or power loss can still produce real gaps, so absolute zero-loss is not guaranteed until the physical SD fault is resolved. Each held OBD value includes its acquisition age. The OBD worker makes consecutive sequential requests and targets freshness within 250 ms for RPM/speed and 1,000 ms for every other supported Mode 01 PID. ECU latency, timeouts, bridge contention, and DTC scans can exceed those targets; per-PID ages expose the shortfall. Cellular uploads batch up to 24 readings, wait at most one second to start a partial batch, and require the collector to confirm the expected field count before acknowledgement. The uploader runs independently from collection, and the SD journal retains samples while it is busy or offline.
   
 The passive voltage and motion worker also retains each successful acquisition at
 its nominal 50 Hz cadence. Each point has its own device timestamp. Raw motion
 includes gravity; voltage is the uncalibrated device input. Each 250 ms frame
 carries up to 16 readings from each sensor, through the same journal and upload
-path. Overflow and invalid-input counters make losses visible. Recording stops
+path. Dropped and invalid-input counters make losses visible. Recording stops
 during parked upload wrap-up after pending points drain. Actual cadence still
 depends on the hardware and task load.
 
@@ -46,7 +46,7 @@ Local configuration
 
 Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint and Simbase's `simbase` APN. The default source build now selects microSD storage; an explicit `STORAGE_SPIFFS` override remains available for cardless builds.
 
-HTTPS requires the configured bearer token for the Caddy-protected collector. The token is injected at build time and is never stored in the repository. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
+HTTPS requires the configured bearer token for the Caddy-protected collector. A private/local migration build seeds it into the existing `storage` NVS namespace; subsequent tokenless OTA releases read it there. The token is never stored in the repository, and an existing NVS value is not overwritten. NVS flash encryption is not enabled, so physical flash extraction remains possible. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
 
 The collector requires a non-empty HTTP password (`-w`) by default. An
 installation behind an authenticated HTTP reverse proxy can instead use
@@ -54,6 +54,13 @@ installation behind an authenticated HTTP reverse proxy can instead use
 If UDP is enabled, it requires a server key (`-k`). Keep the collector
 listener behind the authenticated Caddy service; do not expose its HTTP or
 UDP ports directly.
+Each sample with a clock synchronized during the current boot also stores its
+capture UTC as epoch seconds plus a millisecond remainder in the SD journal and
+upload frame. The collector preserves that exact device time even when GNSS
+fields are absent. A UTC value restored from NVS alone is marked untrusted
+until GNSS, cellular HTTP Date, or Wi-Fi SNTP synchronizes the clock; collector
+receive time is never substituted for capture time.
+
 The collector acknowledges a telemetry POST only after the raw archive batch
 has been flushed and synced to disk. If the archive cannot be opened, written,
 or synced, it returns HTTP 503 so the device retains and retries the batch.
@@ -106,8 +113,9 @@ passive voltage input also wakes it when the voltage rises from resting
 (12.9 V or below) to charging (13.2 V or above), which is an engine start. A
 battery maintainer holding the voltage up never shows a resting reading, so
 it cannot cause repeated wakes. OBD is read after the device wakes.
-If readings exist only in RAM (the SD card failed), standby keeps them through
-light sleep and resumes without the usual wake reboot.
+If the SD journal is unhealthy, samples are not retained in RAM for standby or
+later upload. Live USB telemetry remains available and the missed-reading and
+storage-health fields expose the recording gap.
 
 In standby a weak battery (resting below 11.8 V) turns motion wakes off; only
 the rise to charging voltage, that is a running engine, wakes the device.
@@ -159,7 +167,7 @@ Following types of data storage are supported.
 * MicroSD card storage
 * ESP32 built-in Flash memory storage (SPIFFS)
 
-The SD build requires a FAT32-formatted microSD card for durable queueing. It keeps raw local trip files as well as the upload journal. The installed image retries an initial card mount three times and retries unavailable SD storage every 30 seconds while active; a failed mount leaves readings in the finite RAM queue and reports unhealthy storage. A sample becomes available to the uploader only after the journal write finishes, or when the card write fails and RAM retains it. The journal is bounded to 3.75 GiB per file by FAT32 and is reclaimed only after every record in it is acknowledged. This bound, the card's free space and the finite RAM queue must be monitored; the firmware does not delete unacknowledged readings to make room. A high-endurance card is preferred for continuous writing. Check `local_config.h` as well as `config.h` before building: a local `STORAGE_SPIFFS` override disables the journal.
+The SD build requires a FAT32-formatted microSD card for durable queueing. It keeps raw local trip files as well as the upload journal. The firmware retries an initial card mount three times and retries unavailable SD storage every 30 seconds while active. A failed mount or append does not create a RAM retry backlog: new samples remain live on USB, recording gaps are counted, and upload pauses until the SD journal recovers. The journal is bounded to 3.75 GiB per file by FAT32 and is reclaimed only after every record in it is acknowledged. Free card space and journal health must be monitored; the firmware does not delete unacknowledged readings to make room. A high-endurance card is preferred for continuous writing. Check `local_config.h` as well as `config.h` before building: a local `STORAGE_SPIFFS` override disables the journal.
 
 A card reader is not required for first-time formatting. The normal image never formats a card on mount failure. If a newly inserted card is unformatted or uses an unsupported filesystem, a one-time provisioning build with both `FREEMATICS_FORMAT_SD_ONCE=1` and `FREEMATICS_FORMAT_SD_CONFIRM=ERASE_UNFORMATTED_CARD` allows the Arduino SD driver to format only when it reports no FAT filesystem. This erases that card. Confirm the card has no data to keep, flash the provisioning image, check the serial `SD:` capacity and `[QUEUE] SD journal ready` lines, then flash the normal image without those environment variables. Nothing typed into the serial monitor can start formatting. If the card already mounts, the provisioning image does not format it. A failed mount for another reason still needs diagnosis.
 

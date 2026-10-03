@@ -19,6 +19,8 @@
 #include "telestore.h"
 #include "teleclient.h"
 #include "config.h"
+#include "telemetry_token.h"
+#include <nvs.h>
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
 #include "teledeflate.h"
 #endif
@@ -28,6 +30,81 @@ extern char devid[];
 extern char vin[];
 extern GPS_DATA* gd;
 extern char isoTime[];
+
+namespace {
+const char kTelemetryTokenNvsKey[] = "upload_token";
+char telemetryToken[freematics::security::kTelemetryTokenLength + 1] = {};
+bool telemetryTokenResolved = false;
+bool telemetryTokenPersisted = false;
+
+bool resolveAndLoadTelemetryToken()
+{
+  if (telemetryTokenResolved) return telemetryToken[0] != '\0';
+
+  char storedToken[freematics::security::kTelemetryTokenLength + 1] = {};
+  bool storedTokenExists = false;
+  nvs_handle_t handle;
+  const esp_err_t opened = nvs_open("storage", NVS_READWRITE, &handle);
+  if (opened == ESP_OK) {
+    size_t length = sizeof(storedToken);
+    const esp_err_t read = nvs_get_str(handle, kTelemetryTokenNvsKey, storedToken, &length);
+    storedTokenExists = read == ESP_OK;
+    if (read != ESP_OK && read != ESP_ERR_NVS_NOT_FOUND) {
+      nvs_close(handle);
+      Serial.println("[AUTH] Could not read stored telemetry token");
+      telemetryTokenResolved = true;
+      return false;
+    }
+  } else {
+    Serial.println("[AUTH] Could not open credential storage");
+    telemetryTokenResolved = true;
+    return false;
+  }
+
+  bool shouldPersist = false;
+  if (!freematics::security::resolveTelemetryToken(
+          storedToken, storedTokenExists, SERVER_TOKEN, telemetryToken,
+          sizeof(telemetryToken), &shouldPersist)) {
+    nvs_close(handle);
+    Serial.println("[AUTH] Telemetry token missing or invalid");
+    telemetryTokenResolved = true;
+    return false;
+  }
+
+  if (storedTokenExists) telemetryTokenPersisted = true;
+  if (shouldPersist) {
+    const esp_err_t saved = nvs_set_str(handle, kTelemetryTokenNvsKey, telemetryToken);
+    const esp_err_t committed = saved == ESP_OK ? nvs_commit(handle) : saved;
+    if (committed == ESP_OK) {
+      char verifiedToken[sizeof(telemetryToken)] = {};
+      size_t verifiedLength = sizeof(verifiedToken);
+      telemetryTokenPersisted = nvs_get_str(handle, kTelemetryTokenNvsKey,
+          verifiedToken, &verifiedLength) == ESP_OK &&
+          freematics::security::isTelemetryToken(verifiedToken) &&
+          strcmp(verifiedToken, telemetryToken) == 0;
+      Serial.println(telemetryTokenPersisted ?
+          "[AUTH] Private-build token provisioned and verified in device storage" :
+          "[AUTH] Token persistence read-back failed");
+    } else {
+      // Keep this boot operational; a later private-build boot retries seeding.
+      Serial.println("[AUTH] Token loaded but could not be persisted");
+    }
+  }
+  nvs_close(handle);
+  telemetryTokenResolved = true;
+  return true;
+}
+} // namespace
+
+bool initializeTelemetryCredential()
+{
+  return resolveAndLoadTelemetryToken();
+}
+
+bool telemetryCredentialPersisted()
+{
+  return telemetryTokenPersisted;
+}
 
 CBuffer::CBuffer(uint8_t* mem)
 {
@@ -817,7 +894,7 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
 
 bool TeleClientHTTP::connect(bool quick)
 {
-  if (!SERVER_TOKEN[0]) {
+  if (!resolveAndLoadTelemetryToken()) {
     // The collector is deliberately protected at both Caddy boundaries.
     // Refuse to cycle the modem when this production credential is absent.
     Serial.println("[AUTH] Telemetry token missing");
@@ -830,9 +907,9 @@ bool TeleClientHTTP::connect(bool quick)
   }
 #endif
 #if ENABLE_WIFI
-  wifi.setBearerToken(SERVER_TOKEN);
+  wifi.setBearerToken(telemetryToken);
 #endif
-  cell.setBearerToken(SERVER_TOKEN);
+  cell.setBearerToken(telemetryToken);
   Serial.println("[AUTH] Bearer token enabled");
 
   if (!quick) {

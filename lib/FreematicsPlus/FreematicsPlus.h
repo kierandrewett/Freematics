@@ -165,6 +165,10 @@ public:
   void xbWrite(const char* data, int len);
   // receive data from xBee UART (returns 0/1/2)
   int xbReceive(char* buffer, int bufsize, unsigned int timeout = 1000, const char** expected = 0, byte expectedCount = 0);
+  // Like xbReceive; returns -2 when cancelled, checking between 50 ms UART reads.
+  int xbReceiveCancellable(char* buffer, int bufsize, unsigned int timeout,
+      const char** expected, byte expectedCount,
+      CFreematics::ContinueCheck continueCheck, void* context) override;
   // purge xBee UART buffer
   void xbPurge();
   // toggle xBee module power

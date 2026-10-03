@@ -125,7 +125,7 @@ def load_build_environment(path: Path, environ: Mapping[str, str]) -> dict[str, 
             key, value = match.groups()
             if key.startswith("FREEMATICS_FORMAT_SD_"):
                 raise ValueError(f".env:{number}: card formatting must be a one-time process option")
-            if key not in {"FREEMATICS_TOKEN", "PRODUCTION_BUILD", "FREEMATICS_BUILD_ID"}:
+            if key not in {"FREEMATICS_TOKEN", "PRODUCTION_BUILD", "FREEMATICS_BUILD_ID", "FREEMATICS_OTA_RELEASE"}:
                 continue
             if key in values:
                 raise ValueError(f".env:{number}: duplicate {key}")

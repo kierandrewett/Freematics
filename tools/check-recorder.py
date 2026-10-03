@@ -35,8 +35,23 @@ storage_header = (ROOT / "telestore.h").read_text()
 config = (ROOT / "config.h").read_text()
 settings = "\n".join(line for line in config.splitlines() if re.match(
     r"#define (RECORD_BATCH_MAX|RECORD_BLOCK_SIZE|LOG_FLUSH_INTERVAL_MS|SAMPLE_FRAME_SIZE) ", line))
+assert re.search(r"#define BUFFER_SLOTS 8\b", config), "SD build must use only the bounded handoff queue"
 
 recorder = extract(firmware, "void recordSamples(void*)")
+# Guard the production upload path as well as the recorder harness below: all
+# STORAGE_SD protocols must read the durable journal, and may not select a RAM
+# CBuffer when the journal is empty or unhealthy.
+telemetry = extract(firmware, "void telemetry(void* inst)")
+sd_upload = telemetry.split("// SD is the sole upload source in this build.", 1)[1].split("#else", 1)[0]
+assert "replaying = durableQueue.healthy() && durableQueue.pendingBytes() != 0;" in sd_upload
+assert "buildReplayBatch(durableQueue" in sd_upload
+assert "bufman.getOldest" not in sd_upload
+assert "durableQueue.acknowledge()" in telemetry
+assert "durableQueue.retry()" in telemetry
+assert "[STORAGE] SD journal unavailable; unjournaled readings are being discarded" in recorder
+collect_sample = extract(firmware, "void collectSample()")
+assert "const bool durableAvailable = durableQueue.cachedHealthy();" in collect_sample
+assert collect_sample.index("usbTelemetryQueue.publish(record") < collect_sample.index("if (durableAvailable)")
 # The SD retry path powers the bus down and back up. The fake card has no bus.
 recorder = recorder.replace("SD.end();", "/* SD.end() */").replace("SPI.end();", "/* SPI.end() */")
 
@@ -99,6 +114,9 @@ for signature in ("CBuffer::CBuffer(uint8_t* mem)",
                   "uint16_t CBufferManager::pendingReadings() const",
                   "uint16_t CBufferManager::unpersistedReadings() const",
                   "uint16_t CBufferManager::recordedReadings() const"):
+    code += extract(client, signature) + "\n"
+for signature in ("void CBufferManager::recordMissedReading(uint32_t count)",
+                  "uint32_t CBufferManager::missedReadings() const"):
     code += extract(client, signature) + "\n"
 code = code.replace("int bytes, uint8_t count = 1)\n{", "int bytes, uint8_t count)\n{")
 code += r'''
@@ -200,24 +218,33 @@ int main()
               << " SD opens (one transaction per reading needs 400)\n";
     if (!okay) return 1;
 
-    // A failed card write keeps every reading in RAM and logs CSV once. When
-    // the card recovers, the SD retry path journals the RAM copies.
+    // A failed append must not turn PSRAM into a recording backlog. Count and
+    // discard those readings; later samples persist after the card recovers.
     cardFiles.clear();
     durableQueue = DurableQueue();
     logger.lines = 0;
     assert(durableQueue.begin());
     publish(10, 500000);
-    cardWriteBudget = 0;
+    cardOnline = false;
     runRecorder(2000);
-    okay = bufman.unpersistedReadings() == 10 && bufman.recordedReadings() == 10 && logger.lines == 10;
+    char failedFrame[8192];
+    uint16_t failedLength = 0;
+    const bool journalHasFailedSample = durableQueue.peek(failedFrame, sizeof(failedFrame), &failedLength);
+    const bool uploadsPaused = !durableQueue.healthy();
+    okay = uploadsPaused && !journalHasFailedSample && bufman.unpersistedReadings() == 0 &&
+      bufman.recordedReadings() == 0 && bufman.missedReadings() == 10 && logger.lines == 0;
     runRecorder(2000);
-    okay = okay && bufman.unpersistedReadings() == 10 && logger.lines == 10;
-    std::cout << (okay ? "PASS" : "FAIL") << ": failed card write keeps 10 readings in RAM and logs CSV once\n";
+    okay = okay && bufman.unpersistedReadings() == 0 && bufman.recordedReadings() == 0 &&
+      bufman.missedReadings() == 10 && logger.lines == 0;
+    std::cout << (okay ? "PASS" : "FAIL") << ": SD fault pauses uploads, drops 10 unjournaled samples, and reports all 10 missed\n";
     if (!okay) return 1;
-    cardWriteBudget = -1;
+    cardOnline = true;
     runRecorder(40000);
-    okay = bufman.unpersistedReadings() == 0 && logger.lines == 10 && journalHolds(10, 500000);
-    std::cout << (okay ? "PASS" : "FAIL") << ": recovered card journals the RAM copies without duplicating CSV lines\n";
+    publish(10, 510000);
+    runRecorder(2000);
+    okay = bufman.unpersistedReadings() == 0 && logger.lines == 10 && journalHolds(10, 510000) &&
+      bufman.missedReadings() == 10;
+    std::cout << (okay ? "PASS" : "FAIL") << ": recovered card stores new samples; old RAM samples are not replayed\n";
     if (!okay) return 1;
 
     // A wake that is still being confirmed journals its readings but creates

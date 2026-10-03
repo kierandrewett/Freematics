@@ -12,10 +12,13 @@
 - TLS rejects an invalid certificate or hostname before sending credentials.
 - The installed Arduino SDK omits automatic certificate date checks; verify all certificate dates explicitly.
 - Binary TLS bytes, partial socket writes, HTTP chunking and truncated responses must not produce a false acknowledgement.
-- An SD append fails, a record is partial, or a cursor is invalid. Keep the original bytes and the RAM sample.
+- An SD append fails, a record is partial, or a cursor is invalid. Keep original journal bytes, pause upload, and
+  count/drop any sample without a verified SD copy rather than making RAM the outage archive.
 - A failed existence check is followed by a truncating journal create. Use exclusive creation so existing bytes cannot be erased.
-- Repeated I/O attempts on a failed card stall collection and USB diagnostics. Keep the cached backlog until scheduled recovery.
-- Fresh RAM readings prevent an older SD backlog from ever being replayed.
+- Repeated I/O attempts on a failed card stall collection and USB diagnostics. Retry at a bounded rate and keep
+  live USB diagnostics responsive.
+- Fresh RAM readings prevent an older SD backlog from ever being replayed. Upload only from the SD journal and
+  preserve its acknowledgement order after recovery.
 - USB bench power enters parked standby before the existing SD backlog has uploaded.
 - Uploaded data disappears from the local archive.
 - An unbounded archive retention scan stalls fresh collection for seconds as the directory grows.
@@ -114,15 +117,19 @@ recording fault warning remain enabled.
 
 ## Recovery and retention behaviour
 
-A complete sample must reach a verified SD journal write before its RAM slot
-is released. A failed POST retains the batch for retry. Only an exact collector
-acknowledgement advances the saved cursor. A login or ping cannot silence the
-missing-data alarm. SD recovery never formats the card.
+A complete sample must reach a verified SD journal write before its short
+sampler-to-recorder handoff slot is released. A failed POST retains the batch
+on SD for retry. Only an exact collector acknowledgement advances the saved
+cursor. A login or ping cannot silence the missing-data alarm. SD recovery
+never formats the card.
 
-When the card fails, fresh samples remain in RAM and can upload over cellular.
-They cannot have an SD copy until the card works again. RAM does not survive
-power loss. The remaining SD fault therefore prevents acceptance of reliable
-recording and the requested local retention on this unit.
+The current SD source does not retain failed or unjournaled samples in RAM for
+later upload. While the journal is unhealthy, USB live telemetry continues,
+but local samples are counted as missed, pending waveform points are dropped
+and reported, and uploads pause. This makes the gap explicit rather than
+pretending the SD record exists. The requested continuous history therefore
+still depends on resolving the intermittent physical card/drive readiness
+fault; there is no second durable medium to cover an SD outage.
 
 Once all journal records are acknowledged, the journal is renamed into
 `/DATA/<id>.BIN` and retained locally. CSV and binary archives expire after
@@ -293,13 +300,12 @@ OBD share that lock, so an internal GNSS reading can become stale during an
 OBD stall; its reported age keeps that visible. Clock checkpoints and SD
 backlog statistics also run outside the sampling thread.
 
-The recorder claims unrecorded RAM slots before the uploader can use them.
-A successful journal append releases RAM; a failed append exposes a recorded
-RAM fallback to the uploader. Failed POSTs restore those slots. The recorder
-can journal retained fallback samples after storage recovers while offline.
-The queue never overwrites captured data. Finite capacity, complete power
-loss before journaling, scheduling overload and hardware failure still bound
-retention; there is no claim of physical zero-loss proof.
+The recorder uses eight bounded PSRAM handoff slots only to pass a sample from
+the sampler to the SD writer. They are not an outage spool: if the journal is
+unhealthy or an append fails, the sample is released, counted as missed, and
+never uploaded. Only a verified journal append makes a sample upload-eligible.
+Finite SD capacity, power loss before commit, scheduling overload, and
+hardware failure still prevent a physical zero-loss guarantee.
 
 Latest successfully measured OBD values remain in every sample with individual
 ages at `0x400 | pid`. GNSS, voltage, MEMS and signal strength have separate age
@@ -322,8 +328,9 @@ The host check compiles the real snapshot emitter, buffer serializer, queue
 handoff methods and deadline scheduler with deterministic I/O. A complete
 87-PID catalogue plus all DTC slots and conservative remaining sample fields
 fits 2,048-byte RAM slots and the 8,192-byte journal frame limit. Element counts
-are now 16-bit because a rich sample can exceed 255 fields. The PSRAM queue
-retains 1,024 slots. Host scheduling checks cover 2,400 consecutive 250 ms
+are now 16-bit because a rich sample can exceed 255 fields. The production
+PSRAM handoff is bounded to eight slots; the host stress fixture can model a
+larger queue. Host scheduling checks cover 2,400 consecutive 250 ms
 slots without accumulating simulated formatting time. These are source/host
 checks, not ESP32 scheduling, SD endurance or physical ECU evidence.
 
@@ -360,3 +367,42 @@ Live collector binary SHA-256:
 The full collector Python suite ran 62 checks: 55 passed, 4 optional checks were
 skipped, and 3 Git mirror checks were blocked by the local Git identity proxy's
 refusal to set the fixture bot identity. No Git identity guard was bypassed.
+
+## SD failure investigation, 3 October 2026
+
+The strongest historical evidence is for an intermittent card initialization
+or mount failure, not a proven journal write failure. A recorded
+`f_mount failed: physical drive cannot work` is FatFS `FR_NOT_READY`: it means
+the physical drive was not ready for the volume mount. The SD core's SPI init
+path already reports command-level failures (select/wait, GO_IDLE_STATE,
+SEND_IF_COND, ACMD41/OP_COND, OCR, and block-length setup). On failed boots,
+the application previously reduced this to `NO SD CARD` / `SD journal
+unavailable`. Prior runs include repeated warm-reset/remount failures and
+successful recovery after a full power disconnect. The same card's journal
+header and CRC were subsequently read successfully without formatting.
+Together these facts make persistent FAT corruption less likely, but do not
+identify whether card readiness, power/contact/interface, reset timing, or a
+card-controller fault is responsible. Do not label USB power as the cause.
+
+During the separate 45-second live USB measurement on 3 October, journal
+health (`0x08F`) remained 1, missed readings (`0x08E`) and rejected readings
+(`0x097`) remained 0, and the device USB drop counter remained 0. This short
+healthy window does not rule out an intermittent SD fault and provides no
+evidence of an append/readback failure. The serial link had corrupt telemetry
+records during that same window; that is a separate transport symptom.
+
+The source adds `[SD-DIAG]` mount attempt/result/timing markers and
+stage-specific journal errors: create/open, capacity, short header or frame
+write, and readback open/position/header/content failures. On the current
+indoor USB-only boot, all three 1 MHz mount attempts failed with `FR_NOT_READY`
+(`physical drive cannot work`); each was followed by
+`sdSelectCard(): Select Failed` after its 500 ms ready wait. During an 8-second
+USB capture, 31 valid FT1 records remained spaced at 250 ms, USB drops and
+restarts stayed at zero, the journal-health field stayed zero, and missed
+readings rose from 199 to 229. This confirms live telemetry continues while
+durable recording is unavailable and losses are counted rather than spooled.
+The cached journal-bytes field was zero but is not proof of the physical
+journal's size or contents. No format or destructive card test was run. This
+recurrence localizes the failure to card initialization/response; its physical
+cause remains unconfirmed. Compare after a full power disconnect before
+changing the driver or card contents.

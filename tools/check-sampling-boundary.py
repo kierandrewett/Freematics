@@ -152,6 +152,7 @@ code += '#define PHASE_CONFIRMING 0\n#define PHASE_TRIP 1\n#define PHASE_WRAP_UP
 code += 'uint8_t powerPhase = PHASE_TRIP; uint32_t phaseSince = 0; bool vehicleActivitySeen = true;\n'
 code += 'uint32_t lastCollectionTime = 0;\n'
 code += 'bool vehicleActivityNow(uint32_t, uint32_t* obd) { *obd = millis(); return true; }\n'
+code += 'void noteOtaResetEvent(uint32_t, bool) {}\n'
 code += 'float readVehicleVoltage() { return 14.2f; }\n'
 code += 'struct { uint32_t cachedPendingBytes() { return 0; } } durableQueue;\n'
 code += 'uint8_t nextPhase=PHASE_TRIP;\n'
@@ -280,6 +281,13 @@ int main(int argc, char** argv) {
   assert(full.recordMotion(11020,acceleration,gyro));
   const auto motionOnly=drain(full);
   assert(occurrences(motionOnly,",A0:")==0 && occurrences(motionOnly,",A1:")==1);
+  SensorWaveforms noStorage;
+  for(unsigned i=0;i<3;++i) assert(noStorage.recordVoltage(12000+i*20,14));
+  for(unsigned i=0;i<2;++i) assert(noStorage.recordMotion(12000+i*20,acceleration,gyro));
+  noStorage.discardPending();
+  const auto discarded=drain(noStorage);
+  assert(occurrences(discarded,",A0:")==0 && occurrences(discarded,",A1:")==0);
+  assert(discarded.find("A4:3;2;0;0,")!=std::string::npos);
   std::cout<<"PASS: waveform drain exactly once, raw precision, independent sensors, rollover, no partial groups, saturation and invalid-input loss counters\n";
   tick=1000;
   for(int i=0;i<2400;i++){uint32_t before=tick;process();assert(tick-before==250);}

@@ -184,6 +184,21 @@ def gnss_capture_ms(fields: dict[str, str]) -> int | None:
     return int(parsed.timestamp() * 1_000) + int(age)
 
 
+def device_clock_capture_ms(fields: dict[str, str]) -> int | None:
+    """Decode the journal's exact UTC epoch fields, rejecting non-integers."""
+    raw_seconds = fields.get("90")
+    raw_milliseconds = fields.get("91")
+    if raw_seconds is None or raw_milliseconds is None:
+        return None
+    if not re.fullmatch(r"[0-9]+", raw_seconds) or not re.fullmatch(r"[0-9]+", raw_milliseconds):
+        return None
+    seconds = int(raw_seconds)
+    milliseconds = int(raw_milliseconds)
+    if not 1_704_067_200 <= seconds <= 0xFFFFFFFF or not 0 <= milliseconds <= 999:
+        return None
+    return seconds * 1_000 + milliseconds
+
+
 def monotonic_delta(current: int, previous: int) -> int:
     """Signed elapsed milliseconds across a 32-bit clock rollover."""
     return (current - previous + 0x80000000) % 0x100000000 - 0x80000000
@@ -198,11 +213,20 @@ def frame_timestamps(frames: list[Frame]) -> tuple[list[int | None], list[str]]:
     stay NULL and are marked ``unknown`` rather than being fabricated from the
     collector-created trip filename.
     """
-    captures: list[int | None] = [gnss_capture_ms(frame.fields) for frame in frames]
-    qualities = [
-        ("anchored" if numeric(frame.fields.get("93")) else "gnss") if capture is not None else "unknown"
-        for frame, capture in zip(frames, captures)
-    ]
+    captures: list[int | None] = []
+    qualities: list[str] = []
+    for frame in frames:
+        device_clock = device_clock_capture_ms(frame.fields)
+        if device_clock is not None:
+            captures.append(device_clock)
+            qualities.append("device_clock")
+            continue
+        gnss = gnss_capture_ms(frame.fields)
+        captures.append(gnss)
+        qualities.append(
+            ("anchored" if numeric(frame.fields.get("93")) else "gnss")
+            if gnss is not None else "unknown"
+        )
     anchors = [index for index, capture in enumerate(captures) if capture is not None]
     if not anchors:
         return captures, qualities

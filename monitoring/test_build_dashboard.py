@@ -97,16 +97,14 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertFalse(dashboard["templating"]["list"][1]["current"]["selected"])
         self.assertNotIn("20260827-001247", json.dumps(dashboard))
         titles = {panel["title"] for panel in dashboard["panels"]}
-        self.assertIn("Trip index", titles)
+        self.assertIn("Trip archive — click a trip to inspect", titles)
         self.assertIn("Trip route", titles)
-        archive_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 41)
+        archive_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 19)
         self.assertEqual(archive_panel["datasource"]["uid"], "freematics-history")
         self.assertEqual(archive_panel["datasource"]["type"], "frser-sqlite-datasource")
         archive_sql = archive_panel["targets"][0]["queryText"]
         self.assertIn("FROM trip", archive_sql)
-        self.assertIn("timeline_start_ms BETWEEN", archive_sql)
-        self.assertIn("$__from", archive_sql)
-        self.assertIn("$__to", archive_sql)
+        self.assertIn("timeline_start_ms", archive_sql)
         self.assertIn("${device:sqlstring}", archive_sql)
         for quality_field in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
             self.assertIn(quality_field, archive_sql)
@@ -117,8 +115,7 @@ class DashboardViewsTest(unittest.TestCase):
             self.assertIn(column, integrity_sql)
         trip_index = next(panel for panel in dashboard["panels"] if panel["id"] == 19)
         trip_index_sql = trip_index["targets"][0]["queryText"]
-        self.assertIn("timeline_start_ms IS NULL OR", trip_index_sql)
-        self.assertIn("timeline_start_ms IS NULL OR", archive_sql)
+        self.assertIn("ORDER BY trip_id DESC", trip_index_sql)
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
@@ -128,13 +125,14 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertNotIn("transformations", route)
 
         expected_layout = {
-            38: {"h": 5, "w": 24, "x": 0, "y": 39},
-            31: {"h": 10, "w": 24, "x": 0, "y": 44},
-            39: {"h": 7, "w": 12, "x": 0, "y": 54},
-            40: {"h": 7, "w": 12, "x": 12, "y": 54},
-            41: {"h": 7, "w": 24, "x": 0, "y": 61},
+            38: {"h": 5, "w": 24, "x": 0, "y": 46},
+            31: {"h": 10, "w": 24, "x": 0, "y": 51},
+            39: {"h": 7, "w": 12, "x": 0, "y": 61},
+            40: {"h": 7, "w": 12, "x": 12, "y": 61},
             42: {"h": 8, "w": 24, "x": 0, "y": 68},
             44: {"h": 8, "w": 24, "x": 0, "y": 76},
+            48: {"h": 8, "w": 24, "x": 0, "y": 84},
+            50: {"h": 7, "w": 24, "x": 0, "y": 39},
         }
         layout = {panel["id"]: panel["gridPos"] for panel in dashboard["panels"]}
         for panel_id in (22, 24):
@@ -281,6 +279,53 @@ class DashboardViewsTest(unittest.TestCase):
             self.assertEqual(run(17)[0][0], 0.6)
             self.assertEqual(run(40), [("0x030", 5.0), ("0x10C", 1400.0), ("0x12F", 9.0)])
             self.assertEqual(run(44)[0][3:5], ("P234", "powertrain"))
+        finally:
+            connection.close()
+
+    def test_historical_voltage_chart_uses_archive_timeline_and_keeps_missing_values_gapped(self) -> None:
+        dashboard = build_dashboard("trips")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 50)
+        self.assertEqual(panel["title"], "Device input and ECU voltage")
+        self.assertEqual(panel["datasource"]["uid"], "freematics-history")
+        self.assertEqual(panel["targets"][0]["queryType"], "time series")
+        self.assertEqual(panel["targets"][0]["timeColumns"], ["time"])
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["insertNulls"])
+        self.assertEqual(panel["fieldConfig"]["defaults"]["custom"]["showPoints"], "always")
+
+        sql = panel["targets"][0]["queryText"]
+        self.assertIn("s.timeline_ms / 1000.0 AS time", sql)
+        self.assertIn("m.pid = '0x024'", sql)
+        self.assertIn("m.pid = '0x042'", sql)
+        self.assertNotIn("collector_received_ms", sql)
+        self.assertNotIn("archive_mtime_ms", sql)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 3000, 'gnss', 3, 9000000, 9000000)"
+            )
+            for sequence, timeline_ms in enumerate((1000, 2000, 3000)):
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, capture_utc_ms, timeline_ms, collector_received_ms, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, ?, ?, ?, 'gnss')",
+                    (sequence, sequence * 1000, timeline_ms + 10, timeline_ms, 8000000 + sequence, 9000000),
+                )
+            connection.executemany(
+                "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
+                ((0, "0x024", 1380), (0, "0x042", 14.1), (2, "0x024", 1240), (2, "0x042", 13.2)),
+            )
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual(rows, [(1.0, 13.8, 14.1), (2.0, None, None), (3.0, 12.4, 13.2)])
         finally:
             connection.close()
 

@@ -6,10 +6,75 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from history_indexer import DTC_CODE_SLOTS, DTC_GROUPS, Frame, HistoryIndexer, display_timestamps, parse_frames
+from history_indexer import (
+    DTC_CODE_SLOTS,
+    DTC_GROUPS,
+    Frame,
+    HistoryIndexer,
+    device_clock_capture_ms,
+    display_timestamps,
+    frame_timestamps,
+    parse_frames,
+)
 
 
 class HistoryIndexerTest(unittest.TestCase):
+    def test_device_clock_fields_enforce_integer_ranges(self) -> None:
+        self.assertEqual(
+            device_clock_capture_ms({"90": "1704067200", "91": "0"}),
+            1_704_067_200_000,
+        )
+        self.assertEqual(
+            device_clock_capture_ms({"90": "4294967295", "91": "999"}),
+            4_294_967_295_999,
+        )
+        invalid = (
+            {"90": "1704067199", "91": "0"},
+            {"90": "4294967296", "91": "0"},
+            {"90": "1704067200.0", "91": "0"},
+            {"90": "1704067200", "91": "-1"},
+            {"90": "1704067200", "91": "1000"},
+            {"90": "1704067200", "91": "1.5"},
+            {"90": " 1704067200", "91": "0"},
+            {"90": "1704067200"},
+        )
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                self.assertIsNone(device_clock_capture_ms(fields))
+
+    def test_invalid_device_clock_fields_fall_back_to_gnss(self) -> None:
+        frame = Frame(
+            100,
+            {"90": "1704067199", "91": "0", "11": "290926", "10": "12101300"},
+            (),
+        )
+        captures, qualities = frame_timestamps([frame])
+        self.assertEqual(captures, [1_790_683_813_000])
+        self.assertEqual(qualities, ["gnss"])
+
+    def test_device_clock_utc_survives_journal_replay_without_gnss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "ZKUCALJ0/2026/10/03/20261003-170000.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text(
+                "0:100,90:1791030012,91:345,10C:900,"
+                "0:350,90:1791030012,91:595,10C:902,"
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(
+                root,
+                database,
+                now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000,
+            )
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                rows = connection.execute(
+                    "SELECT capture_utc_ms, timestamp_quality FROM sample ORDER BY sequence"
+                ).fetchall()
+                self.assertEqual(rows, [(1791030012345, "device_clock"),
+                                        (1791030012595, "device_clock")])
+
     def test_held_gnss_fix_preserves_250ms_capture_timeline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"

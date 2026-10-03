@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-03",
+  "vehicle_connected": false,
+  "firmware_build_id": "ff430f457644-dirty",
+  "board_hardware_type": 14,
+  "sd_mount_attempts": [
+    {"attempt": 1, "spi_hz": 1000000, "result": "FR_NOT_READY", "elapsed_ms": 522},
+    {"attempt": 2, "spi_hz": 1000000, "result": "FR_NOT_READY", "elapsed_ms": 1015},
+    {"attempt": 3, "spi_hz": 1000000, "result": "FR_NOT_READY", "elapsed_ms": 1015}
+  ],
+  "sd_core_errors": {
+    "f_mount": "physical drive cannot work",
+    "select": "sdSelectCard(): Select Failed after 500 ms ready wait"
+  },
+  "usb_measurement_seconds": 8.0,
+  "valid_ft1_frames": 31,
+  "capture_interval_ms": {"median": 250, "p95": 250, "max": 250},
+  "corrupt_ft1_records": 1,
+  "device_usb_drops": 0,
+  "device_restarts": 0,
+  "missed_readings_start_end": [199, 229],
+  "durable_journal_health_start_end": [0, 0],
+  "reported_cached_journal_bytes_start_end": [0, 0],
+  "vehicle_pid_freshness": "not measured; ECU disconnected",
+  "interpretation": "Live USB remains at 4 Hz while SD is unavailable. New captures are counted as missed, not retained in a retry backlog or uploaded. Repeated FR_NOT_READY plus select timeouts localize this occurrence to card initialization/response, not post-mount journal write/readback. Cached journal bytes of zero are not evidence that the physical journal is empty.",
+  "privacy": "Aggregates only; no VIN, coordinates, credentials, or sensor values."
+}

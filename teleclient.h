@@ -1,5 +1,10 @@
 #include "config.h"
 
+// Resolve the existing NVS credential or seed it from a private migration
+// build. Safe to call once after NVS and Serial have initialized.
+bool initializeTelemetryCredential();
+bool telemetryCredentialPersisted();
+
 #define EVENT_LOGIN 1
 #define EVENT_LOGOUT 2
 #define EVENT_SYNC 3
