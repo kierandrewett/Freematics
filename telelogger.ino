@@ -18,6 +18,7 @@
 #include <FreematicsPlus.h>
 #include <httpd.h>
 #include <esp_sleep.h>
+#include <esp_system.h>
 #include <sys/time.h>
 #include <time.h>
 #include "config.h"
@@ -28,6 +29,7 @@
 #include "teleclient.h"
 #include "sensorwaveform.h"
 #include "telequeue.h"
+#include "usbtelemetry.h"
 #include "sdaccess.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
@@ -93,6 +95,9 @@ Task gpsTask;
 Task memsTask;
 SemaphoreHandle_t memsMutex = nullptr;
 Task recorderTask;
+Task usbTelemetryTask;
+UsbTelemetryQueue usbTelemetryQueue;
+uint64_t usbBootId = 0;
 SemaphoreHandle_t coprocessorMutex = nullptr;
 portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
 GPS_DATA gpsSnapshot = {};
@@ -127,6 +132,7 @@ SensorWaveforms sensorWaveforms;
 
 struct OBDSnapshot {
   PID_POLLING_INFO readings[sizeof(obdData) / sizeof(obdData[0])];
+  uint8_t supportedByPid[sizeof(obdData) / sizeof(obdData[0])];
   DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
   uint32_t timeouts;
   uint32_t latency;
@@ -785,6 +791,9 @@ void publishOBDSnapshot()
   snapshot.timeouts = timeoutsOBD;
   snapshot.latency = lastOBDReadLatency;
   snapshot.supported = supportedOBDPIDs;
+  for (byte index = 0; index < sizeof(obdData) / sizeof(obdData[0]); index++) {
+    snapshot.supportedByPid[index] = obd.isValidPID(obdData[index].pid) ? 1 : 0;
+  }
   snapshot.protocol = obd.getProtocol();
   snapshot.failures = fastOBDFailureCycles;
   snapshot.status = state.check(STATE_OBD_READY) ? (fastOBDFailureCycles ? 2 : 1) : 0;
@@ -1469,6 +1478,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
 void collectSample()
 {
   uint32_t startTime = millis();
+  struct timeval captureTime = {};
+  gettimeofday(&captureTime, nullptr);
 
   CBuffer* buffer = bufman.getFree();
   if (!buffer) {
@@ -1556,9 +1567,88 @@ void collectSample()
 
   buffer->timestamp = startTime;
 
+  if (sys.devType > 12) {
+    UsbTelemetryRecord* record = usbTelemetryQueue.reserve();
+    if (record) {
+      CStorageRAM wireFrame;
+      wireFrame.init(record->payload, sizeof(record->payload));
+      wireFrame.header(devid);
+      wireFrame.timestamp(startTime);
+      buffer->serialize(wireFrame);
+      wireFrame.tailer();
+      if (!wireFrame.overflowed() && wireFrame.length() < USB_TELEMETRY_LINE_SIZE) {
+        record->captureMs = startTime;
+        record->bootId = usbBootId;
+        record->utcValid = captureTime.tv_sec >= 1704067200 ? 1 : 0;
+        record->captureUtcMs = record->utcValid ?
+          (uint64_t)captureTime.tv_sec * 1000ULL + captureTime.tv_usec / 1000 : 0;
+        record->dropped = usbTelemetryQueue.dropped();
+        portENTER_CRITICAL(&sensorMux);
+        const OBDSnapshot snapshot = obdSnapshot;
+        portEXIT_CRITICAL(&sensorMux);
+        size_t supportedLength = 0;
+        if (snapshot.status) {
+          for (byte index = 0; index < sizeof(obdData) / sizeof(obdData[0]); index++) {
+            if (!snapshot.supportedByPid[index]) continue;
+            const int added = snprintf(record->supported + supportedLength,
+              sizeof(record->supported) - supportedLength, "%s%02X",
+              supportedLength ? "," : "", obdData[index].pid);
+            if (added < 0 || (size_t)added >= sizeof(record->supported) - supportedLength) break;
+            supportedLength += (size_t)added;
+          }
+        }
+        if (!usbTelemetryQueue.publish(record, wireFrame.length())) {
+          Serial.println("[USB] Telemetry record dropped: serialization overflow");
+        }
+      } else {
+        usbTelemetryQueue.publish(record, 0);
+      }
+    }
+  }
+
   bufman.publish(buffer);
   lastCollectionTime = millis();
 
+}
+
+void streamUsbTelemetry(void*)
+{
+  for (;;) {
+    UsbTelemetryRecord* record = usbTelemetryQueue.peek();
+    if (!record) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+
+    char header[USB_TELEMETRY_SUPPORT_SIZE + 128];
+    const int headerLength = snprintf(header, sizeof(header),
+      "@FT1,%llu,%lu,%u,%llu,%lu,%s|",
+      (unsigned long long)record->bootId,
+      (unsigned long)record->captureMs,
+      (unsigned int)record->utcValid,
+      (unsigned long long)record->captureUtcMs,
+      (unsigned long)record->dropped,
+      record->supported);
+    if (headerLength > 0 && (size_t)headerLength < sizeof(header)) {
+      const char* parts[2] = {header, record->payload};
+      const size_t lengths[2] = {(size_t)headerLength, record->length};
+      for (byte part = 0; part < 2; part++) {
+        size_t offset = 0;
+        while (offset < lengths[part]) {
+          const size_t writable = Serial.availableForWrite();
+          if (!writable) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+          }
+          const size_t count = min(writable, lengths[part] - offset);
+          offset += Serial.write((const uint8_t*)parts[part] + offset, count);
+        }
+      }
+      while (!Serial.availableForWrite()) vTaskDelay(pdMS_TO_TICKS(2));
+      Serial.write('\n');
+    }
+    usbTelemetryQueue.release();
+  }
 }
 
 // Engine or wheels in use, from the latest acquired values. Engine RPM counts,
@@ -2849,6 +2939,7 @@ void setup()
 #endif
   // initialize USB serial
   Serial.begin(115200);
+  usbBootId = ((uint64_t)esp_random() << 32) | esp_random();
 
   // init LED pin
 #ifdef PIN_LED
@@ -2968,6 +3059,9 @@ if (!state.check(STATE_MEMS_READY)) do {
   publishOBDSnapshot();
 #endif
   initialize();
+  if (sys.devType > 12 && !usbTelemetryTask.create(streamUsbTelemetry, "usb-telemetry", 1, 3072)) {
+    Serial.println("[CRITICAL] USB telemetry task creation failed; recording and uploads continue");
+  }
   if (!coprocessorMutex ||
       !recorderTask.create(recordSamples, "recorder", 1, 8192) ||
       !obdTask.create(acquireOBD, "obd", 1, 8192) ||
