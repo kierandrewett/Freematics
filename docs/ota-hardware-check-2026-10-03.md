@@ -33,6 +33,13 @@
   telemetry credential and remains local; neither rebuilt image was flashed
   during this pass. The board's serial port is currently held by the dashboard,
   and its SD journal is unhealthy.
+- Built a separate tokenless OTA release candidate from committed source
+  `dac18da40ec3`, with the production server/APN configuration validated but no
+  telemetry token embedded. Its Model B image SHA-256 is
+  `e765a4729ce3eb0da4fdaebb249b17cef91916425e6fae80fbbed790b38d45a9`; the
+  matching `freematics-model-b.bin.sha256sum` sidecar verifies successfully.
+  The binary carries the `FREEMATICS_OTA_RELEASE_BUILD=1` marker. It is staged
+  locally only and has not been published to GitHub or exercised on hardware.
 - With the SD journal unavailable, an 8-second read-only USB measurement
   produced 31 valid @FT1 frames at a 250 ms median/p95 cadence, one corrupt
   record, and zero USB drops or device restarts. The durable-journal health
