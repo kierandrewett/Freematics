@@ -1,8 +1,10 @@
 #include "ota_update.h"
 
 #include "FreematicsCellTLS.h"
+#include "config.h"
 #include "ota_release_policy.h"
 #include "ota_sha256_sidecar.h"
+#include "ota_version_policy.h"
 
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -25,6 +27,10 @@ const uint8_t kSha256Bytes = 32;
 const uint8_t kMaxRedirects = 3;
 const uint32_t kSidecarMaximum = 255;
 const unsigned kHttpTimeoutMs = 15UL * 60UL * 1000UL;
+// The release version is parsed from the downloaded image before it can be
+// staged. Keep a matching marker in every image so OTA can reject downgrades.
+const char kFirmwareReleaseMarker[] =
+    "FREEMATICS_RELEASE_VERSION=" FREEMATICS_RELEASE;
 
 bool cancelled(const volatile bool* requested)
 {
@@ -110,6 +116,7 @@ struct FirmwareWriter {
   uint32_t bytesWritten;
   const volatile bool* cancelRequested;
   mbedtls_sha256_context sha;
+  freematics::ota::FirmwareVersionScanner versionScanner;
 };
 
 bool writeFirmware(void* context, const unsigned char* bytes, size_t length)
@@ -129,6 +136,7 @@ bool writeFirmware(void* context, const unsigned char* bytes, size_t length)
     writer->failed = true;
     return false;
   }
+  writer->versionScanner.update(bytes, length);
   writer->bytesWritten += (uint32_t)length;
   return true;
 }
@@ -191,6 +199,7 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     Serial.println("[OTA] Refusing update: strict SIM7670 TLS transport required");
     return OTA_ATTEMPT_FAILED;
   }
+  Serial.printf("[OTA] Installed release identity: %s\n", kFirmwareReleaseMarker);
   if (cancelled(cancelRequested)) return OTA_ATTEMPT_CANCELLED;
 
   SidecarBuffer sidecar = {};
@@ -246,6 +255,18 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     Serial.println("[OTA] Package SHA-256 does not match release sidecar");
     esp_ota_abort(firmware.handle);
     return OTA_ATTEMPT_FAILED;
+  }
+  char candidateVersion[freematics::ota::FirmwareVersionScanner::kVersionCapacity];
+  if (!firmware.versionScanner.read(candidateVersion)) {
+    Serial.println("[OTA] Package has no valid firmware release version");
+    esp_ota_abort(firmware.handle);
+    return OTA_ATTEMPT_FAILED;
+  }
+  if (!freematics::ota::isStrictlyNewerFirmware(candidateVersion,
+                                                 FREEMATICS_RELEASE)) {
+    Serial.println("[OTA] Latest release is not newer; refusing downgrade or reinstall");
+    esp_ota_abort(firmware.handle);
+    return OTA_ATTEMPT_NO_UPDATE;
   }
   if (cancelled(cancelRequested)) {
     esp_ota_abort(firmware.handle);

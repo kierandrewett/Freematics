@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
@@ -21,6 +22,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TOKEN_PRESENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_EMBEDDED=1"
 TOKEN_ABSENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
 OTA_RELEASE_MARKER = "FREEMATICS_OTA_RELEASE_BUILD=1"
+RELEASE_VERSION_MARKER = b"FREEMATICS_RELEASE_VERSION="
 
 
 def _image_contains_token(image_path: Path, token: str) -> bool:
@@ -42,8 +44,32 @@ def _verify_tokenless_build(image_path: Path) -> None:
     embedded = _image_contains_token(image_path, TOKEN_PRESENT_MARKER)
     absent = _image_contains_token(image_path, TOKEN_ABSENT_MARKER)
     ota_release = _image_contains_token(image_path, OTA_RELEASE_MARKER)
-    if embedded or not absent or not ota_release:
-        raise ValueError("firmware is not proven token-free by its build marker; refusing to package")
+    version_found = False
+    with image_path.open("rb") as image:
+        overlap = b""
+        while chunk := image.read(1024 * 1024):
+            searchable = overlap + chunk
+            search_from = 0
+            while True:
+                marker_at = searchable.find(RELEASE_VERSION_MARKER, search_from)
+                if marker_at < 0:
+                    break
+                version_start = marker_at + len(RELEASE_VERSION_MARKER)
+                version_end = searchable.find(b"\0", version_start)
+                if version_end >= 0:
+                    version = searchable[version_start:version_end]
+                    version_found = re.fullmatch(
+                        rb"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)",
+                        version,
+                    ) is not None
+                    if version_found:
+                        break
+                search_from = marker_at + 1
+            if version_found:
+                break
+            overlap = searchable[-(len(RELEASE_VERSION_MARKER) + 33):]
+    if embedded or not absent or not ota_release or not version_found:
+        raise ValueError("firmware is missing a required token-free OTA/version marker; refusing to package")
 
 
 def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:

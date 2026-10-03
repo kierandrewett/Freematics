@@ -41,6 +41,15 @@ image, records the pending digest, and changes the boot partition. The new
 image is accepted only after storage and motion-sensor initialization; the
 ESP32 bootloader rolls back a failed/power-cut first boot.
 
+Every OTA image embeds `FREEMATICS_RELEASE_VERSION=major.minor.patch`. Before
+staging, the running firmware requires a valid candidate version strictly
+newer than its own `FREEMATICS_RELEASE`; same-version rebuilds, malformed
+versions, and downgrades are refused. Set `FREEMATICS_RELEASE` explicitly
+when building a tokenless OTA release, for example `1.0.1` after a `1.0.0`
+image. This is a downgrade guard, not release authentication: an attacker who
+can replace the release assets can still publish a malicious image with a
+higher version.
+
 SHA-256 detects accidental corruption but does not authenticate a release if
 the release asset and sidecar are both replaced by an attacker. HTTPS protects
 the transport and validates GitHub's certificate, but does not protect a
@@ -58,7 +67,7 @@ to GitHub. To build a public OTA image, explicitly clear the inherited secret:
 
 ```sh
 FREEMATICS_TOKEN= FREEMATICS_OTA_RELEASE=1 PRODUCTION_BUILD=1 \
-  pio run -e esp32dev-ota-test
+  FREEMATICS_RELEASE=1.0.1 pio run -e esp32dev-ota-test
 ```
 
 This still validates the private production server/APN configuration. The
@@ -82,6 +91,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_sha256_sidecar.cpp -o /tmp/test_ota_sha256_sidecar
 /tmp/test_ota_sha256_sidecar
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_version_policy.cpp -o /tmp/test_ota_version_policy
+/tmp/test_ota_version_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 ```
 

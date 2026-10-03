@@ -18,6 +18,8 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.firmware.parent.mkdir(parents=True)
         self.payload = (b"FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
                         b"FREEMATICS_OTA_RELEASE_BUILD=1" +
+                        b"FREEMATICS_RELEASE_VERSION=\x00" +
+                        b"FREEMATICS_RELEASE_VERSION=1.0.1\x00" +
                         bytes(range(256)) * 17 + b"firmware\x00payload")
         self.firmware.write_bytes(self.payload)
         self.output = self.root / "release-assets"
@@ -84,12 +86,24 @@ class PackageOtaReleaseTests(unittest.TestCase):
 
     def test_refuses_an_image_without_a_tokenless_build_marker(self):
         self.firmware.write_bytes(b"firmware without credential status")
-        with self.assertRaisesRegex(ValueError, "not proven token-free"):
+        with self.assertRaisesRegex(ValueError, "token-free OTA/version marker"):
             package_release(self.firmware, self.output)
 
     def test_refuses_a_build_marked_as_token_bearing(self):
         self.firmware.write_bytes(b"FREEMATICS_CREDENTIAL_TOKEN_EMBEDDED=1")
-        with self.assertRaisesRegex(ValueError, "not proven token-free"):
+        with self.assertRaisesRegex(ValueError, "token-free OTA/version marker"):
+            package_release(self.firmware, self.output)
+
+    def test_refuses_an_image_without_release_version_marker(self):
+        self.firmware.write_bytes(
+            b"FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1FREEMATICS_OTA_RELEASE_BUILD=1"
+        )
+        with self.assertRaisesRegex(ValueError, "token-free OTA/version marker"):
+            package_release(self.firmware, self.output)
+
+    def test_refuses_a_malformed_release_version_marker(self):
+        self.firmware.write_bytes(self.payload.replace(b"1.0.1", b"01.0.1"))
+        with self.assertRaisesRegex(ValueError, "token-free OTA/version marker"):
             package_release(self.firmware, self.output)
 
 

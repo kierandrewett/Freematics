@@ -26,6 +26,14 @@ if ota_release and token:
 if ota_release and env.get("PIOENV") != "esp32dev-ota-test":
     raise RuntimeError("FREEMATICS_OTA_RELEASE is allowed only with the OTA-enabled esp32dev-ota-test environment")
 
+release_version = settings.get("FREEMATICS_RELEASE", "").strip()
+if ota_release and not release_version:
+    raise RuntimeError("FREEMATICS_RELEASE must be set explicitly for an OTA release build")
+if release_version:
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", release_version):
+        raise RuntimeError("FREEMATICS_RELEASE must be a numeric major.minor.patch version")
+    env.Append(CPPDEFINES=[("FREEMATICS_RELEASE", env.StringifyMacro(release_version))])
+
 if token:
     if not re.fullmatch(r"[0-9a-fA-F]{64}", token):
         raise RuntimeError("FREEMATICS_TOKEN must be a 64-character hexadecimal secret")
