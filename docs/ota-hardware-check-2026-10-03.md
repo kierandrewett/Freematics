@@ -24,6 +24,15 @@
   fault, not a demonstrated journal write failure. It does not distinguish a
   latched card state after warm reset from card contact, supply, or hardware
   failure.
+- Rebuilt both firmware profiles from committed source `c10c2bf78c9c`:
+  production `esp32dev` image SHA-256
+  `a45c072cd5fdcc106c17bff7e207f5cea1d873030d6e5f66a90f0ec7755d7aec`, and
+  OTA-enabled local migration/test image SHA-256
+  `ec1e88cd92441d2e8e59d2ec1f479a7a11599c8857e553978c1216df1f3eaa0d`.
+  Both report build ID `c10c2bf78c9c`. The OTA test image contains the private
+  telemetry credential and remains local; neither rebuilt image was flashed
+  during this pass. The board's serial port is currently held by the dashboard,
+  and its SD journal is unhealthy.
 - With the SD journal unavailable, an 8-second read-only USB measurement
   produced 31 valid @FT1 frames at a 250 ms median/p95 cadence, one corrupt
   record, and zero USB drops or device restarts. The durable-journal health
