@@ -29,6 +29,34 @@ class HistoryIndexerTest(unittest.TestCase):
                 self.assertEqual([row[1] for row in rows], ["gnss", "anchored", "anchored", "anchored"])
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample_metric WHERE pid='0x40C'").fetchone()[0], 4)
 
+    def test_single_digit_day_gnss_date_keeps_capture_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "ZKUCALJ0/2026/10/03/20261003-143613.txt"
+            archive.parent.mkdir(parents=True)
+            # Firmware serializes DDMMYY as an integer, so 03-10-26 arrives as 31026.
+            archive.write_text(
+                "0:100,11:31026,10:14330100,93:0,10C:680,"
+                "0:350,11:31026,10:14330100,93:250,10C:681,"
+                "0:600,11:31026,10:14330100,93:500,10C:682,"
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(
+                root,
+                database,
+                now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000,
+            )
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                rows = connection.execute(
+                    "SELECT capture_utc_ms, timestamp_quality FROM sample ORDER BY sequence"
+                ).fetchall()
+                self.assertEqual(len(rows), 3)
+                self.assertEqual(rows[0][1], "gnss")
+                self.assertEqual(rows[1][1:], ("anchored",))
+                self.assertEqual(rows[2][1:], ("anchored",))
+                self.assertEqual([row[0] - rows[0][0] for row in rows], [0, 250, 500])
+
     def test_replay_is_idempotent_and_preserves_capture_timeline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"

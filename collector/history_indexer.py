@@ -153,6 +153,10 @@ def gnss_capture_ms(fields: dict[str, str]) -> int | None:
         return None
     try:
         date_text = str(int(raw_date))
+        # Firmware stores DDMMYY as an integer, so dates on days 01-09 lose
+        # their leading zero (for example, 03-10-26 is emitted as 31026).
+        if len(date_text) == 5:
+            date_text = date_text.zfill(6)
         time_text = str(int(raw_time)).zfill(8)
         if len(date_text) == 6:
             # Freematics PID 0x11 is UTC date in DDMMYY order.
