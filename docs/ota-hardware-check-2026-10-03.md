@@ -40,6 +40,17 @@
   matching `freematics-model-b.bin.sha256sum` sidecar verifies successfully.
   The binary carries the `FREEMATICS_OTA_RELEASE_BUILD=1` marker. It is staged
   locally only and has not been published to GitHub or exercised on hardware.
+- Added a fail-closed OTA downgrade gate in signed source commit
+  `fa911573f5b8`: the candidate image must embed a valid, strictly newer
+  `major.minor.patch` firmware version. The clean, tokenless `1.0.1` candidate
+  built from this commit has SHA-256
+  `699093718c933b46ab5233a23aea707e4e42bd54c279357db7f49e04d080bd21`; its
+  `.sha256sum` sidecar verifies with `sha256sum -c`, and the packager confirms
+  the OTA-release, token-absent, and version markers. It is staged locally
+  under `.pio/ota-release-fa91157-v1.0.1/`; it has not been published or
+  flashed. The production `esp32dev` build from the same source also succeeds
+  with OTA still disabled by default; its image SHA-256 is
+  `a9526bf6efd4b3463be5e84e57cc3dc16c9844e268dca0fbc8dfb1b06d29429b`.
 - With the SD journal unavailable, an 8-second read-only USB measurement
   produced 31 valid @FT1 frames at a 250 ms median/p95 cadence, one corrupt
   record, and zero USB drops or device restarts. The durable-journal health
