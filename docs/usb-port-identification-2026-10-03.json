@@ -1,0 +1,30 @@
+{
+  "captured_at": "2026-10-03T21:47:58+01:00",
+  "serial_ports": [
+    {
+      "path": "/dev/ttyUSB0",
+      "usb_vid_pid": "1a86:7523",
+      "device": "QinHeng CH340 serial converter",
+      "kernel_driver": "ch341"
+    }
+  ],
+  "expected_freematics_model_b_usb_bridge": "Silicon Labs CP2104 10c4:ea60",
+  "freematics_usb_bridge_present": false,
+  "passive_captures_before_identity_guard": [
+    {
+      "seconds": 8,
+      "received_bytes": 64,
+      "partial_record_bytes_at_end": 64,
+      "valid_ft1_frames": 0,
+      "device_restarts": 0
+    },
+    {
+      "seconds": 20,
+      "received_bytes": 0,
+      "valid_ft1_frames": 0,
+      "device_restarts": 0
+    }
+  ],
+  "interpretation": "The measured port is the generic CH340 OBD adapter, not Freematics. These no-frame captures are not evidence of a Freematics firmware or USB-stream failure. The USB measurement tool now checks VID:PID before opening the port and rejects this device.",
+  "privacy": "No payload, VIN, coordinates, or sensor values retained."
+}

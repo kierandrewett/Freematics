@@ -21,6 +21,7 @@ from pathlib import Path
 
 BAUD = termios.B115200
 MAX_LINE = 16 * 1024
+FREEMATICS_USB_VID_PID = ("10c4", "ea60")  # Silicon Labs CP2104 on Model B
 PID_LABELS = {
     0x0C: "engine_rpm",
     0x0D: "vehicle_speed",
@@ -30,6 +31,35 @@ PID_LABELS = {
     0x24: "model_b_supply_voltage",
     0x42: "ecu_control_module_voltage",
 }
+
+
+def identify_freematics_usb(
+    port: str, sys_class_tty: Path = Path("/sys/class/tty")
+) -> tuple[str, str]:
+    """Require the Model B CP2104 USB bridge before touching a serial port."""
+    tty_name = Path(port).resolve().name
+    device_link = sys_class_tty / tty_name / "device"
+    try:
+        device_path = device_link.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"cannot verify USB identity for {port}") from exc
+
+    for parent in (device_path, *device_path.parents):
+        vendor_path = parent / "idVendor"
+        product_path = parent / "idProduct"
+        if vendor_path.is_file() and product_path.is_file():
+            identity = (
+                vendor_path.read_text(encoding="ascii").strip().lower(),
+                product_path.read_text(encoding="ascii").strip().lower(),
+            )
+            if identity != FREEMATICS_USB_VID_PID:
+                raise ValueError(
+                    f"{port} is USB {identity[0]}:{identity[1]}, expected Freematics "
+                    "Model B CP2104 10c4:ea60"
+                )
+            return identity
+
+    raise ValueError(f"cannot verify USB identity for {port}")
 
 
 def parse_frame(line: bytes) -> dict | None:
@@ -72,7 +102,12 @@ def percentile(values: list[float], percent: float) -> float | None:
     return round(ordered[min(len(ordered) - 1, math.ceil(percent * len(ordered)) - 1)], 2)
 
 
-def summarize(port: str, duration: float) -> dict:
+def summarize(
+    port: str,
+    duration: float,
+    sys_class_tty: Path = Path("/sys/class/tty"),
+) -> dict:
+    usb_identity = identify_freematics_usb(port, sys_class_tty)
     fd = os.open(port, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
     try:
         # Set only the line discipline/baud; do not issue modem-control ioctls.
@@ -233,6 +268,7 @@ def summarize(port: str, duration: float) -> dict:
             }
         return {
             "port": port,
+            "usb_identity": f"{usb_identity[0]}:{usb_identity[1]}",
             "measurement_seconds": round(elapsed, 2),
             "baud": 115200,
             "valid_frames": totals["valid_frames"],
@@ -283,7 +319,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.seconds < 5 or args.seconds > 600:
         parser.error("--seconds must be between 5 and 600")
-    report = summarize(args.port, args.seconds)
+    try:
+        report = summarize(args.port, args.seconds)
+    except ValueError as exc:
+        parser.error(str(exc))
     output = json.dumps(report, indent=2, sort_keys=True)
     if args.output:
         args.output.write_text(output + "\n", encoding="utf-8")
