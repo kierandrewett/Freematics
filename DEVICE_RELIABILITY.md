@@ -406,3 +406,11 @@ journal's size or contents. No format or destructive card test was run. This
 recurrence localizes the failure to card initialization/response; its physical
 cause remains unconfirmed. Compare after a full power disconnect before
 changing the driver or card contents.
+
+The firmware defines SD chip-select on GPIO5 and the SPI clock rate, but no
+SD-card power-enable pin. Freematics' Model B product page links a schematic
+that shows the TF-card interface on the 3.3 V rail with GPIO5 chip-select;
+there is no software-controlled card power cycle available. This makes a full
+device power disconnect the relevant next isolation step after the current
+warm-reset failures, but does not by itself prove a card latch or power fault.
+See the [official Model B schematic](https://freematics.com/dl/schematics_oneplus_r14_20190612.pdf).
