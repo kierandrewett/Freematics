@@ -3341,7 +3341,9 @@ void setup()
   oled.setFontSize(FONT_SIZE_SMALL);
 #endif
   // initialize USB serial
-  Serial.begin(115200);
+  // The richest supported frame is about 5 KiB. 115200 baud cannot sustain
+  // that at the 250 ms sample cadence; use the CP210x-supported 460800 rate.
+  Serial.begin(460800);
   initializeTelemetryCredential();
   usbBootId = ((uint64_t)esp_random() << 32) | esp_random();
   otaParkedPolicy.beginBoot(millis());

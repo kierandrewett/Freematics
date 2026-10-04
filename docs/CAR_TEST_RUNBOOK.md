@@ -170,7 +170,7 @@ and treat its build as the production image:
 cd /path/to/freematics
 git status --short --branch
 env -u FREEMATICS_TOKEN -u PRODUCTION_BUILD pio run -e esp32dev
-pio device monitor --port /dev/ttyUSB0 --baud 115200
+pio device monitor --port /dev/ttyUSB0 --baud 460800
 ```
 
 The `env -u` prefixes keep credentials and production mode out of this bench
@@ -248,7 +248,7 @@ esac
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev
 sha256sum .pio/build/esp32dev/firmware.bin
 PRODUCTION_BUILD=1 FREEMATICS_TOKEN="$device_token" pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
-pio device monitor --port /dev/ttyUSB0 --baud 115200
+pio device monitor --port /dev/ttyUSB0 --baud 460800
 ```
 
 `FREEMATICS_TOKEN` must be exactly 64 hexadecimal characters. When

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure live Freematics @FT1 timing without sending serial commands.
 
-Opens the port read-only, configures 115200 8N1 through termios, and never
+Opens the port read-only, configures 460800 8N1 through termios, and never
 changes DTR/RTS. Output contains aggregate counters and ages only (no VIN,
 coordinates, or sensor values).
 """
@@ -19,7 +19,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-BAUD = termios.B115200
+BAUD_RATE = 460_800
 MAX_LINE = 16 * 1024
 FREEMATICS_USB_VID_PID = ("10c4", "ea60")  # Silicon Labs CP210x family
 PID_LABELS = {
@@ -106,6 +106,7 @@ def summarize(
     port: str,
     duration: float,
     sys_class_tty: Path = Path("/sys/class/tty"),
+    baud_rate: int = BAUD_RATE,
 ) -> dict:
     usb_identity = identify_freematics_usb(port, sys_class_tty)
     fd = os.open(port, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
@@ -116,8 +117,11 @@ def summarize(
         attrs[1] = 0
         attrs[2] = termios.CLOCAL | termios.CREAD | termios.CS8
         attrs[3] = 0
-        attrs[4] = BAUD
-        attrs[5] = BAUD
+        baud_constant = getattr(termios, f"B{baud_rate}", None)
+        if baud_constant is None:
+            raise ValueError(f"unsupported measurement baud rate: {baud_rate}")
+        attrs[4] = baud_constant
+        attrs[5] = baud_constant
         attrs[6][termios.VMIN] = 0
         attrs[6][termios.VTIME] = 0
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
@@ -248,8 +252,8 @@ def summarize(
 
         elapsed = max(0.001, time.monotonic() - started)
         whole_frame_gaps = [delta for delta in capture_deltas if delta > 300]
-        link_busy_pct = totals["bytes_received"] * 10 * 100 / (115200 * elapsed)
-        ft_link_busy_pct = totals["valid_frame_bytes"] * 10 * 100 / (115200 * elapsed)
+        link_busy_pct = totals["bytes_received"] * 10 * 100 / (baud_rate * elapsed)
+        ft_link_busy_pct = totals["valid_frame_bytes"] * 10 * 100 / (baud_rate * elapsed)
         per_pid: dict[str, dict] = {}
         for pid, values in ages.items():
             limit = 250 if pid in (0x0C, 0x0D) else 1000
@@ -270,7 +274,7 @@ def summarize(
             "port": port,
             "usb_identity": f"{usb_identity[0]}:{usb_identity[1]}",
             "measurement_seconds": round(elapsed, 2),
-            "baud": 115200,
+            "baud": baud_rate,
             "valid_frames": totals["valid_frames"],
             "corrupt_ft1_records": totals["corrupt_ft1_records"],
             "non_telemetry_lines": totals["non_telemetry_lines"],
@@ -315,12 +319,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("port", help="verified Freematics USB serial port")
     parser.add_argument("--seconds", type=float, default=45.0)
+    parser.add_argument("--baud", type=int, choices=(115200, 460800), default=BAUD_RATE)
     parser.add_argument("--output", type=Path, help="optional path for aggregate JSON evidence")
     args = parser.parse_args()
     if args.seconds < 5 or args.seconds > 600:
         parser.error("--seconds must be between 5 and 600")
     try:
-        report = summarize(args.port, args.seconds)
+        report = summarize(args.port, args.seconds, baud_rate=args.baud)
     except ValueError as exc:
         parser.error(str(exc))
     output = json.dumps(report, indent=2, sort_keys=True)

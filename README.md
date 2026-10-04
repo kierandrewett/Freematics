@@ -248,7 +248,7 @@ With the intended server and APN in `local_config.h`, build and flash:
 pio run -e esp32dev
 sha256sum .pio/build/esp32dev/firmware.bin
 pio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
-pio device monitor --port /dev/ttyUSB0 --baud 115200
+pio device monitor --port /dev/ttyUSB0 --baud 460800
 ```
 
 Production builds reject missing or malformed tokens and invalid deployment

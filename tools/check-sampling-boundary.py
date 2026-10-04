@@ -212,6 +212,12 @@ int main(int argc, char** argv) {
   store.timestamp(tick);rich.serialize(store);store.tailer();
   assert(!store.overflowed());
   std::string encoded(frame,store.length());
+  // Include room for the FT1 envelope and newline around this complete body.
+  // UART 8N1 carries ten wire bits per byte: the old baud cannot sustain four
+  // rich frames/s, while the selected 460800 baud has ample headroom.
+  const size_t richFrameBytes = store.length() + 128;
+  assert(richFrameBytes * 10 * 4 > 115200);
+  assert(richFrameBytes * 10 * 4 < 460800);
   const size_t checksumMarker=encoded.find('*');
   assert(checksumMarker!=std::string::npos);
   for(size_t begin=0;begin<checksumMarker;) {
