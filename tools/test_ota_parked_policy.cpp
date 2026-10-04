@@ -83,7 +83,9 @@ static void testActivityAndRebootResetTimer() {
 
 static void testVehicleSignalsAndReadinessRemainFailClosed() {
   assert(Policy::vehicleSupplyPlausible(6.0f));
-  assert(Policy::vehicleSupplyPlausible(13.19f));
+  assert(Policy::vehicleSupplyPlausible(12.9f));
+  assert(!Policy::vehicleSupplyPlausible(12.91f));
+  assert(!Policy::vehicleSupplyPlausible(13.19f));
   assert(!Policy::vehicleSupplyPlausible(5.99f));
   assert(!Policy::vehicleSupplyPlausible(13.2f));
   const uint32_t start = 5000;
@@ -114,7 +116,10 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   assert(policy.observe(checkAt, state) == Policy::kRpmNotZero);
   state = parked(checkAt);
   state.modelBSupplyVolts.value = 13.2f;
-  assert(policy.observe(checkAt, state) == Policy::kSupplyCharging);
+  assert(policy.observe(checkAt, state) == Policy::kSupplyNotResting);
+  state = parked(checkAt);
+  state.modelBSupplyVolts.value = 12.91f;
+  assert(policy.observe(checkAt, state) == Policy::kSupplyNotResting);
   state = parked(checkAt);
   state.modelBSupplyVolts.value = 0.0f;
   assert(policy.observe(checkAt, state) == Policy::kSupplyUnavailable);
@@ -139,7 +144,7 @@ static void testParkedSignalsAreRecheckedAfterDownload() {
 
   state = parked(completedAt);
   state.modelBSupplyVolts.value = 14.1f;
-  assert(policy.observe(completedAt, state) == Policy::kSupplyCharging);
+  assert(policy.observe(completedAt, state) == Policy::kSupplyNotResting);
 }
 
 static void testMotionDuringDownloadInvalidatesTheQuietProof() {

@@ -2960,7 +2960,7 @@ void standby()
       if (supplyUnsafe) {
         noteOtaResetEvent(millis(), false);
         wakeRecord = WAKE_MAGIC | (otaSupplyVoltage >= IGNITION_WAKE_VOLTAGE ? WAKE_CHARGING : WAKE_MOTION);
-        Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or charging");
+        Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or above the resting threshold");
       }
       if (motionWake || sensorFailure || supplyUnsafe) break;
       // Storage/credential failures invalidate OTA eligibility, not the parked

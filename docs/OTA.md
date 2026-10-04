@@ -21,8 +21,9 @@ then selects it for boot immediately after those checks pass. First-boot
 validation hashes the running image again.
 If preparation or a final check fails, the candidate is discarded without
 changing the boot selection. Model B supply must remain in
-the plausible vehicle range (6.0 V to below 13.2 V); a missing, weak, or
-charging-voltage reading cancels the transfer. After six hours the standby
+the conservative resting range (6.0 V through 12.9 V); a missing, weak, or
+elevated reading cancels the transfer because it does not prove the car is
+off. After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
 fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
 OBD is refreshed after the final motion-observation interval immediately
