@@ -94,6 +94,23 @@
   checksum sidecars verify. The oldest unversioned `.pio/ota-release` image
   lacks the required release markers and is not eligible for publication.
 
+## Follow-up — 2026-10-04 (PID compatibility build)
+
+- Firmware commit `a6df7a330e78` corrects Mode 01 PID `0x59` absolute fuel-rail
+  pressure to the standard 10 kPa/bit resolution. The regular production build
+  succeeds; its private image SHA-256 is
+  `a567225246499c7a856eca525690bac60f52af2822a54ad1f4b52e0b85159f60`, and
+  its boot build ID is `a6df7a330e78`.
+- Built an OTA-enabled, tokenless `1.0.5` candidate from the same source
+  commit. Its local image SHA-256 is
+  `29fa3eccffe81166721520e7154950cdc4890973362ed970c2e84bac22ed2c51`; the
+  checksum sidecar verifies and the credential-aware packager accepts it.
+  It is staged under `.pio/ota-release-a6df7a3-v1.0.5/`, not published or
+  flashed.
+- The connected USB inventory still shows the CH340 generic adapter, not a
+  Model B. The production image remains unflashed; no boot-log build ID or
+  live-car verification is claimed.
+
 ## Scope and remaining validation
 
 This confirms board identity, local image installation, application boot, and
