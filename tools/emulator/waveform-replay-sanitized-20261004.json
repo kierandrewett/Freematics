@@ -1,0 +1,619 @@
+{
+  "command": "/tmp/freematics-waveform-venv/bin/python tools/emulator/run.py --strict --sanitize --compiler clang++ --collector --waveform-fixture tools/emulator/fixtures/waveform-frame.fixture --report tools/emulator/waveform-replay-sanitized-20261004.json",
+  "environment": "Linux-6.19.10-300.fc44.x86_64-x86_64-with-glibc2.43",
+  "compiler": "clang version 22.1.4 (Fedora 22.1.4-1.fc44)",
+  "sources": {
+    "teleclient.cpp": "72adc24f5799e3a67b6a22f6bb453d2f9e1ba803fa9bc10c7110da3a58d18e92",
+    "lib/FreematicsPlus/FreematicsOBD.cpp": "01e3539d886dc04ec1630260490b11416f9e93556048c8b34f5d429df0b3df53",
+    "lib/FreematicsPlus/FreematicsOBD.h": "465e1a0f443a3d65d1ba8238b854eea75ebfe428401ba1eab1296757621ed2eb",
+    "lib/FreematicsPlus/FreematicsBase.h": "2c6b673ac83291b4bcb9dfdae505b00affa1c9e89072ad896501bff662582889",
+    "lib/FreematicsPlus/utility/OBD.h": "5adfbe7c7b821c40ad788406c25d9a4d88079734558c90654e1aeedccef9c809",
+    "tools/emulator/Arduino.h": "b398c33a084d3d6802e3c6612f22acc7f66aa4c5e577bd7fe6ebf1ffee0db34c",
+    "telequeue.cpp": "a750ddd23f31d47e8527ef543fa9eb6e91ca32e7332555fd2c0d0cfc7de647ae",
+    "telequeue.h": "56dbd589bf000abd571e994a7beefa1d167cb9e363041e8f541e906e909814f7",
+    "ota_first_upload_policy.h": "22080e83104fc252a184a06c0ecfa4e0ecf8b9349ef404f2ba01478236b70513",
+    "telestore.cpp": "30ee921fee4fd321c27e0511c1cc15fcf8ee87d74eeb834aa2ba8cf938766e66",
+    "tools/emulator/SD.h": "730a6681e8018fce01f44a3390b96d992bb4b11be3be6e77877f538fee9e8a5b",
+    "lib/FreematicsPlus/FreematicsMEMS.cpp": "530e60a18b0416fb383fee4e15feefe5e6566aba21042c9a17299a81aae23a23",
+    "lib/FreematicsPlus/FreematicsMEMS.h": "48f86ac629f2edca34ea2b073e1c2f1e66322122bbfdbec17f9ba261cfb190dd",
+    "lib/FreematicsPlus/utility/ICM_42627.h": "ff28775e80bdd868a95b4cb7e59c34b574285139f74ddb782947a2a8185575cf",
+    "tools/emulator/mems_scenarios.cpp": "1ecb5757e258f77d94c2378ee221e5f7cfcbd965bb59b8338373893838476c9e",
+    "tools/emulator/journal_scenarios.cpp": "c74af3417cf228627f8d3faaf6fcd915c256808e310003797cd9e09df7f35413",
+    "tools/emulator/scenarios.cpp": "7897bca698996fea2c809ff7d69ff4851758c1b849e3fa1d99e46e877ca410e9",
+    "tools/emulator/run.py": "e33059b4c2685c493139876fda8aab2497bc57a97fd1bf8531fb7ce4a9c1e6fc",
+    "tools/emulator/fixtures/waveform-frame.fixture": "274a98bc36e7f2072fdcc9cb41dc151e466c403a1dc67a182c3c58bf75fb44cb",
+    "collector/teleserver": "a0a0281b3fb862fbd848e2bf6649e554ad866f1b1b9005a07df58f55b001ee6f"
+  },
+  "coverage": "Actual OBD decoder, queue methods, wire checksum, IMU methods and journal with fake SD; no ESP32 boot or concurrent tasks",
+  "results": [
+    {
+      "scenario": "normal RPM 900",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "engine load raw byte shares the normalized read",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "odometer preserves all four raw bytes from one read",
+      "status": "PASS",
+      "observed": 4
+    },
+    {
+      "scenario": "VIN from compact ISO-TP response",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "VIN from spaced numbered continuation frames",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "VIN from a spaced single-frame response",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "reject invalid VIN alphabet",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "normal speed 50",
+      "status": "PASS",
+      "observed": 50
+    },
+    {
+      "scenario": "ECU outage and unchanged output",
+      "status": "PASS",
+      "observed": 1005
+    },
+    {
+      "scenario": "recovery resets errors",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "reject NO DATA",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject wrong PID",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject empty payload",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated RPM payload",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject invalid hexadecimal speed",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated two-byte voltage",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated four-byte oxygen value",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "RPM with lowercase bytes and extra spaces",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "200 changing RPM replies with 10 timeouts",
+      "status": "PASS",
+      "observed": 190
+    },
+    {
+      "scenario": "stored DTC P0108",
+      "status": "PASS",
+      "observed": 264
+    },
+    {
+      "scenario": "DTC no-response stops after first timeout",
+      "status": "PASS",
+      "observed": 1000
+    },
+    {
+      "scenario": "partial DTC response retained when continuation ends",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "truncated positive DTC header is not a clean response",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "FIFO across millisecond rollover",
+      "status": "PASS",
+      "observed": 4294967040
+    },
+    {
+      "scenario": "queue entry at maximum timestamp",
+      "status": "PASS",
+      "observed": 4294967295
+    },
+    {
+      "scenario": "newest across millisecond rollover",
+      "status": "PASS",
+      "observed": 10
+    },
+    {
+      "scenario": "queue entry at zero timestamp",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "unacknowledged journal survives restart",
+      "status": "PASS",
+      "observed": 54
+    },
+    {
+      "scenario": "lost acknowledgement replays first record",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "saved cursor resumes at second record",
+      "status": "PASS",
+      "observed": 54
+    },
+    {
+      "scenario": "partial acknowledgement checkpoint cannot skip data",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "torn append preserves prefix and stops at damage",
+      "status": "PASS",
+      "observed": 15
+    },
+    {
+      "scenario": "torn tail repair permits a new journal append",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "CRC failure cannot advance replay",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "damaged journal preserves evidence and resumes all intact records",
+      "status": "PASS",
+      "observed": 81
+    },
+    {
+      "scenario": "reset during recovery promotion resumes verified replacement",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "recovery write read and rename failures preserve source until retry",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "recovery does not replay accepted prefix",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "SD opens for 16 readings",
+      "status": "PASS",
+      "observed": 2,
+      "single_append_opens": 32,
+      "replay_opens": 1
+    },
+    {
+      "scenario": "batched append and read-ahead replay open the journal once each",
+      "status": "PASS",
+      "observed": 3
+    },
+    {
+      "scenario": "upload batch build takes the SD lock once",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "absent card cannot accept a reading",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "full card keeps existing journal bytes",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "accepted journal rotates into retained archive",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "reset during accepted rotation cannot apply stale cursor to new journal",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "failed archive rename preserves journal",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "IMU rejects failed acceleration read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "IMU rejects failed gyro read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "IMU rejects failed temperature read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "successful IMU conversion",
+      "status": "PASS",
+      "observed": 25
+    },
+    {
+      "scenario": "offline drive restart and acknowledgement loss",
+      "status": "PASS",
+      "observed": 240
+    },
+    {
+      "scenario": "240 offline readings reach local collector archive",
+      "status": "PASS",
+      "observed": 240
+    },
+    {
+      "scenario": "collector acknowledges every frame; device keeps nothing aside",
+      "status": "PASS",
+      "observed": 80
+    },
+    {
+      "scenario": "collector reboot replay requests",
+      "status": "PASS",
+      "observed": 4
+    },
+    {
+      "scenario": "journal spanning a reboot reaches the collector without a stuck batch",
+      "status": "PASS",
+      "observed": 79
+    },
+    {
+      "scenario": "collector keeps the refused payload with its reason",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "collector reboot replay requests and HTTP statuses",
+      "status": "PASS",
+      "observed": 4,
+      "statuses": [
+        200,
+        200,
+        200,
+        200
+      ]
+    },
+    {
+      "scenario": "strict server: every valid frame delivered, refused frame kept on the card",
+      "status": "PASS",
+      "observed": 79
+    },
+    {
+      "scenario": "strict server: requests to isolate the refused frame",
+      "status": "PASS",
+      "observed": 12
+    },
+    {
+      "scenario": "strict server reboot replay requests and HTTP statuses",
+      "status": "PASS",
+      "observed": 12,
+      "statuses": [
+        400,
+        200,
+        400,
+        200,
+        400,
+        400,
+        200,
+        200,
+        400,
+        200,
+        200,
+        200
+      ]
+    },
+    {
+      "scenario": "waveform journal replay retries a lost acknowledgement",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "production waveform replay retains repeated fields, order and acquisition clocks through collector indexing",
+      "status": "PASS",
+      "observed": 2
+    }
+  ],
+  "drive_packets": [
+    "0:1000,10C:900,10D:50,89:1*46",
+    "0:1000,10C:900,10D:50,89:1*46",
+    "0:1250,10C:910,10D:50,89:1*4E",
+    "0:1500,10C:920,10D:50,89:1*4D",
+    "0:1750,10C:930,10D:50,89:1*55",
+    "0:2000,10C:940,10D:50,89:1*4B",
+    "0:2250,10C:950,10D:50,89:1*53",
+    "0:2500,10C:960,10D:50,89:1*52",
+    "0:2750,10C:970,10D:50,89:1*5A",
+    "0:3000,10C:980,10D:50,89:1*50",
+    "0:3250,10C:990,10D:50,89:1*58",
+    "0:3500,10C:1000,10D:50,89:1*75",
+    "0:3750,10C:1010,10D:50,89:1*7D",
+    "0:4000,10C:1020,10D:50,89:1*73",
+    "0:4250,10C:1030,10D:50,89:1*7B",
+    "0:4500,10C:1040,10D:50,89:1*7A",
+    "0:4750,10C:1050,10D:50,89:1*82",
+    "0:5000,10C:1060,10D:50,89:1*78",
+    "0:5250,10C:1070,10D:50,89:1*80",
+    "0:5500,10C:1080,10D:50,89:1*7F",
+    "0:5750,10C:1090,10D:50,89:1*87",
+    "0:6000,10C:1100,10D:50,89:1*74",
+    "0:6000,10C:1100,10D:50,89:1*74",
+    "0:6250,10C:1110,10D:50,89:1*7C",
+    "0:6500,10C:1120,10D:50,89:1*7B",
+    "0:6750,10C:1130,10D:50,89:1*83",
+    "0:7000,10C:1140,10D:50,89:1*79",
+    "0:7250,10C:1150,10D:50,89:1*81",
+    "0:7500,10C:1160,10D:50,89:1*80",
+    "0:7750,10C:1170,10D:50,89:1*88",
+    "0:8000,10C:1180,10D:50,89:1*7E",
+    "0:8250,10C:1190,10D:50,89:1*86",
+    "0:8500,10C:1200,10D:50,89:1*7C",
+    "0:8750,10C:1210,10D:50,89:1*84",
+    "0:9000,10C:1220,10D:50,89:1*7A",
+    "0:9250,10C:1230,10D:50,89:1*82",
+    "0:9500,10C:1240,10D:50,89:1*81",
+    "0:9750,10C:1250,10D:50,89:1*89",
+    "0:10000,10C:1260,10D:50,89:1*A6",
+    "0:10250,10C:1270,10D:50,89:1*AE",
+    "0:10500,10C:1280,10D:50,89:1*AD",
+    "0:10750,10C:1290,10D:50,89:1*B5",
+    "0:11000,10C:1300,10D:50,89:1*A2",
+    "0:11000,10C:1300,10D:50,89:1*A2",
+    "0:11250,10C:1310,10D:50,89:1*AA",
+    "0:11500,10C:1320,10D:50,89:1*A9",
+    "0:11750,10C:1330,10D:50,89:1*B1",
+    "0:12000,10C:1340,10D:50,89:1*A7",
+    "0:12250,10C:1350,10D:50,89:1*AF",
+    "0:12500,10C:1360,10D:50,89:1*AE",
+    "0:12750,10C:1370,10D:50,89:1*B6",
+    "0:13000,10C:1380,10D:50,89:1*AC",
+    "0:13250,10C:1390,10D:50,89:1*B4",
+    "0:13500,10C:1400,10D:50,89:1*AA",
+    "0:13750,10C:1410,10D:50,89:1*B2",
+    "0:14000,10C:1420,10D:50,89:1*A8",
+    "0:14250,10C:1430,10D:50,89:1*B0",
+    "0:14500,10C:1440,10D:50,89:1*AF",
+    "0:14750,10C:1450,10D:50,89:1*B7",
+    "0:15000,10C:1460,10D:50,89:1*AD",
+    "0:15250,10C:1470,10D:50,89:1*B5",
+    "0:15500,10C:1480,10D:50,89:1*B4",
+    "0:15750,10C:1490,10D:50,89:1*BC",
+    "0:16000,10C:1500,10D:50,89:1*A9",
+    "0:16000,10C:1500,10D:50,89:1*A9",
+    "0:16250,10C:1510,10D:50,89:1*B1",
+    "0:16500,10C:1520,10D:50,89:1*B0",
+    "0:16750,10C:1530,10D:50,89:1*B8",
+    "0:17000,10C:1540,10D:50,89:1*AE",
+    "0:17250,10C:1550,10D:50,89:1*B6",
+    "0:17500,10C:1560,10D:50,89:1*B5",
+    "0:17750,10C:1570,10D:50,89:1*BD",
+    "0:18000,10C:1580,10D:50,89:1*B3",
+    "0:18250,10C:1590,10D:50,89:1*BB",
+    "0:18500,10C:1600,10D:50,89:1*B1",
+    "0:18750,10C:1610,10D:50,89:1*B9",
+    "0:19000,10C:1620,10D:50,89:1*AF",
+    "0:19250,10C:1630,10D:50,89:1*B7",
+    "0:19500,10C:1640,10D:50,89:1*B6",
+    "0:19750,10C:1650,10D:50,89:1*BE",
+    "0:20000,10C:1660,10D:50,89:1*AB",
+    "0:20250,10C:1670,10D:50,89:1*B3",
+    "0:20500,10C:1680,10D:50,89:1*B2",
+    "0:20750,10C:1690,10D:50,89:1*BA",
+    "0:21000,10C:1700,10D:50,89:1*A7",
+    "0:21000,10C:1700,10D:50,89:1*A7",
+    "0:21250,10C:1710,10D:50,89:1*AF",
+    "0:21500,10C:1720,10D:50,89:1*AE",
+    "0:21750,10C:1730,10D:50,89:1*B6",
+    "0:22000,10C:1740,10D:50,89:1*AC",
+    "0:22250,10C:1750,10D:50,89:1*B4",
+    "0:22500,10C:1760,10D:50,89:1*B3",
+    "0:22750,10C:1770,10D:50,89:1*BB",
+    "0:23000,10C:1780,10D:50,89:1*B1",
+    "0:23250,10C:1790,10D:50,89:1*B9",
+    "0:23500,10C:1800,10D:50,89:1*AF",
+    "0:23750,10C:1810,10D:50,89:1*B7",
+    "0:24000,10C:1820,10D:50,89:1*AD",
+    "0:24250,10C:1830,10D:50,89:1*B5",
+    "0:24500,10C:1840,10D:50,89:1*B4",
+    "0:24750,10C:1850,10D:50,89:1*BC",
+    "0:25000,10C:1860,10D:50,89:1*B2",
+    "0:25250,10C:1870,10D:50,89:1*BA",
+    "0:25500,10C:1880,10D:50,89:1*B9",
+    "0:25750,10C:1890,10D:50,89:1*C1",
+    "0:26000,10C:1900,10D:50,89:1*AE",
+    "0:26000,10C:1900,10D:50,89:1*AE",
+    "0:26250,10C:1910,10D:50,89:1*B6",
+    "0:26500,10C:1920,10D:50,89:1*B5",
+    "0:26750,10C:1930,10D:50,89:1*BD",
+    "0:27000,10C:1940,10D:50,89:1*B3",
+    "0:27250,10C:1950,10D:50,89:1*BB",
+    "0:27500,10C:1960,10D:50,89:1*BA",
+    "0:27750,10C:1970,10D:50,89:1*C2",
+    "0:28000,10C:1980,10D:50,89:1*B8",
+    "0:28250,10C:1990,10D:50,89:1*C0",
+    "0:28500,10C:2000,10D:50,89:1*AD",
+    "0:28750,10C:2010,10D:50,89:1*B5",
+    "0:29000,10C:2020,10D:50,89:1*AB",
+    "0:29250,10C:2030,10D:50,89:1*B3",
+    "0:29500,10C:2040,10D:50,89:1*B2",
+    "0:29750,10C:2050,10D:50,89:1*BA",
+    "0:30000,10C:2060,10D:50,89:1*A7",
+    "0:30250,10C:2070,10D:50,89:1*AF",
+    "0:30500,10C:2080,10D:50,89:1*AE",
+    "0:30750,10C:2090,10D:50,89:1*B6",
+    "0:31000,10C:2100,10D:50,89:1*A3",
+    "0:31000,10C:2100,10D:50,89:1*A3",
+    "0:31250,10C:2110,10D:50,89:1*AB",
+    "0:31500,10C:2120,10D:50,89:1*AA",
+    "0:31750,10C:2130,10D:50,89:1*B2",
+    "0:32000,10C:2140,10D:50,89:1*A8",
+    "0:32250,10C:2150,10D:50,89:1*B0",
+    "0:32500,10C:2160,10D:50,89:1*AF",
+    "0:32750,10C:2170,10D:50,89:1*B7",
+    "0:33000,10C:2180,10D:50,89:1*AD",
+    "0:33250,10C:2190,10D:50,89:1*B5",
+    "0:33500,10C:2200,10D:50,89:1*AB",
+    "0:33750,10C:2210,10D:50,89:1*B3",
+    "0:34000,10C:2220,10D:50,89:1*A9",
+    "0:34250,10C:2230,10D:50,89:1*B1",
+    "0:34500,10C:2240,10D:50,89:1*B0",
+    "0:34750,10C:2250,10D:50,89:1*B8",
+    "0:35000,10C:2260,10D:50,89:1*AE",
+    "0:35250,10C:2270,10D:50,89:1*B6",
+    "0:35500,10C:2280,10D:50,89:1*B5",
+    "0:35750,10C:2290,10D:50,89:1*BD",
+    "0:36000,10C:2300,10D:50,89:1*AA",
+    "0:36000,10C:2300,10D:50,89:1*AA",
+    "0:36250,10C:2310,10D:50,89:1*B2",
+    "0:36500,10C:2320,10D:50,89:1*B1",
+    "0:36750,10C:2330,10D:50,89:1*B9",
+    "0:37000,10C:2340,10D:50,89:1*AF",
+    "0:37250,10C:2350,10D:50,89:1*B7",
+    "0:37500,10C:2360,10D:50,89:1*B6",
+    "0:37750,10C:2370,10D:50,89:1*BE",
+    "0:38000,10C:2380,10D:50,89:1*B4",
+    "0:38250,10C:2390,10D:50,89:1*BC",
+    "0:38500,10C:2400,10D:50,89:1*B2",
+    "0:38750,10C:2410,10D:50,89:1*BA",
+    "0:39000,10C:2420,10D:50,89:1*B0",
+    "0:39250,10C:2430,10D:50,89:1*B8",
+    "0:39500,10C:2440,10D:50,89:1*B7",
+    "0:39750,10C:2450,10D:50,89:1*BF",
+    "0:40000,10C:2460,10D:50,89:1*AC",
+    "0:40250,10C:2470,10D:50,89:1*B4",
+    "0:40500,10C:2480,10D:50,89:1*B3",
+    "0:40750,10C:2490,10D:50,89:1*BB",
+    "0:41000,10C:2500,10D:50,89:1*A8",
+    "0:41000,10C:2500,10D:50,89:1*A8",
+    "0:41250,10C:2510,10D:50,89:1*B0",
+    "0:41500,10C:2520,10D:50,89:1*AF",
+    "0:41750,10C:2530,10D:50,89:1*B7",
+    "0:42000,10C:2540,10D:50,89:1*AD",
+    "0:42250,10C:2550,10D:50,89:1*B5",
+    "0:42500,10C:2560,10D:50,89:1*B4",
+    "0:42750,10C:2570,10D:50,89:1*BC",
+    "0:43000,10C:2580,10D:50,89:1*B2",
+    "0:43250,10C:2590,10D:50,89:1*BA",
+    "0:43500,10C:2600,10D:50,89:1*B0",
+    "0:43750,10C:2610,10D:50,89:1*B8",
+    "0:44000,10C:2620,10D:50,89:1*AE",
+    "0:44250,10C:2630,10D:50,89:1*B6",
+    "0:44500,10C:2640,10D:50,89:1*B5",
+    "0:44750,10C:2650,10D:50,89:1*BD",
+    "0:45000,10C:2660,10D:50,89:1*B3",
+    "0:45250,10C:2670,10D:50,89:1*BB",
+    "0:45500,10C:2680,10D:50,89:1*BA",
+    "0:45750,10C:2690,10D:50,89:1*C2",
+    "0:46000,10C:2700,10D:50,89:1*AF",
+    "0:46000,10C:2700,10D:50,89:1*AF",
+    "0:46250,10C:2710,10D:50,89:1*B7",
+    "0:46500,10C:2720,10D:50,89:1*B6",
+    "0:46750,10C:2730,10D:50,89:1*BE",
+    "0:47000,10C:2740,10D:50,89:1*B4",
+    "0:47250,10C:2750,10D:50,89:1*BC",
+    "0:47500,10C:2760,10D:50,89:1*BB",
+    "0:47750,10C:2770,10D:50,89:1*C3",
+    "0:48000,10C:2780,10D:50,89:1*B9",
+    "0:48250,10C:2790,10D:50,89:1*C1",
+    "0:48500,10C:2800,10D:50,89:1*B7",
+    "0:48750,10C:2810,10D:50,89:1*BF",
+    "0:49000,10C:2820,10D:50,89:1*B5",
+    "0:49250,10C:2830,10D:50,89:1*BD",
+    "0:49500,10C:2840,10D:50,89:1*BC",
+    "0:49750,10C:2850,10D:50,89:1*C4",
+    "0:50000,10C:2860,10D:50,89:1*B1",
+    "0:50250,10C:2870,10D:50,89:1*B9",
+    "0:50500,10C:2880,10D:50,89:1*B8",
+    "0:50750,10C:2890,10D:50,89:1*C0",
+    "0:51000,10C:2900,10D:50,89:1*AD",
+    "0:51000,10C:2900,10D:50,89:1*AD",
+    "0:51250,10C:2910,10D:50,89:1*B5",
+    "0:51500,10C:2920,10D:50,89:1*B4",
+    "0:51750,10C:2930,10D:50,89:1*BC",
+    "0:52000,10C:2940,10D:50,89:1*B2",
+    "0:52250,10C:2950,10D:50,89:1*BA",
+    "0:52500,10C:2960,10D:50,89:1*B9",
+    "0:52750,10C:2970,10D:50,89:1*C1",
+    "0:53000,10C:2980,10D:50,89:1*B7",
+    "0:53250,10C:2990,10D:50,89:1*BF",
+    "0:53500,10C:3000,10D:50,89:1*AC",
+    "0:53750,10C:3010,10D:50,89:1*B4",
+    "0:54000,10C:3020,10D:50,89:1*AA",
+    "0:54250,10C:3030,10D:50,89:1*B2",
+    "0:54500,10C:3040,10D:50,89:1*B1",
+    "0:54750,10C:3050,10D:50,89:1*B9",
+    "0:55000,10C:3060,10D:50,89:1*AF",
+    "0:55250,10C:3070,10D:50,89:1*B7",
+    "0:55500,10C:3080,10D:50,89:1*B6",
+    "0:55750,10C:3090,10D:50,89:1*BE",
+    "0:56000,10C:3100,10D:50,89:1*AB",
+    "0:56000,10C:3100,10D:50,89:1*AB",
+    "0:56250,10C:3110,10D:50,89:1*B3",
+    "0:56500,10C:3120,10D:50,89:1*B2",
+    "0:56750,10C:3130,10D:50,89:1*BA",
+    "0:57000,10C:3140,10D:50,89:1*B0",
+    "0:57250,10C:3150,10D:50,89:1*B8",
+    "0:57500,10C:3160,10D:50,89:1*B7",
+    "0:57750,10C:3170,10D:50,89:1*BF",
+    "0:58000,10C:3180,10D:50,89:1*B5",
+    "0:58250,10C:3190,10D:50,89:1*BD",
+    "0:58500,10C:3200,10D:50,89:1*B3",
+    "0:58750,10C:3210,10D:50,89:1*BB",
+    "0:59000,10C:3220,10D:50,89:1*B1",
+    "0:59250,10C:3230,10D:50,89:1*B9",
+    "0:59500,10C:3240,10D:50,89:1*B8",
+    "0:59750,10C:3250,10D:50,89:1*C0",
+    "0:60000,10C:3260,10D:50,89:1*AD",
+    "0:60250,10C:3270,10D:50,89:1*B5",
+    "0:60500,10C:3280,10D:50,89:1*B4",
+    "0:60750,10C:3290,10D:50,89:1*BC",
+    "0:4000000000,101:65535.99,401:3999999999,102:65535.99,402:3999999999,103:65535.99,403:3999999999,104:65535.99,404:3999999999,105:65535.99,405:3999999999,106:65535.99,406:3999999999,107:65535.99,407:3999999999,108:65535.99,408:3999999999,109:65535.99,409:3999999999,10A:65535.99,40A:3999999999,10B:65535.99,40B:3999999999,10C:65535.99,40C:3999999999,10D:65535.99,40D:3999999999,10E:65535.99,40E:3999999999,10F:65535.99,40F:3999999999,110:65535.99,410:3999999999,111:65535.99,411:3999999999,112:65535.99,412:3999999999,114:65535.99,414:3999999999,115:65535.99,415:3999999999,116:65535.99,416:3999999999,117:65535.99,417:3999999999,118:65535.99,418:3999999999,119:65535.99,419:3999999999,11A:65535.99,41A:3999999999,11B:65535.99,41B:3999999999,11C:65535.99,41C:3999999999,11E:65535.99,41E:3999999999,11F:65535.99,41F:3999999999,121:65535.99,421:3999999999,122:65535.99,422:3999999999,123:65535.99,423:3999999999,124:65535.99,424:3999999999,125:65535.99,425:3999999999,126:65535.99,426:3999999999,127:65535.99,427:3999999999,128:65535.99,428:3999999999,129:65535.99,429:3999999999,12A:65535.99,42A:3999999999,12B:65535.99,42B:3999999999,12C:65535.99,42C:3999999999,12D:65535.99,42D:3999999999,12E:65535.99,42E:3999999999,12F:65535.99,42F:3999999999,130:65535.99,430:3999999999,131:65535.99,431:3999999999,132:65535.99,432:3999999999,133:65535.99,433:3999999999,134:65535.99,434:3999999999,135:65535.99,435:3999999999,136:65535.99,436:3999999999,137:65535.99,437:3999999999,138:65535.99,438:3999999999,139:65535.99,439:3999999999,13A:65535.99,43A:3999999999,13B:65535.99,43B:3999999999,13C:65535.99,43C:3999999999,13D:65535.99,43D:3999999999,13E:65535.99,43E:3999999999,13F:65535.99,43F:3999999999,142:65535.99,442:3999999999,143:65535.99,443:3999999999,144:65535.99,444:3999999999,145:65535.99,445:3999999999,146:65535.99,446:3999999999,147:65535.99,447:3999999999,148:65535.99,448:3999999999,149:65535.99,449:3999999999,14A:65535.99,44A:3999999999,14B:65535.99,44B:3999999999,14C:65535.99,44C:3999999999,14D:65535.99,44D:3999999999,14E:65535.99,44E:3999999999,151:65535.99,451:3999999999,152:65535.99,452:3999999999,153:65535.99,453:3999999999,154:65535.99,454:3999999999,159:65535.99,459:3999999999,15A:65535.99,45A:3999999999,15B:65535.99,45B:3999999999,15C:65535.99,45C:3999999999,15D:65535.99,45D:3999999999,15E:65535.99,45E:3999999999,161:65535.99,461:3999999999,162:65535.99,462:3999999999,163:65535.99,463:3999999999,1A6:65535.99,4A6:3999999999,300:15,310:2,360:3999999999,301:65535,302:65535,303:65535,304:65535,305:65535,306:65535,307:65535,308:65535,309:65535,30A:65535,30B:65535,30C:65535,30D:65535,30E:65535,30F:65535,320:15,330:2,361:3999999999,321:65535,322:65535,323:65535,324:65535,325:65535,326:65535,327:65535,328:65535,329:65535,32A:65535,32B:65535,32C:65535,32D:65535,32E:65535,32F:65535,340:15,350:2,362:3999999999,341:65535,342:65535,343:65535,344:65535,345:65535,346:65535,347:65535,348:65535,349:65535,34A:65535,34B:65535,34C:65535,34D:65535,34E:65535,34F:65535,364:0,85:0,86:0,87:0,88:0,89:0,8A:0,20:99999.99;-99999.99;99999.99,21:99999.99;-99999.99;99999.99,22:99999.99;-99999.99;99999.99,25:99999.99;-99999.99;99999.99,11:4294967295,10:4294967295,A:4294967295,B:4294967295,C:4294967295,D:4294967295,E:4294967295,F:4294967295,12:4294967295,93:4294967295,81:4294967295,96:4294967295,84:4294967295,24:4294967295,94:4294967295,95:4294967295,30:4294967295,82:4294967295,8B:4294967295,8C:4294967295,8E:4294967295,8D:4294967295,8F:4294967295,A4:0;0;0;0,A5:1,A0:3999999700;1420,A0:3999999720;1420,A0:3999999740;1420,A0:3999999760;1420,A0:3999999780;1420,A0:3999999800;1420,A0:3999999820;1420,A0:3999999840;980,A0:3999999860;1420,A0:3999999880;1420,A0:3999999900;1420,A0:3999999920;1420,A0:3999999940;1420,A0:3999999960;1420,A0:3999999980;1420,A0:4000000000;1420,A1:3999999701,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999721,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999741,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999761,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999781,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999801,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999821,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999841,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999861,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999881,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999901,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999921,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999941,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999961,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999981,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:4000000001,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123*C7",
+    "0:4000000000,101:65535.99,401:3999999999,102:65535.99,402:3999999999,103:65535.99,403:3999999999,104:65535.99,404:3999999999,105:65535.99,405:3999999999,106:65535.99,406:3999999999,107:65535.99,407:3999999999,108:65535.99,408:3999999999,109:65535.99,409:3999999999,10A:65535.99,40A:3999999999,10B:65535.99,40B:3999999999,10C:65535.99,40C:3999999999,10D:65535.99,40D:3999999999,10E:65535.99,40E:3999999999,10F:65535.99,40F:3999999999,110:65535.99,410:3999999999,111:65535.99,411:3999999999,112:65535.99,412:3999999999,114:65535.99,414:3999999999,115:65535.99,415:3999999999,116:65535.99,416:3999999999,117:65535.99,417:3999999999,118:65535.99,418:3999999999,119:65535.99,419:3999999999,11A:65535.99,41A:3999999999,11B:65535.99,41B:3999999999,11C:65535.99,41C:3999999999,11E:65535.99,41E:3999999999,11F:65535.99,41F:3999999999,121:65535.99,421:3999999999,122:65535.99,422:3999999999,123:65535.99,423:3999999999,124:65535.99,424:3999999999,125:65535.99,425:3999999999,126:65535.99,426:3999999999,127:65535.99,427:3999999999,128:65535.99,428:3999999999,129:65535.99,429:3999999999,12A:65535.99,42A:3999999999,12B:65535.99,42B:3999999999,12C:65535.99,42C:3999999999,12D:65535.99,42D:3999999999,12E:65535.99,42E:3999999999,12F:65535.99,42F:3999999999,130:65535.99,430:3999999999,131:65535.99,431:3999999999,132:65535.99,432:3999999999,133:65535.99,433:3999999999,134:65535.99,434:3999999999,135:65535.99,435:3999999999,136:65535.99,436:3999999999,137:65535.99,437:3999999999,138:65535.99,438:3999999999,139:65535.99,439:3999999999,13A:65535.99,43A:3999999999,13B:65535.99,43B:3999999999,13C:65535.99,43C:3999999999,13D:65535.99,43D:3999999999,13E:65535.99,43E:3999999999,13F:65535.99,43F:3999999999,142:65535.99,442:3999999999,143:65535.99,443:3999999999,144:65535.99,444:3999999999,145:65535.99,445:3999999999,146:65535.99,446:3999999999,147:65535.99,447:3999999999,148:65535.99,448:3999999999,149:65535.99,449:3999999999,14A:65535.99,44A:3999999999,14B:65535.99,44B:3999999999,14C:65535.99,44C:3999999999,14D:65535.99,44D:3999999999,14E:65535.99,44E:3999999999,151:65535.99,451:3999999999,152:65535.99,452:3999999999,153:65535.99,453:3999999999,154:65535.99,454:3999999999,159:65535.99,459:3999999999,15A:65535.99,45A:3999999999,15B:65535.99,45B:3999999999,15C:65535.99,45C:3999999999,15D:65535.99,45D:3999999999,15E:65535.99,45E:3999999999,161:65535.99,461:3999999999,162:65535.99,462:3999999999,163:65535.99,463:3999999999,1A6:65535.99,4A6:3999999999,300:15,310:2,360:3999999999,301:65535,302:65535,303:65535,304:65535,305:65535,306:65535,307:65535,308:65535,309:65535,30A:65535,30B:65535,30C:65535,30D:65535,30E:65535,30F:65535,320:15,330:2,361:3999999999,321:65535,322:65535,323:65535,324:65535,325:65535,326:65535,327:65535,328:65535,329:65535,32A:65535,32B:65535,32C:65535,32D:65535,32E:65535,32F:65535,340:15,350:2,362:3999999999,341:65535,342:65535,343:65535,344:65535,345:65535,346:65535,347:65535,348:65535,349:65535,34A:65535,34B:65535,34C:65535,34D:65535,34E:65535,34F:65535,364:0,85:0,86:0,87:0,88:0,89:0,8A:0,20:99999.99;-99999.99;99999.99,21:99999.99;-99999.99;99999.99,22:99999.99;-99999.99;99999.99,25:99999.99;-99999.99;99999.99,11:4294967295,10:4294967295,A:4294967295,B:4294967295,C:4294967295,D:4294967295,E:4294967295,F:4294967295,12:4294967295,93:4294967295,81:4294967295,96:4294967295,84:4294967295,24:4294967295,94:4294967295,95:4294967295,30:4294967295,82:4294967295,8B:4294967295,8C:4294967295,8E:4294967295,8D:4294967295,8F:4294967295,A4:0;0;0;0,A5:1,A0:3999999700;1420,A0:3999999720;1420,A0:3999999740;1420,A0:3999999760;1420,A0:3999999780;1420,A0:3999999800;1420,A0:3999999820;1420,A0:3999999840;980,A0:3999999860;1420,A0:3999999880;1420,A0:3999999900;1420,A0:3999999920;1420,A0:3999999940;1420,A0:3999999960;1420,A0:3999999980;1420,A0:4000000000;1420,A1:3999999701,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999721,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999741,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999761,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999781,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999801,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999821,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999841,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999861,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999881,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999901,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999921,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999941,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999961,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:3999999981,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123,A1:4000000001,A2:0.001234;-0.987654;1.012345,A3:-3999.123047;12.123456;0.000123*C7"
+  ],
+  "collector_log": "Freematics Hub Version 1.0.0 (built on Oct  4 2026)\n(C)2016-2020 Mediatronic Pty Ltd / Developed by Stanley Huang\nThis is free software and is distributed under GPL v3.0\n\nServer Host: 192.168.0.69:34795\nMax Channels: 16\nAuthentication: ON\n\nWeb UI:\nhttp://192.168.0.69:34795\n\nData Feed Simulator:\nhttp://192.168.0.69:34795/simulator.html\n\n[4] Client: 127.0.0.1\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nSaving channels [1]...OK\nDEVID:EMULATOR ID:1\nSaving channels [1]...OK\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #1 0 bytes | Samples:3 | Device Tick:1000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #2 29 bytes | Samples:3 | Device Tick:1000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #3 58 bytes | Samples:3 | Device Tick:1250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #4 87 bytes | Samples:3 | Device Tick:1500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #5 116 bytes | Samples:3 | Device Tick:1750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #6 145 bytes | Samples:3 | Device Tick:2000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #7 174 bytes | Samples:3 | Device Tick:2250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #8 203 bytes | Samples:3 | Device Tick:2500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #9 232 bytes | Samples:3 | Device Tick:2750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #10 261 bytes | Samples:3 | Device Tick:3000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #11 290 bytes | Samples:3 | Device Tick:3250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #12 319 bytes | Samples:3 | Device Tick:3500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #13 349 bytes | Samples:3 | Device Tick:3750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #14 379 bytes | Samples:3 | Device Tick:4000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #15 409 bytes | Samples:3 | Device Tick:4250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #16 439 bytes | Samples:3 | Device Tick:4500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #17 469 bytes | Samples:3 | Device Tick:4750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #18 499 bytes | Samples:3 | Device Tick:5000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #19 529 bytes | Samples:3 | Device Tick:5250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #20 559 bytes | Samples:3 | Device Tick:5500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #21 589 bytes | Samples:3 | Device Tick:5750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #22 619 bytes | Samples:3 | Device Tick:6000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #23 649 bytes | Samples:3 | Device Tick:6000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #24 679 bytes | Samples:3 | Device Tick:6250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #25 709 bytes | Samples:3 | Device Tick:6500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #26 739 bytes | Samples:3 | Device Tick:6750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #27 769 bytes | Samples:3 | Device Tick:7000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #28 799 bytes | Samples:3 | Device Tick:7250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #29 829 bytes | Samples:3 | Device Tick:7500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #30 859 bytes | Samples:3 | Device Tick:7750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #31 889 bytes | Samples:3 | Device Tick:8000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #32 919 bytes | Samples:3 | Device Tick:8250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #33 949 bytes | Samples:3 | Device Tick:8500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #34 979 bytes | Samples:3 | Device Tick:8750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #35 1009 bytes | Samples:3 | Device Tick:9000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #36 1039 bytes | Samples:3 | Device Tick:9250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #37 1069 bytes | Samples:3 | Device Tick:9500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #38 1099 bytes | Samples:3 | Device Tick:9750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #39 1129 bytes | Samples:3 | Device Tick:10000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #40 1160 bytes | Samples:3 | Device Tick:10250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #41 1191 bytes | Samples:3 | Device Tick:10500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #42 1222 bytes | Samples:3 | Device Tick:10750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #43 1253 bytes | Samples:3 | Device Tick:11000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #44 1284 bytes | Samples:3 | Device Tick:11000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #45 1315 bytes | Samples:3 | Device Tick:11250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #46 1346 bytes | Samples:3 | Device Tick:11500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #47 1377 bytes | Samples:3 | Device Tick:11750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #48 1408 bytes | Samples:3 | Device Tick:12000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #49 1439 bytes | Samples:3 | Device Tick:12250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #50 1470 bytes | Samples:3 | Device Tick:12500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #51 1501 bytes | Samples:3 | Device Tick:12750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #52 1532 bytes | Samples:3 | Device Tick:13000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #53 1563 bytes | Samples:3 | Device Tick:13250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #54 1594 bytes | Samples:3 | Device Tick:13500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #55 1625 bytes | Samples:3 | Device Tick:13750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #56 1656 bytes | Samples:3 | Device Tick:14000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #57 1687 bytes | Samples:3 | Device Tick:14250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #58 1718 bytes | Samples:3 | Device Tick:14500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #59 1749 bytes | Samples:3 | Device Tick:14750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #60 1780 bytes | Samples:3 | Device Tick:15000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #61 1811 bytes | Samples:3 | Device Tick:15250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #62 1842 bytes | Samples:3 | Device Tick:15500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #63 1873 bytes | Samples:3 | Device Tick:15750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #64 1904 bytes | Samples:3 | Device Tick:16000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #65 1935 bytes | Samples:3 | Device Tick:16000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #66 1966 bytes | Samples:3 | Device Tick:16250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #67 1997 bytes | Samples:3 | Device Tick:16500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #68 2028 bytes | Samples:3 | Device Tick:16750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #69 2059 bytes | Samples:3 | Device Tick:17000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #70 2090 bytes | Samples:3 | Device Tick:17250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #71 2121 bytes | Samples:3 | Device Tick:17500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #72 2152 bytes | Samples:3 | Device Tick:17750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #73 2183 bytes | Samples:3 | Device Tick:18000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #74 2214 bytes | Samples:3 | Device Tick:18250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #75 2245 bytes | Samples:3 | Device Tick:18500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #76 2276 bytes | Samples:3 | Device Tick:18750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #77 2307 bytes | Samples:3 | Device Tick:19000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #78 2338 bytes | Samples:3 | Device Tick:19250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #79 2369 bytes | Samples:3 | Device Tick:19500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #80 2400 bytes | Samples:3 | Device Tick:19750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #81 2431 bytes | Samples:3 | Device Tick:20000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #82 2462 bytes | Samples:3 | Device Tick:20250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #83 2493 bytes | Samples:3 | Device Tick:20500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #84 2524 bytes | Samples:3 | Device Tick:20750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #85 2555 bytes | Samples:3 | Device Tick:21000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #86 2586 bytes | Samples:3 | Device Tick:21000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #87 2617 bytes | Samples:3 | Device Tick:21250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #88 2648 bytes | Samples:3 | Device Tick:21500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #89 2679 bytes | Samples:3 | Device Tick:21750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #90 2710 bytes | Samples:3 | Device Tick:22000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #91 2741 bytes | Samples:3 | Device Tick:22250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #92 2772 bytes | Samples:3 | Device Tick:22500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #93 2803 bytes | Samples:3 | Device Tick:22750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #94 2834 bytes | Samples:3 | Device Tick:23000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #95 2865 bytes | Samples:3 | Device Tick:23250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #96 2896 bytes | Samples:3 | Device Tick:23500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #97 2927 bytes | Samples:3 | Device Tick:23750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #98 2958 bytes | Samples:3 | Device Tick:24000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #99 2989 bytes | Samples:3 | Device Tick:24250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #100 3020 bytes | Samples:3 | Device Tick:24500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #101 3051 bytes | Samples:3 | Device Tick:24750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #102 3082 bytes | Samples:3 | Device Tick:25000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #103 3113 bytes | Samples:3 | Device Tick:25250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #104 3144 bytes | Samples:3 | Device Tick:25500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #105 3175 bytes | Samples:3 | Device Tick:25750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #106 3206 bytes | Samples:3 | Device Tick:26000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #107 3237 bytes | Samples:3 | Device Tick:26000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #108 3268 bytes | Samples:3 | Device Tick:26250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #109 3299 bytes | Samples:3 | Device Tick:26500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #110 3330 bytes | Samples:3 | Device Tick:26750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #111 3361 bytes | Samples:3 | Device Tick:27000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #112 3392 bytes | Samples:3 | Device Tick:27250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #113 3423 bytes | Samples:3 | Device Tick:27500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #114 3454 bytes | Samples:3 | Device Tick:27750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #115 3485 bytes | Samples:3 | Device Tick:28000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #116 3516 bytes | Samples:3 | Device Tick:28250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #117 3547 bytes | Samples:3 | Device Tick:28500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #118 3578 bytes | Samples:3 | Device Tick:28750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #119 3609 bytes | Samples:3 | Device Tick:29000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #120 3640 bytes | Samples:3 | Device Tick:29250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #121 3671 bytes | Samples:3 | Device Tick:29500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #122 3702 bytes | Samples:3 | Device Tick:29750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #123 3733 bytes | Samples:3 | Device Tick:30000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #124 3764 bytes | Samples:3 | Device Tick:30250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #125 3795 bytes | Samples:3 | Device Tick:30500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #126 3826 bytes | Samples:3 | Device Tick:30750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #127 3857 bytes | Samples:3 | Device Tick:31000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #128 3888 bytes | Samples:3 | Device Tick:31000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #129 3919 bytes | Samples:3 | Device Tick:31250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #130 3950 bytes | Samples:3 | Device Tick:31500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #131 3981 bytes | Samples:3 | Device Tick:31750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #132 4012 bytes | Samples:3 | Device Tick:32000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #133 4043 bytes | Samples:3 | Device Tick:32250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #134 4074 bytes | Samples:3 | Device Tick:32500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #135 4105 bytes | Samples:3 | Device Tick:32750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #136 4136 bytes | Samples:3 | Device Tick:33000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #137 4167 bytes | Samples:3 | Device Tick:33250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #138 4198 bytes | Samples:3 | Device Tick:33500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #139 4229 bytes | Samples:3 | Device Tick:33750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #140 4260 bytes | Samples:3 | Device Tick:34000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #141 4291 bytes | Samples:3 | Device Tick:34250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #142 4322 bytes | Samples:3 | Device Tick:34500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #143 4353 bytes | Samples:3 | Device Tick:34750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #144 4384 bytes | Samples:3 | Device Tick:35000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #145 4415 bytes | Samples:3 | Device Tick:35250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #146 4446 bytes | Samples:3 | Device Tick:35500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #147 4477 bytes | Samples:3 | Device Tick:35750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #148 4508 bytes | Samples:3 | Device Tick:36000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #149 4539 bytes | Samples:3 | Device Tick:36000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #150 4570 bytes | Samples:3 | Device Tick:36250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #151 4601 bytes | Samples:3 | Device Tick:36500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #152 4632 bytes | Samples:3 | Device Tick:36750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #153 4663 bytes | Samples:3 | Device Tick:37000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #154 4694 bytes | Samples:3 | Device Tick:37250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #155 4725 bytes | Samples:3 | Device Tick:37500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #156 4756 bytes | Samples:3 | Device Tick:37750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #157 4787 bytes | Samples:3 | Device Tick:38000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #158 4818 bytes | Samples:3 | Device Tick:38250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #159 4849 bytes | Samples:3 | Device Tick:38500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #160 4880 bytes | Samples:3 | Device Tick:38750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #161 4911 bytes | Samples:3 | Device Tick:39000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #162 4942 bytes | Samples:3 | Device Tick:39250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #163 4973 bytes | Samples:3 | Device Tick:39500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #164 5004 bytes | Samples:3 | Device Tick:39750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #165 5035 bytes | Samples:3 | Device Tick:40000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #166 5066 bytes | Samples:3 | Device Tick:40250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #167 5097 bytes | Samples:3 | Device Tick:40500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #168 5128 bytes | Samples:3 | Device Tick:40750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #169 5159 bytes | Samples:3 | Device Tick:41000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #170 5190 bytes | Samples:3 | Device Tick:41000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #171 5221 bytes | Samples:3 | Device Tick:41250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #172 5252 bytes | Samples:3 | Device Tick:41500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #173 5283 bytes | Samples:3 | Device Tick:41750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #174 5314 bytes | Samples:3 | Device Tick:42000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #175 5345 bytes | Samples:3 | Device Tick:42250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #176 5376 bytes | Samples:3 | Device Tick:42500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #177 5407 bytes | Samples:3 | Device Tick:42750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #178 5438 bytes | Samples:3 | Device Tick:43000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #179 5469 bytes | Samples:3 | Device Tick:43250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #180 5500 bytes | Samples:3 | Device Tick:43500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #181 5531 bytes | Samples:3 | Device Tick:43750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #182 5562 bytes | Samples:3 | Device Tick:44000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #183 5593 bytes | Samples:3 | Device Tick:44250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #184 5624 bytes | Samples:3 | Device Tick:44500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #185 5655 bytes | Samples:3 | Device Tick:44750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #186 5686 bytes | Samples:3 | Device Tick:45000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #187 5717 bytes | Samples:3 | Device Tick:45250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #188 5748 bytes | Samples:3 | Device Tick:45500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #189 5779 bytes | Samples:3 | Device Tick:45750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #190 5810 bytes | Samples:3 | Device Tick:46000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #191 5841 bytes | Samples:3 | Device Tick:46000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #192 5872 bytes | Samples:3 | Device Tick:46250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #193 5903 bytes | Samples:3 | Device Tick:46500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #194 5934 bytes | Samples:3 | Device Tick:46750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #195 5965 bytes | Samples:3 | Device Tick:47000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #196 5996 bytes | Samples:3 | Device Tick:47250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #197 6027 bytes | Samples:3 | Device Tick:47500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #198 6058 bytes | Samples:3 | Device Tick:47750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #199 6089 bytes | Samples:3 | Device Tick:48000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #200 6120 bytes | Samples:3 | Device Tick:48250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #201 6151 bytes | Samples:3 | Device Tick:48500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #202 6182 bytes | Samples:3 | Device Tick:48750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #203 6213 bytes | Samples:3 | Device Tick:49000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #204 6244 bytes | Samples:3 | Device Tick:49250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #205 6275 bytes | Samples:3 | Device Tick:49500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #206 6306 bytes | Samples:3 | Device Tick:49750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #207 6337 bytes | Samples:3 | Device Tick:50000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #208 6368 bytes | Samples:3 | Device Tick:50250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #209 6399 bytes | Samples:3 | Device Tick:50500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #210 6430 bytes | Samples:3 | Device Tick:50750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #211 6461 bytes | Samples:3 | Device Tick:51000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #212 6492 bytes | Samples:3 | Device Tick:51000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #213 6523 bytes | Samples:3 | Device Tick:51250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #214 6554 bytes | Samples:3 | Device Tick:51500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #215 6585 bytes | Samples:3 | Device Tick:51750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #216 6616 bytes | Samples:3 | Device Tick:52000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #217 6647 bytes | Samples:3 | Device Tick:52250\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #218 6678 bytes | Samples:3 | Device Tick:52500\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #219 6709 bytes | Samples:3 | Device Tick:52750\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #220 6740 bytes | Samples:3 | Device Tick:53000\n[4] Socket closed, 0 connections\n[4] Client: 127.0.0.1\nPOST from 127.0.0.1 | [1] #221 6771 bytes | Samples:3 | Device Tick:53250\n[4] Socket closed, 0 connections\n"
+}

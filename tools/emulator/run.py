@@ -20,6 +20,19 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 
 
+def waveform_journal_payload(serialized_frame):
+    """Validate a CStorageRAM frame and convert it to the SD journal payload."""
+    frame = serialized_frame.rstrip("\r\n")
+    if frame.count("*") != 1:
+        raise RuntimeError("Waveform fixture must contain one production checksum")
+    body, checksum = frame.rsplit("*", 1)
+    if not body or not re.fullmatch(r"[0-9A-Fa-f]{1,2}", checksum):
+        raise RuntimeError("Waveform fixture has a malformed production checksum")
+    if sum(body.encode("ascii")) & 0xFF != int(checksum, 16):
+        raise RuntimeError("Waveform fixture production checksum does not match")
+    return body + ","
+
+
 def request(base, path, packet=None):
     headers = {"Authorization": "Bearer " + "A" * 64, "Content-Type": "application/octet-stream"}
     with urllib.request.urlopen(urllib.request.Request(base + path, data=packet, headers=headers), timeout=3) as response:
@@ -349,9 +362,8 @@ def main():
     args = parser.parse_args()
     if args.waveform_fixture and not args.collector:
         parser.error("--waveform-fixture requires --collector")
-    waveform_fixture = args.waveform_fixture.read_text() if args.waveform_fixture else None
-    if waveform_fixture is not None and not waveform_fixture.endswith(","):
-        raise RuntimeError("Waveform fixture must be a comma-terminated serialized frame")
+    waveform_fixture = (waveform_journal_payload(args.waveform_fixture.read_text())
+                        if args.waveform_fixture else None)
     compiler = args.compiler
     if args.collector:
         subprocess.run(["make", "-C", str(ROOT / "collector")], check=True, capture_output=True, text=True, timeout=60)

@@ -6,12 +6,18 @@ Run from the repository root:
 python3 tools/emulator/run.py --strict --report /tmp/freematics-emulator.json
 python3 tools/emulator/run.py --strict --collector --report /tmp/freematics-emulator-collector.json
 FREEMATICS_WAVEFORM_FIXTURE_OUT=/tmp/freematics-waveform.txt python3 tools/check-sampling-boundary.py
-python3 tools/emulator/run.py --strict --collector --waveform-fixture /tmp/freematics-waveform.txt --report /tmp/freematics-waveform-replay.json
+python3 -m venv /tmp/freematics-emulator-venv
+/tmp/freematics-emulator-venv/bin/pip install mcp==1.28.1 uvicorn==0.34.2
+FREEMATICS_WAVEFORM_FIXTURE_OUT=tools/emulator/fixtures/waveform-frame.fixture python3 tools/check-sampling-boundary.py
+/tmp/freematics-emulator-venv/bin/python tools/emulator/run.py --strict --collector --waveform-fixture tools/emulator/fixtures/waveform-frame.fixture --report tools/emulator/waveform-replay.json
 ```
 
 Requires Python 3 and a C++ compiler (`c++`). No device, credentials or network are required.
 The `--collector` run also requires `make` and the collector's C build dependencies. It builds the collector and starts
 a temporary HTTP server on a local port with dummy credentials. It does not contact the deployed collector.
+The `--waveform-fixture` run additionally exercises the collector's registered read-only sensor-waveform tool and
+therefore requires the pinned `mcp` and `uvicorn` packages above. The fixture is emitted by the production serializer;
+the replay verifies its checksum before converting it to the comma-terminated SD journal representation.
 Use `--sanitize` to enable AddressSanitizer and UndefinedBehaviorSanitizer for the native firmware paths.
 Use `--compiler clang++` if the default compiler has no sanitizer runtime installed.
 Use `--strict` to return a failure status for any firmware issue. The default returns success when the simulator runs
