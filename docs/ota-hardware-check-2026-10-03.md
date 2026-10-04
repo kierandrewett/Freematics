@@ -150,6 +150,22 @@
   embeds boot build ID `31ca1177208a`. The credential-aware packager accepted
   it and the SHA-256 sidecar verifies. It remains local under
   `.pio/ota-release-31ca117-v1.0.6/`; it has not been published or flashed.
+- Commit `eea5c27e635c` moves cellular HTTP response parsing behind the exact
+  host-tested stream used by the modem. Coverage includes byte-fragmented
+  headers/body, short bodies, malformed and duplicate lengths, oversized
+  payloads, bad header syntax, writer rejection, and ensuring redirect bodies
+  never reach the firmware writer. The strict host test and Clang ASan/UBSan
+  pass; normal, OTA production, and OTA test PlatformIO builds pass. On POSIX,
+  the build hook now protects each environment directory (`0700`) before
+  compilation and locks the final image/ELF/map (`0600`).
+- Built a local-only tokenless OTA `1.0.7` candidate from firmware source commit
+  `eea5c27e635c`, boot build ID `eea5c27e635c`. Its image SHA-256 is
+  `eb2e2344518100e373b89162c3b1f359a0584c70606dfe0ff2eacc56fee4d02b`;
+  credential-aware packaging succeeded and the SHA-256 sidecar verifies. It
+  remains under `.pio/ota-release-eea5c27-v1.0.7/`, mode `0700`, and has not
+  been published or flashed. Parser behavior is host-verified only; cellular
+  download, car-off eligibility, cancellation, first boot, and rollback still
+  require the device and a safe vehicle test setup.
 
 ## Scope and remaining validation
 
