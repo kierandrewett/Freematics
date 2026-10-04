@@ -117,6 +117,12 @@
   embeds boot build ID `27a83c3dad40`. The credential-presence check passed
   without displaying the configured value; the ignored build directory is
   owner-only. This bootstrap image has not been published or flashed.
+- Fixed Mode 09 VIN parsing in source commit `d0b77c61e3ed`. The rebuilt
+  production image has SHA-256
+  `83a391acc481861375dd45e216d3e541630860efaa5235c9829bba5a3d585bc7` and
+  embeds build ID `d0b77c61e3ed`. The image is local, credential-bearing, and
+  unflashed; its build directory is owner-only. Emulator cases cover compact,
+  spaced single-frame, numbered continuation, and invalid VIN responses.
 
 ## Scope and remaining validation
 
