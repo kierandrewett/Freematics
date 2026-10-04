@@ -17,12 +17,21 @@ class DummyBridge : public CLink
 public:
     std::string reply;
     std::string command;
+    std::string initialDtcReply;
+    std::string continuationDtcReply;
     uint32_t latency = 12;
     bool disconnected = false;
+    bool scriptedDtcReplies = false;
+    unsigned sendCount = 0;
+    unsigned receiveCount = 0;
 
     bool send(const char* text) override
     {
+        sendCount++;
         command = text;
+        if (scriptedDtcReplies) {
+            reply = command == "03\r" ? initialDtcReply : continuationDtcReply;
+        }
         return true;
     }
 
@@ -35,6 +44,7 @@ public:
 
     int receive(char* buffer, int capacity, unsigned int timeout) override
     {
+        receiveCount++;
         if (disconnected || latency > timeout) {
             delay(timeout);
             if (capacity) buffer[0] = 0;
@@ -101,6 +111,7 @@ int main(int argc, char** argv)
     report("ECU outage and unchanged output", !okay && value == -123 && obd.errors == 1 &&
            simulationTime - start == OBD_TIMEOUT_SHORT + 5, false, simulationTime - start);
     bridge.disconnected = false;
+
     bridge.reply = "41 0C 0E 10\r>";
     okay = obd.readPID(PID_RPM, value);
     report("recovery resets errors", okay && value == 900 && obd.errors == 0, false, value);
@@ -160,6 +171,28 @@ int main(int argc, char** argv)
     const int count = obd.readDTC(codes, 4);
     report("stored DTC P0108", count == 1 && codes[0] == 0x0108 && obd.getDTCStatus() == DTC_STATUS_CODES,
            false, codes[0]);
+
+    bridge.disconnected = true;
+    bridge.sendCount = bridge.receiveCount = 0;
+    const uint32_t dtcStart = simulationTime;
+    const int missingDtcCount = obd.readDTC(0x03, codes, 4);
+    const uint32_t dtcElapsed = simulationTime - dtcStart;
+    report("DTC no-response stops after first timeout",
+           missingDtcCount == 0 && obd.getDTCStatus() == DTC_STATUS_NO_RESPONSE &&
+           bridge.sendCount == 1 && bridge.receiveCount == 1 && dtcElapsed == OBD_DTC_TIMEOUT,
+           true, dtcElapsed);
+    bridge.disconnected = false;
+
+    bridge.scriptedDtcReplies = true;
+    bridge.initialDtcReply = "43 06 01 08\r>";
+    bridge.continuationDtcReply = "NO DATA\r>";
+    bridge.sendCount = bridge.receiveCount = 0;
+    const int partialDtcCount = obd.readDTC(0x03, codes, 4);
+    report("partial DTC response retained when continuation ends",
+           partialDtcCount == 1 && codes[0] == 0x0108 && obd.getDTCStatus() == DTC_STATUS_CODES &&
+           bridge.sendCount == 2 && bridge.receiveCount == 2,
+           true, partialDtcCount);
+    bridge.scriptedDtcReplies = false;
 
     CBuffer older = {BUFFER_STATE_FILLED, true, 0xffffff00};
     CBuffer newer = {BUFFER_STATE_FILLED, true, 10};

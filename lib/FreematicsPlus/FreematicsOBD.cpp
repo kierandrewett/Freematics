@@ -249,18 +249,18 @@ int COBD::readDTC(byte mode, uint16_t codes[], byte maxCodes)
 		} else {
 			sprintf(buffer, "%02X%02X\r", mode, request);
 		}
-		if (!link->send(buffer)) continue;
-		if (link->receive(buffer, sizeof(buffer), OBD_DTC_TIMEOUT) <= 0 || checkErrorMessage(buffer)) continue;
+		if (!link->send(buffer)) break;
+		if (link->receive(buffer, sizeof(buffer), OBD_DTC_TIMEOUT) <= 0 || checkErrorMessage(buffer)) break;
 
 		const char* cursor = buffer;
 		byte token = 0;
 		if (!positive) {
 			while (readDTCByte(cursor, token) && token != expected);
-			if (token != expected) continue;
+			if (token != expected) break;
 			positive = true;
 			m_dtcStatus = DTC_STATUS_RESPONSE;
 			byte responseLength = 0;
-			if (!readDTCByte(cursor, responseLength)) continue;
+			if (!readDTCByte(cursor, responseLength)) break;
 			for (byte index = 0; index < responseLength && !complete && readDTCByte(cursor, token); index++) {
 				appendDTCByte(token, codes, maxCodes, codesRead, highByte, haveHighByte, complete);
 			}
