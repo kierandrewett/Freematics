@@ -67,16 +67,17 @@
   matching `.sha256sum` sidecar verifies, and the credential-aware packager
   accepts it. The artifact remains local under
   `.pio/ota-release-1a6bb6f-v1.0.3/`; it has not been published or flashed.
-- Built a separate private OTA-enabled `1.0.0` USB bootstrap from the same
-  commit using the ignored production configuration. It contains the telemetry
-  credential needed to seed NVS on first boot and must never be published; it
-  remains local at `.pio/build/esp32dev-ota-test/firmware.bin` and has not been
-  flashed. The configured ESP32 bootloader enables application rollback, and
-  the selected partition table provides two OTA application slots. This is
+- A separate private OTA-enabled `1.0.0` USB bootstrap had been built from the
+  same commit using ignored production configuration. It contained the
+  telemetry credential needed to seed NVS and was never flashed; its build
+  path has since been overwritten by the tokenless `1.0.4` candidate below.
+  The configured ESP32 bootloader enables application rollback, and the
+  selected partition table provides two OTA application slots. This is
   build-configuration evidence only, not a current hardware readback.
 - From source commit `2edf1f6`, both the regular production environment and
   tokenless OTA-enabled environment build successfully. The production image
-  is private and unflashed; no boot ID or installed-image checksum is claimed.
+  is private at `.pio/build/esp32dev/firmware.bin` and unflashed; it embeds the
+  telemetry credential. No boot ID or installed-image checksum is claimed.
 - After first-boot acceptance was made host-testable in commit `2edf1f6`, built
   a fresh tokenless OTA `1.0.4` image from that commit. The Model B image SHA-256
   is `3c417545bee1f7e2cdeb67caffb90556aa74f02016afcdbd3fe8a590dc78ac1b`;
@@ -88,6 +89,10 @@
   CP210x identity. No Freematics board was detected, so there was no serial
   open, reset, or flash. The public Freematics releases endpoint currently has
   no release assets.
+- Audited the six local `.pio/ota-release*` binaries against configured
+  credential values without displaying them: no byte matches, and all six
+  checksum sidecars verify. The oldest unversioned `.pio/ota-release` image
+  lacks the required release markers and is not eligible for publication.
 
 ## Scope and remaining validation
 
