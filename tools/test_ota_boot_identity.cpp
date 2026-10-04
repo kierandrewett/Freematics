@@ -32,6 +32,20 @@ void testRejectsInvalidImageSizes()
   assert(!freematics::ota::matchesRunningImage(800001, 800000, digest, digest));
 }
 
+void testTargetPartitionRequiresExactAddressAndType()
+{
+  assert(freematics::ota::matchesTargetPartition(
+      700000, 800000, 0x180000, 0, 0x11, 0x180000, 0, 0x11));
+  assert(!freematics::ota::matchesTargetPartition(
+      700000, 800000, 0x180000, 0, 0x11, 0x280000, 0, 0x11));
+  assert(!freematics::ota::matchesTargetPartition(
+      700000, 800000, 0x180000, 0, 0x11, 0x180000, 1, 0x11));
+  assert(!freematics::ota::matchesTargetPartition(
+      700000, 800000, 0x180000, 0, 0x11, 0x180000, 0, 0x12));
+  assert(!freematics::ota::matchesTargetPartition(
+      800001, 800000, 0x180000, 0, 0x11, 0x180000, 0, 0x11));
+}
+
 } // namespace
 
 int main()
@@ -39,6 +53,7 @@ int main()
   testExactExpectedImageMatches();
   testRejectsDigestMismatch();
   testRejectsInvalidImageSizes();
+  testTargetPartitionRequiresExactAddressAndType();
   puts("OTA first-boot image identity: all tests passed");
   return 0;
 }

@@ -2885,8 +2885,16 @@ void standby()
     sensorReadFailed = false;
     if (waitMotion(1000, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                    &sensorReadFailed)) break;
-    if (sensorReadFailed || !otaParkedPolicy.motionProofCurrent(millis())) {
+    if (sensorReadFailed || !otaParkedPolicy.quietPeriodComplete(millis())) {
       Serial.println("[OTA] Parked check cancelled: continuous motion-sensor proof unavailable");
+      continue;
+    }
+    // Refresh OBD state after the motion-observation interval; the first
+    // reading may be stale by the time cellular setup begins.
+    const OTAParkedPolicy::Denial preCellularDenial = finalOtaParkedCheck();
+    if (preCellularDenial != OTAParkedPolicy::kEligible) {
+      Serial.printf("[OTA] Cellular start denied by refreshed vehicle check (%u)\n",
+                    (unsigned)preCellularDenial);
       continue;
     }
 
@@ -2896,12 +2904,35 @@ void standby()
     bool motionWake = false;
     bool sensorFailure = false;
     bool supplyUnsafe = false;
+    bool storageUnsafe = false;
+    bool credentialUnavailable = false;
     float otaSupplyVoltage = 0;
     while (state.check(STATE_STANDBY) && !otaAttemptDone) {
       bool failedThisPoll = false;
       if (waitMotion(250, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                      &failedThisPoll)) {
         motionWake = true;
+        otaCancelRequested = true;
+        break;
+      }
+      // A single motion-threshold sample resets the one-hour quiet timer even
+      // when this short poll cannot accumulate the wake-confirmation count.
+      // Do not rely on waitMotion()'s per-call counter to protect an active OTA.
+      if (!otaParkedPolicy.quietPeriodComplete(millis())) {
+        if (otaParkedPolicy.motionProofCurrent(millis())) motionWake = true;
+        else sensorFailure = true;
+        otaCancelRequested = true;
+        break;
+      }
+#if STORAGE == STORAGE_SD
+      if (!durableQueue.healthy()) {
+        storageUnsafe = true;
+        otaCancelRequested = true;
+        break;
+      }
+#endif
+      if (!telemetryCredentialPersisted()) {
+        credentialUnavailable = true;
         otaCancelRequested = true;
         break;
       }
@@ -2917,24 +2948,31 @@ void standby()
         break;
       }
     }
-    if (motionWake || sensorFailure || supplyUnsafe) {
+    if (motionWake || sensorFailure || supplyUnsafe || storageUnsafe || credentialUnavailable) {
       // Let the modem owner observe cancellation and close its socket before
       // releasing the shared coprocessor link to OBD acquisition.
       otaCancelRequested = true;
       while (!otaAttemptDone) delay(25);
-      if (otaAttemptResult == OTA_ATTEMPT_INSTALLED) cancelStagedOtaUpdate();
+      if (otaAttemptResult == OTA_ATTEMPT_READY) discardVerifiedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
+      if (storageUnsafe) Serial.println("[OTA] Attempt cancelled: durable storage became unhealthy");
+      if (credentialUnavailable) Serial.println("[OTA] Attempt cancelled: telemetry credential is no longer persisted");
       if (supplyUnsafe) {
         noteOtaResetEvent(millis(), false);
         wakeRecord = WAKE_MAGIC | (otaSupplyVoltage >= IGNITION_WAKE_VOLTAGE ? WAKE_CHARGING : WAKE_MOTION);
         Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or charging");
       }
-      break;
+      if (motionWake || sensorFailure || supplyUnsafe) break;
+      // Storage/credential failures invalidate OTA eligibility, not the parked
+      // state. Continue monitoring while parked; the next attempt must pass
+      // the full safety gate again.
+      continue;
     }
     if (otaAttemptDone) {
-      if (otaAttemptResult == OTA_ATTEMPT_INSTALLED) {
-        // One last MEMS/charging observation closes the race between the
-        // final streamed byte and rebooting into the staged slot.
+      if (otaAttemptResult == OTA_ATTEMPT_READY) {
+        // The transfer task never selects a boot slot. Revalidate vehicle
+        // state here, in the standby owner, before hashing/journaling the
+        // exact candidate and again immediately before boot selection.
         bool unsafeToReboot = !telemetryCredentialPersisted();
 #if STORAGE == STORAGE_SD
         unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
@@ -2947,16 +2985,52 @@ void standby()
                 ? OTAParkedPolicy::kMotionUnavailable : finalOtaParkedCheck();
         if (unsafeToReboot || motionWake || sensorReadFailed ||
             finalDenial != OTAParkedPolicy::kEligible) {
-          cancelStagedOtaUpdate();
+          discardVerifiedOtaUpdate();
           otaAttemptResult = OTA_ATTEMPT_CANCELLED;
           otaAttemptDone = false;
-          if (unsafeToReboot) Serial.println("[OTA] Staged image cancelled: durable storage or credential unavailable");
-          else if (motionWake || sensorReadFailed) Serial.println("[OTA] Staged image cancelled: continuous motion-sensor proof unavailable");
-          else Serial.printf("[OTA] Staged image cancelled: parked safety gate changed (%u)\n",
+          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded: durable storage or credential unavailable");
+          else if (motionWake || sensorReadFailed) Serial.println("[OTA] Candidate discarded: continuous motion-sensor proof unavailable");
+          else Serial.printf("[OTA] Candidate discarded: parked safety gate changed (%u)\n",
                              (unsigned)finalDenial);
           break;
         }
-        Serial.println("[OTA] Inactive image staged; rebooting into pending verification");
+
+        if (!prepareVerifiedOtaUpdate()) {
+          discardVerifiedOtaUpdate();
+          Serial.println("[OTA] Candidate discarded: exact inactive image could not be prepared");
+          otaAttemptResult = OTA_ATTEMPT_FAILED;
+          otaAttemptDone = false;
+          continue;
+        }
+
+        sensorReadFailed = false;
+        const bool motionDuringPrepare = waitMotion(1000, STANDBY_MOTION_THRESHOLD,
+            STANDBY_MOTION_CONFIRM_SAMPLES, &sensorReadFailed);
+        unsafeToReboot = !telemetryCredentialPersisted();
+#if STORAGE == STORAGE_SD
+        unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
+#endif
+        const OTAParkedPolicy::Denial activationDenial =
+            unsafeToReboot || motionDuringPrepare || sensorReadFailed
+                ? OTAParkedPolicy::kMotionUnavailable : finalOtaParkedCheck();
+        if (unsafeToReboot || motionDuringPrepare || sensorReadFailed ||
+            activationDenial != OTAParkedPolicy::kEligible) {
+          discardVerifiedOtaUpdate();
+          otaAttemptResult = OTA_ATTEMPT_CANCELLED;
+          otaAttemptDone = false;
+          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded before activation: storage or credential unavailable");
+          else if (motionDuringPrepare || sensorReadFailed) Serial.println("[OTA] Candidate discarded before activation: motion or sensor fault");
+          else Serial.printf("[OTA] Candidate discarded before activation: parked safety gate changed (%u)\n",
+                             (unsigned)activationDenial);
+          break;
+        }
+        if (!activateVerifiedOtaUpdate()) {
+          discardVerifiedOtaUpdate();
+          otaAttemptResult = OTA_ATTEMPT_FAILED;
+          otaAttemptDone = false;
+          continue;
+        }
+        Serial.println("[OTA] Exact inactive image selected after final parked checks; rebooting into pending verification");
         ESP.restart();
       }
       Serial.printf("[OTA] Attempt finished (%u); next check in six hours\n",
@@ -3391,6 +3465,20 @@ if (!state.check(STATE_MEMS_READY)) do {
   publishOBDSnapshot();
 #endif
   initialize();
+#if ENABLE_OTA
+  // Validate a pending image before starting recorder, acquisition, or upload
+  // tasks. A rollback failure must never fall through into normal operation.
+  bool otaStorageReady = false;
+#if STORAGE == STORAGE_SD
+  otaStorageReady = durableQueue.healthy();
+#endif
+  const bool otaMotionReady = !ENABLE_MEMS || state.check(STATE_MEMS_READY);
+  const bool otaCredentialReady = telemetryCredentialPersisted();
+  if (!validatePendingOtaImage(otaStorageReady, otaMotionReady, otaCredentialReady)) {
+    ESP.restart();
+    for (;;) delay(1000);
+  }
+#endif
   if (sys.devType > 12 && !usbTelemetryTask.create(streamUsbTelemetry, "usb-telemetry", 1, 3072)) {
     Serial.println("[CRITICAL] USB telemetry task creation failed; recording and uploads continue");
   }
@@ -3413,15 +3501,6 @@ if (!state.check(STATE_MEMS_READY)) do {
 #endif
 #endif
 
-  // The Arduino core otherwise accepts a rollback-enabled OTA image before
-  // this sketch has initialized its critical logging and motion services.
-  bool otaStorageReady = false;
-#if STORAGE == STORAGE_SD
-  otaStorageReady = durableQueue.healthy();
-#endif
-  const bool otaMotionReady = !ENABLE_MEMS || state.check(STATE_MEMS_READY);
-  const bool otaCredentialReady = telemetryCredentialPersisted();
-  if (!validatePendingOtaImage(otaStorageReady, otaMotionReady, otaCredentialReady)) return;
 }
 
 void loop()

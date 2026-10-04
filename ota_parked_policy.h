@@ -92,6 +92,10 @@ class OTAParkedPolicy {
         static_cast<uint32_t>(nowMs - m_lastMotionSampleMs) <= kMotionSampleMaxGapMs;
   }
 
+  bool quietPeriodComplete(uint32_t nowMs) const {
+    return motionProofCurrent(nowMs) && elapsed(nowMs) >= kRequiredQuietMs;
+  }
+
   Denial observe(uint32_t nowMs, const Observation& observation) {
     if (!m_started) beginBoot(nowMs);
 

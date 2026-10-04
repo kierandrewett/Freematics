@@ -6,9 +6,9 @@ namespace ota {
 
 enum StageResult {
   kStageInstalled,
+  kStageReadyForActivation,
   kStageCancelled,
   kStageImageFinishFailed,
-  kStagePendingDigestFailed,
   kStageBootSelectionFailed,
 };
 
@@ -17,8 +17,8 @@ inline bool stageCancelled(const volatile bool* requested) {
 }
 
 // Operations must keep abortImage valid only until finishImage succeeds.
-// The helper keeps the irreversible boot-slot change last, and removes a
-// possibly partial pending marker on every failure after writing it.
+// Staging must not persist boot intent or select a boot slot. Both happen
+// later, after the caller has completed its final vehicle safety checks.
 template <typename Operations>
 StageResult stageVerifiedImage(Operations& operations,
                                const volatile bool* cancelRequested) {
@@ -28,10 +28,14 @@ StageResult stageVerifiedImage(Operations& operations,
   }
   if (!operations.finishImage()) return kStageImageFinishFailed;
   if (stageCancelled(cancelRequested)) return kStageCancelled;
-  if (!operations.writePendingDigest()) {
-    operations.erasePendingDigest();
-    return kStagePendingDigestFailed;
-  }
+  return kStageReadyForActivation;
+}
+
+// Boot-slot selection is separate so vehicle and storage safety can be
+// rechecked after cellular transfer but before the device can boot the image.
+template <typename Operations>
+StageResult activateVerifiedImage(Operations& operations,
+                                  const volatile bool* cancelRequested) {
   if (stageCancelled(cancelRequested)) {
     operations.erasePendingDigest();
     return kStageCancelled;

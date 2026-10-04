@@ -11,12 +11,14 @@ struct FakeOperations {
   std::vector<std::string> calls;
   bool confirmOkay;
   bool saveOkay;
+  bool rollbackOkay;
 
-  FakeOperations() : confirmOkay(true), saveOkay(true) {}
+  FakeOperations() : confirmOkay(true), saveOkay(true), rollbackOkay(true) {}
 
-  void rollback(freematics::ota::BootFailureReason reason) {
+  bool rollback(freematics::ota::BootFailureReason reason) {
     calls.push_back(reason == freematics::ota::kBootCoreValidationFailed
                         ? "rollback-validation" : "rollback-confirmation");
+    return rollbackOkay;
   }
   bool confirmBoot() {
     calls.push_back("confirm");
@@ -71,6 +73,13 @@ void testBootloaderConfirmationFailureRollsBack() {
       "confirm", "rollback-confirmation"}));
 }
 
+void testRollbackFailureIsReportedAndNeverTreatedAsRolledBack() {
+  FakeOperations operations;
+  operations.rollbackOkay = false;
+  assert(validate(operations, false) == freematics::ota::kBootRollbackFailed);
+  assert((operations.calls == std::vector<std::string>{"rollback-validation"}));
+}
+
 void testMetadataFailureCannotUndoBootloaderAcceptance() {
   FakeOperations operations;
   operations.saveOkay = false;
@@ -85,6 +94,7 @@ int main() {
   testAcceptsOnlyAfterServicesAndBootloaderConfirmation();
   testMissingCoreValidationRollsBackBeforeConfirmation();
   testBootloaderConfirmationFailureRollsBack();
+  testRollbackFailureIsReportedAndNeverTreatedAsRolledBack();
   testMetadataFailureCannotUndoBootloaderAcceptance();
   puts("OTA first-boot acceptance policy: all tests passed");
   return 0;

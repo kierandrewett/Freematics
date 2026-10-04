@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +17,23 @@ def with_checksum(payload: str) -> bytes:
 
 
 class TelemetryGitMirrorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.git_config_dir = tempfile.TemporaryDirectory(prefix="freematics-git-test-config-")
+        global_config = Path(self.git_config_dir.name) / "config"
+        global_config.touch()
+        self.git_config_environment = patch.dict(
+            os.environ,
+            {
+                "GIT_CONFIG_GLOBAL": str(global_config),
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
+        )
+        self.git_config_environment.start()
+
+    def tearDown(self) -> None:
+        self.git_config_environment.stop()
+        self.git_config_dir.cleanup()
+
     def test_readable_metrics_names_units_and_decodes_device_fields(self) -> None:
         metrics = readable_metrics(
             [

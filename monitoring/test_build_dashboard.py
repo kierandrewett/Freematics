@@ -36,6 +36,33 @@ class DashboardViewsTest(unittest.TestCase):
         dtc_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 6)
         self.assertIn("freematics_diagnostic_trouble_codes_age_seconds", dtc_panel["targets"][0]["expr"])
         self.assertIn("300", dtc_panel["targets"][0]["expr"])
+
+    def test_live_voltage_chart_separates_supply_and_ecu_with_independent_stale_masks(self) -> None:
+        dashboard = build_dashboard("live")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 51)
+        self.assertEqual(panel["title"], "Vehicle supply and ECU voltage")
+        self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "volt")
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["insertNulls"])
+
+        supply, ecu = panel["targets"]
+        self.assertEqual(supply["legendFormat"], "Vehicle supply (Model B input)")
+        self.assertEqual(ecu["legendFormat"], "ECU control-module voltage (PID 0x042)")
+        self.assertIn("freematics_device_battery_voltage_volts", supply["expr"])
+        self.assertIn("freematics_device_data_age_seconds", supply["expr"])
+        self.assertIn("> 15", supply["expr"])
+        self.assertNotIn("freematics_obd_value", supply["expr"])
+        self.assertNotIn("pid=", supply["expr"])
+
+        self.assertIn('freematics_obd_value{device_id="$device",pid="0x042"}', ecu["expr"])
+        self.assertIn("freematics_obd_value_age_seconds", ecu["expr"])
+        self.assertIn("> 15", ecu["expr"])
+        self.assertIn("on(device_id,trip_id,pid)", ecu["expr"])
+        self.assertNotIn("freematics_device_battery_voltage_volts", ecu["expr"])
+        self.assertIn("never substituted for each other", panel["description"])
+
+        combined = build_dashboard("combined")
+        self.assertNotIn(51, {item["id"] for item in combined["panels"]})
     def test_live_view_surfaces_obd_quality_metrics(self) -> None:
         dashboard = build_dashboard("live")
         quality_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)
@@ -54,9 +81,10 @@ class DashboardViewsTest(unittest.TestCase):
         expected_layout = {
             21: {"h": 10, "w": 20, "x": 0, "y": 3},
             43: {"h": 3, "w": 4, "x": 20, "y": 3},
-            45: {"h": 7, "w": 24, "x": 0, "y": 52},
-            46: {"h": 5, "w": 24, "x": 0, "y": 59},
-            47: {"h": 3, "w": 6, "x": 0, "y": 64},
+            51: {"h": 7, "w": 24, "x": 0, "y": 13},
+            45: {"h": 7, "w": 24, "x": 0, "y": 59},
+            46: {"h": 5, "w": 24, "x": 0, "y": 66},
+            47: {"h": 3, "w": 6, "x": 0, "y": 71},
         }
         layout = {panel["id"]: panel["gridPos"] for panel in dashboard["panels"]}
         for panel_id, grid_pos in expected_layout.items():

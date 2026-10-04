@@ -142,6 +142,23 @@ static void testParkedSignalsAreRecheckedAfterDownload() {
   assert(policy.observe(completedAt, state) == Policy::kSupplyCharging);
 }
 
+static void testMotionDuringDownloadInvalidatesTheQuietProof() {
+  const uint32_t start = 12000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  assert(policy.quietPeriodComplete(checkAt));
+
+  policy.observeMotionSample(checkAt + 250, true, true);
+  assert(policy.motionProofCurrent(checkAt + 250));
+  assert(!policy.quietPeriodComplete(checkAt + 250));
+  assert(policy.quietDurationMs(checkAt + 250) == 0);
+
+  policy.observeMotionSample(checkAt + 500, true, false);
+  assert(!policy.quietPeriodComplete(checkAt + 500));
+}
+
 static void testWrapSafeContinuousQuietTimer() {
   const uint32_t start = UINT32_MAX - 120000UL;
   const uint32_t boundary = start + Policy::kRequiredQuietMs;
@@ -158,6 +175,7 @@ int main() {
   testActivityAndRebootResetTimer();
   testVehicleSignalsAndReadinessRemainFailClosed();
   testParkedSignalsAreRecheckedAfterDownload();
+  testMotionDuringDownloadInvalidatesTheQuietProof();
   testWrapSafeContinuousQuietTimer();
   puts("OTA parked eligibility: all tests passed");
   return 0;

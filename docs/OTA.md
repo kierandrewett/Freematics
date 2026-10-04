@@ -11,14 +11,26 @@ are refused.
 No wall-clock window is used. The 60-minute timer starts only after a valid
 MEMS sample and is earned by continuous successful samples; movement, an
 invalid sample, or a sampling gap over 1.5 seconds restarts or invalidates the
-proof. A failed motion read during an OTA transfer cancels the transfer, and a
-staged image is not rebooted into without fresh final motion, OBD speed/RPM,
-Model B supply, storage, and credential checks. Model B supply must remain in
+proof. A failed motion read or a motion-threshold sample during an OTA transfer
+cancels the transfer. Downloading and validating the inactive image never
+changes the boot selection. In standby, the firmware verifies the exact
+inactive partition and image digest, journals and reads back a pending identity
+containing its partition address/type/subtype, size, and digest, repeats the
+fresh motion, OBD speed/RPM, Model B supply, storage, and credential checks,
+then selects it for boot immediately after those checks pass. First-boot
+validation hashes the running image again.
+If preparation or a final check fails, the candidate is discarded without
+changing the boot selection. Model B supply must remain in
 the plausible vehicle range (6.0 V to below 13.2 V); a missing, weak, or
 charging-voltage reading cancels the transfer. After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
 fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
-Missing, stale, unsupported, or invalid readings fail closed.
+OBD is refreshed after the final motion-observation interval immediately
+before cellular setup, then checked again before reboot. The modem owns the
+shared coprocessor link during the download, so OBD is not polled concurrently;
+motion proof, storage, credential presence, and supply voltage are monitored
+during transfer. Missing, stale, unsupported, or invalid OBD readings fail
+closed at each OBD check.
 Standby motion reads share a mutex with the background sensor-acquisition task;
 lock contention is bounded and treated as a failed motion sample, so it cannot
 silently extend a quiet period or be mistaken for fresh motion evidence.
@@ -41,12 +53,14 @@ The latest GitHub release is expected to contain these exact asset names:
 
 The sidecar uses standard `sha256sum` format. The updater downloads both over
 HTTPS, follows only a short redirect chain to allowlisted GitHub release hosts,
-streams the image to the inactive slot, checks the digest, validates the ESP
-image, records the pending image size and digest together, and changes the boot
-partition. On first boot, firmware hashes the running partition again and
-compares it with that saved identity before it can accept the image. Acceptance
-also requires storage, motion-sensor, and credential initialization; the ESP32
-bootloader rolls back a failed/power-cut first boot.
+streams the image to the inactive slot, checks the digest, and validates the ESP
+image. Boot selection is a separate final standby operation, not part of the
+download task. On first boot, firmware verifies that the recorded partition
+identity matches the running partition and hashes the running image before it
+can accept the image. Acceptance also requires storage, motion-sensor,
+and credential initialization; the ESP32 bootloader rolls back a failed or
+power-cut first boot. A reset before boot selection leaves the old slot active;
+an orphaned preparation record is cleared on the next normal boot.
 
 Every OTA image embeds `FREEMATICS_RELEASE_VERSION=major.minor.patch`. Before
 staging, the running firmware requires a valid candidate version strictly
@@ -81,29 +95,45 @@ This still validates the private production server/APN configuration. The
 release build is restricted to the OTA-enabled PlatformIO environment, fails
 if a token is present, and emits a non-secret release-mode marker. The local
 packager requires both that marker and the token-absent marker, scans for
-configured token/username/password/secret values from the ignored `.env`, process
-environment, and credential-named `local_config.h` settings, and repeats the
-checks on the staged copy. Credential literals in `local_config.h` are joined
-across adjacent C strings and comments are excluded; unsupported escaped or
-prefixed credential literals, or credential macros that cannot be resolved,
-fail packaging. It never overwrites an existing asset pair and does not upload
-anything. Server and APN routing settings remain in the firmware; they are not
-treated as authentication credentials. These checks guard against accidental
-publication, not deliberately falsified binaries or markers.
+configured tokens, passwords, usernames, SIM PINs, and Wi-Fi SSIDs from the
+ignored `.env`, process environment, and matching `local_config.h` settings,
+and repeats the checks on the staged copy. For configured values at least eight
+bytes long, it also checks common Base64, hex, URL-escaped, and UTF-16 encodings.
+Credential literals in
+`local_config.h` are joined across adjacent C strings and comments are
+excluded; unsupported escaped or prefixed credential literals, or credential
+macros that cannot be resolved, fail packaging. Its output directory must be
+empty before packaging, so an "upload everything in this folder" operation
+cannot silently include logs, configs, or unrelated build outputs. It never
+overwrites an existing asset pair and does not upload anything. Server and APN
+routing settings remain in the firmware; they are not treated as authentication
+credentials. These checks
+guard against accidental publication, not deliberately falsified binaries or
+markers.
 
 Only publish the two files created by `tools/package_ota_release.py`. Never
 attach the regular `esp32dev` production image, ELF/map files, build logs, or
 the `.pio` build directory: the regular production image intentionally embeds
 the telemetry token, and other build outputs may contain private build data.
-The packager is the release boundary; `.gitignore` alone does not protect
-manual uploads. On POSIX it also refuses a release directory unless it is
-owner-only (`0700`); generated firmware and checksum files are owner-only
-(`0600`).
+The release-upload boundary is `tools/publish_ota_release.py`. It revalidates
+the exact two-file allowlist, token-free build markers, configured credentials,
+file modes, matching sidecar, and that the existing release tag matches the
+firmware's embedded version immediately before calling `gh`; it never uploads
+logs, source archives, or build directories. It requires an existing release
+tag and never clobbers assets. Use it instead of uploading files manually:
 
-On POSIX build hosts, PlatformIO's per-environment build directory is set to
-mode `0700` before compilation, and the final firmware binary/ELF/map are set
-to `0600`. This protects local build products as well as preventing accidental
-sharing of token-bearing production images.
+```sh
+python3 tools/publish_ota_release.py v1.0.1 .pio/ota-release-v1.0.1
+```
+
+The package directory must be owner-only (`0700`), and packaged files are
+owner-only (`0600`). `.gitignore` alone does not protect manual uploads.
+
+On POSIX build hosts, `.pio`, `.pio/build`, and each per-environment build
+directory are set to mode `0700` before compilation. A restrictive umask and
+post-build actions set the generated firmware image and ELF to `0600`. This
+protects local build products, including token-bearing production images, from
+other local users and reduces the risk of accidental attachment or copying.
 
 ## Local checks
 
@@ -136,6 +166,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_cell_poweroff_policy.cpp -o /tmp/test_cell_poweroff_policy
 /tmp/test_cell_poweroff_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
+python3 -m unittest discover -s tools -p 'test_publish_ota_release.py' -v
 ```
 
 If OTA is cancelled, modem shutdown first probes whether the modem responds,

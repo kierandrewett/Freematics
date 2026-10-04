@@ -924,6 +924,144 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
+      "description": "Separate measurements: Model B device-input vehicle supply and ECU-reported control-module voltage (PID 0x042). Each series is hidden when its own existing freshness limit exceeds 15 seconds; missing or stale samples remain gaps, and the values are never substituted for each other.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "volt"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vehicle supply (Model B input)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ECU control-module voltage (PID 0x042)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 51,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Vehicle supply (Model B input)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x042\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "ECU control-module voltage (PID 0x042)",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Vehicle supply and ECU voltage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
       "description": "Bias-corrected MEMS acceleration. Mount the unit consistently before interpreting X as acceleration/braking.",
       "fieldConfig": {
         "defaults": {
@@ -979,7 +1117,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 13
+        "y": 20
       },
       "id": 22,
       "options": {
@@ -1075,7 +1213,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 13
+        "y": 20
       },
       "id": 23,
       "options": {
@@ -1193,7 +1331,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 13
+        "y": 20
       },
       "id": 24,
       "options": {
@@ -1317,7 +1455,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 20
+        "y": 27
       },
       "id": 25,
       "options": {
@@ -1441,7 +1579,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 20
+        "y": 27
       },
       "id": 26,
       "options": {
@@ -1589,7 +1727,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 20
+        "y": 27
       },
       "id": 27,
       "options": {
@@ -1778,7 +1916,7 @@
         "h": 5,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 34
       },
       "id": 28,
       "options": {
@@ -1927,7 +2065,7 @@
         "h": 5,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 34
       },
       "id": 30,
       "options": {
@@ -2102,7 +2240,7 @@
         "h": 5,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 34
       },
       "id": 38,
       "options": {
@@ -2202,7 +2340,7 @@
         "h": 3,
         "w": 6,
         "x": 0,
-        "y": 32
+        "y": 39
       },
       "id": 32,
       "options": {
@@ -2269,7 +2407,7 @@
         "h": 3,
         "w": 6,
         "x": 6,
-        "y": 32
+        "y": 39
       },
       "id": 33,
       "options": {
@@ -2336,7 +2474,7 @@
         "h": 3,
         "w": 6,
         "x": 12,
-        "y": 32
+        "y": 39
       },
       "id": 34,
       "options": {
@@ -2403,7 +2541,7 @@
         "h": 3,
         "w": 6,
         "x": 18,
-        "y": 32
+        "y": 39
       },
       "id": 35,
       "options": {
@@ -2506,7 +2644,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 42
       },
       "id": 31,
       "options": {
@@ -2738,7 +2876,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 45
+        "y": 52
       },
       "id": 39,
       "options": {
@@ -2855,7 +2993,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 45
+        "y": 52
       },
       "id": 40,
       "options": {
@@ -3109,7 +3247,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 59
       },
       "id": 45,
       "options": {
@@ -3289,7 +3427,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 66
       },
       "id": 46,
       "options": {
@@ -3407,7 +3545,7 @@
         "h": 3,
         "w": 6,
         "x": 0,
-        "y": 64
+        "y": 71
       },
       "id": 47,
       "options": {

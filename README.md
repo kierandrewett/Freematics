@@ -2,7 +2,7 @@
 
 This is Kieran Drewett's focused fork of the upstream [Freematics](https://github.com/stanleyhuangyc/Freematics) project. The repository root is a production TeleLogger firmware for Freematics ONE+ Model B, with only its required libraries and the matching collector retained.
 
-It collects OBD-II, GNSS, accelerometer, device and network telemetry, buffers outages in PSRAM, writes an acknowledged journal to microSD in the SD build, and sends data to a private Freematics-compatible server over HTTPS. Cellular is preferred and Wi-Fi is the fallback.
+It collects OBD-II, GNSS, accelerometer, device and network telemetry, writes an acknowledged journal to microSD in the SD build, and sends data from that durable journal to a private Freematics-compatible server over HTTPS. Cellular is preferred and Wi-Fi is the fallback.
 
 Data Collection
 ---------------

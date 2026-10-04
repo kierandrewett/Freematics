@@ -15,6 +15,10 @@ if os.name == "posix":
     # Production images contain the collector token; even tokenless builds can
     # contain private APN settings. Keep all per-environment build products
     # inaccessible to other local users from the start of compilation.
+    os.umask(0o077)
+    for private_dir in (build_dir.parent.parent, build_dir.parent):
+        private_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(private_dir, 0o700)
     os.chmod(build_dir, 0o700)
 
 
@@ -28,7 +32,8 @@ def protect_build_outputs(source, target, env):
                 os.chmod(output, 0o600)
 
 
-env.AddPostAction("$BUILD_DIR/firmware.bin", protect_build_outputs)
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", protect_build_outputs)
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", protect_build_outputs)
 
 settings = load_build_environment(Path(env.subst("$PROJECT_DIR")) / ".env", os.environ)
 token = settings.get("FREEMATICS_TOKEN", "")

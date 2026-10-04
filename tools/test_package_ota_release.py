@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host tests for the local OTA release packager."""
 
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -9,7 +10,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from package_ota_release import ASSET_NAME, SIDECAR_NAME, package_release
+from package_ota_release import (
+    ASSET_NAME,
+    SIDECAR_NAME,
+    _credential_signatures,
+    _image_contains_value,
+    package_release,
+    verify_release_directory,
+)
 
 
 class PackageOtaReleaseTests(unittest.TestCase):
@@ -41,6 +49,38 @@ class PackageOtaReleaseTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(image.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(sidecar.stat().st_mode), 0o600)
 
+    def test_verifier_accepts_exact_unmodified_asset_pair(self):
+        image, sidecar = package_release(self.firmware, self.output)
+        self.assertEqual(verify_release_directory(self.output), (image, sidecar))
+
+    def test_image_scanner_handles_chunk_boundaries_and_one_byte_values(self):
+        self.firmware.write_bytes(b"abcz1234")
+        with patch("package_ota_release.IMAGE_SCAN_CHUNK_BYTES", 4):
+            self.assertTrue(_image_contains_value(self.firmware, b"z1"))
+            self.assertTrue(_image_contains_value(self.firmware, b"a"))
+            self.assertFalse(_image_contains_value(self.firmware, b"q"))
+
+    def test_verifier_rejects_modified_firmware(self):
+        image, _ = package_release(self.firmware, self.output)
+        image.write_bytes(self.payload + b"modified")
+        with self.assertRaisesRegex(ValueError, "checksum does not match"):
+            verify_release_directory(self.output)
+
+    def test_verifier_rejects_extra_files(self):
+        package_release(self.firmware, self.output)
+        (self.output / "debug.log").write_text("private", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "exactly the approved"):
+            verify_release_directory(self.output)
+
+    def test_verifier_rejects_replaced_asset_containing_configured_secret(self):
+        package_release(self.firmware, self.output)
+        image = self.output / ASSET_NAME
+        secret = b"private-fixture-credential"
+        image.write_bytes(self.payload + secret)
+        with patch("package_ota_release._configured_credentials", return_value={secret}):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+                verify_release_directory(self.output)
+
     @unittest.skipUnless(os.name == "posix", "POSIX permission policy")
     def test_refuses_a_shared_output_directory(self):
         self.output.mkdir(mode=0o755)
@@ -48,6 +88,16 @@ class PackageOtaReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be owner-only"):
             package_release(self.firmware, self.output)
         self.assertFalse((self.output / ASSET_NAME).exists())
+
+    def test_refuses_to_mix_unrelated_files_into_the_upload_directory(self):
+        self.output.mkdir(mode=0o700)
+        unrelated = self.output / "build.log"
+        unrelated.write_text("private diagnostic data", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "must be empty before packaging"):
+            package_release(self.firmware, self.output)
+        self.assertEqual(unrelated.read_text(encoding="utf-8"), "private diagnostic data")
+        self.assertFalse((self.output / ASSET_NAME).exists())
+        self.assertFalse((self.output / SIDECAR_NAME).exists())
 
     def test_refuses_to_overwrite_existing_asset(self):
         self.output.mkdir(mode=0o700)
@@ -126,6 +176,66 @@ class PackageOtaReleaseTests(unittest.TestCase):
         secret = "fixture-apn-user-from-environment"
         self.firmware.write_bytes(self.payload + secret.encode("ascii"))
         with patch.dict("os.environ", {"APN_USERNAME": secret}):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_an_image_containing_a_configured_sim_pin(self):
+        pin = "fixture-sim-pin"
+        self.firmware.write_bytes(self.payload + pin.encode("ascii"))
+        with patch("package_ota_release._parse_defines",
+                   return_value={"SIM_CARD_PIN": f'"{pin}"'}), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(pin, str(raised.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_an_image_containing_a_configured_wifi_ssid(self):
+        ssid = "fixture-private-wifi-name"
+        self.firmware.write_bytes(self.payload + ssid.encode("ascii"))
+        with patch("package_ota_release._parse_defines",
+                   return_value={"WIFI_SSID": f'"{ssid}"'}), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_common_encoded_forms_of_configured_credentials(self):
+        secret = b"fixture-apn-password-value"
+        encoded_forms = {
+            base64.b64encode(secret),
+            secret.hex().encode("ascii"),
+            secret.decode("ascii").encode("utf-16le"),
+        }
+        for index, encoded in enumerate(encoded_forms):
+            with self.subTest(encoding=index):
+                self.firmware.write_bytes(self.payload + encoded)
+                with patch(
+                    "package_ota_release._configured_credentials",
+                    return_value=_credential_signatures(secret),
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "contains a configured credential"
+                    ):
+                        package_release(self.firmware, self.output)
+                self.assertFalse(self.output.exists())
+
+    def test_scans_apn_user_alias_in_private_env(self):
+        username = "fixture-apn-user-alias"
+        (self.root / ".env").write_text(f"APN_USER={username}\n", encoding="utf-8")
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            "#endif\n",
+            encoding="utf-8",
+        )
+        self.firmware.write_bytes(self.payload + username.encode("ascii"))
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
             with self.assertRaisesRegex(ValueError, "contains a configured credential"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())

@@ -12,6 +12,7 @@ enum BootFailureReason {
 enum BootResult {
   kBootAccepted,
   kBootRolledBack,
+  kBootRollbackFailed,
   kBootAcceptedIdentityNotSaved,
 };
 
@@ -27,12 +28,12 @@ BootResult validateAndAcceptPendingImage(bool storageReady,
                                          Operations& operations) {
   if (!storageReady || !motionSensorReady || !credentialReady ||
       !imageIdentityValid) {
-    operations.rollback(kBootCoreValidationFailed);
-    return kBootRolledBack;
+    return operations.rollback(kBootCoreValidationFailed)
+        ? kBootRolledBack : kBootRollbackFailed;
   }
   if (!operations.confirmBoot()) {
-    operations.rollback(kBootConfirmationFailed);
-    return kBootRolledBack;
+    return operations.rollback(kBootConfirmationFailed)
+        ? kBootRolledBack : kBootRollbackFailed;
   }
   if (!operations.saveInstalledIdentity()) {
     operations.erasePendingIdentity();

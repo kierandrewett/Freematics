@@ -14,6 +14,7 @@
 #include <sdkconfig.h>
 #include <mbedtls/sha256.h>
 #include <nvs.h>
+#include <freertos/FreeRTOS.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +28,7 @@ const char kInstalledDigestKey[] = "ota_sha";
 const char kPendingDigestKey[] = "ota_pending";
 const size_t kSidecarCapacity = 256;
 const uint8_t kSha256Bytes = 32;
+const uint32_t kPendingIdentityMagic = 0x46544F41; // "FTOA"
 const uint8_t kMaxRedirects = 3;
 const uint32_t kSidecarMaximum = 255;
 const size_t kPartitionHashChunkBytes = 1024;
@@ -37,12 +39,21 @@ const char kFirmwareReleaseMarker[] =
     "FREEMATICS_RELEASE_VERSION=" FREEMATICS_RELEASE;
 
 struct PendingOtaIdentity {
+  uint32_t magic;
   uint32_t imageSize;
+  uint32_t partitionAddress;
+  uint8_t partitionType;
+  uint8_t partitionSubtype;
+  uint8_t reserved[2];
   uint8_t digest[kSha256Bytes];
 };
 
-static_assert(sizeof(PendingOtaIdentity) == 36,
-              "pending OTA identity must remain a fixed 36-byte NVS blob");
+static_assert(sizeof(PendingOtaIdentity) == 48,
+              "pending OTA identity must remain a fixed 48-byte NVS blob");
+
+PendingOtaIdentity stagedCandidate = {};
+bool stagedCandidateAvailable = false;
+portMUX_TYPE stagedCandidateMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool cancelled(const volatile bool* requested)
 {
@@ -185,30 +196,104 @@ bool writeDigest(const char* key, const uint8_t digest[kSha256Bytes])
   return writeBlob(key, digest, kSha256Bytes);
 }
 
-void eraseDigest(const char* key)
+bool eraseDigest(const char* key)
 {
   nvs_handle_t handle;
-  if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) return;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
   const esp_err_t erased = nvs_erase_key(handle, key);
-  if (erased == ESP_OK) nvs_commit(handle);
+  const esp_err_t committed = erased == ESP_ERR_NVS_NOT_FOUND
+      ? ESP_OK : (erased == ESP_OK ? nvs_commit(handle) : erased);
   nvs_close(handle);
+  return committed == ESP_OK;
 }
 
-bool writePendingIdentity(uint32_t imageSize,
-                          const uint8_t digest[kSha256Bytes])
+PendingOtaIdentity makeIdentity(const esp_partition_t* partition,
+                                uint32_t imageSize,
+                                const uint8_t digest[kSha256Bytes])
 {
-  if (!imageSize || !digest) return false;
   PendingOtaIdentity identity = {};
+  if (!partition || !imageSize || !digest) return identity;
+  identity.magic = kPendingIdentityMagic;
   identity.imageSize = imageSize;
+  identity.partitionAddress = partition ? partition->address : 0;
+  identity.partitionType = partition ? partition->type : 0;
+  identity.partitionSubtype = partition ? partition->subtype : 0;
   memcpy(identity.digest, digest, sizeof(identity.digest));
-  return writeBlob(kPendingDigestKey, &identity, sizeof(identity));
+  return identity;
+}
+
+bool sameIdentity(const PendingOtaIdentity& left,
+                  const PendingOtaIdentity& right)
+{
+  return left.magic == kPendingIdentityMagic &&
+      right.magic == kPendingIdentityMagic &&
+      left.imageSize == right.imageSize &&
+      left.partitionAddress == right.partitionAddress &&
+      left.partitionType == right.partitionType &&
+      left.partitionSubtype == right.partitionSubtype &&
+      freematics::ota::constantTimeDigestEqual(left.digest, right.digest);
+}
+
+bool identityMatchesPartition(const PendingOtaIdentity& identity,
+                              const esp_partition_t* partition)
+{
+  return partition && identity.magic == kPendingIdentityMagic &&
+      freematics::ota::matchesTargetPartition(identity.imageSize,
+          partition->size, identity.partitionAddress, identity.partitionType,
+          identity.partitionSubtype, partition->address, partition->type,
+          partition->subtype);
+}
+
+bool writePendingIdentity(const PendingOtaIdentity& identity)
+{
+  if (!identity.imageSize || identity.magic != kPendingIdentityMagic ||
+      !writeBlob(kPendingDigestKey, &identity, sizeof(identity))) return false;
+  PendingOtaIdentity readback = {};
+  return readBlob(kPendingDigestKey, &readback, sizeof(readback)) &&
+         sameIdentity(identity, readback);
 }
 
 bool readPendingIdentity(PendingOtaIdentity* identity)
 {
   if (!identity) return false;
   return readBlob(kPendingDigestKey, identity, sizeof(*identity)) &&
-         identity->imageSize;
+         identity->magic == kPendingIdentityMagic && identity->imageSize;
+}
+
+bool pendingIdentityKeyAbsent()
+{
+  nvs_handle_t handle;
+  if (nvs_open(kNvsNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
+  size_t length = 0;
+  const esp_err_t result = nvs_get_blob(handle, kPendingDigestKey, nullptr, &length);
+  nvs_close(handle);
+  return result == ESP_ERR_NVS_NOT_FOUND;
+}
+
+void clearStagedCandidate()
+{
+  portENTER_CRITICAL(&stagedCandidateMux);
+  memset(&stagedCandidate, 0, sizeof(stagedCandidate));
+  stagedCandidateAvailable = false;
+  portEXIT_CRITICAL(&stagedCandidateMux);
+}
+
+bool copyStagedCandidate(PendingOtaIdentity* identity)
+{
+  if (!identity) return false;
+  portENTER_CRITICAL(&stagedCandidateMux);
+  const bool available = stagedCandidateAvailable;
+  if (available) *identity = stagedCandidate;
+  portEXIT_CRITICAL(&stagedCandidateMux);
+  return available;
+}
+
+void saveStagedCandidate(const PendingOtaIdentity& identity)
+{
+  portENTER_CRITICAL(&stagedCandidateMux);
+  stagedCandidate = identity;
+  stagedCandidateAvailable = true;
+  portEXIT_CRITICAL(&stagedCandidateMux);
 }
 
 bool hashPartitionImage(const esp_partition_t* partition, uint32_t imageSize,
@@ -246,18 +331,18 @@ bool hashPartitionImage(const esp_partition_t* partition, uint32_t imageSize,
 
 struct StageOperations {
   FirmwareWriter& firmware;
-  const uint8_t* digest;
-  const esp_partition_t* partition;
 
   void abortImage() { esp_ota_abort(firmware.handle); }
   bool finishImage() { return esp_ota_end(firmware.handle) == ESP_OK; }
-  bool writePendingDigest() {
-    return writePendingIdentity(firmware.bytesWritten, digest);
-  }
-  void erasePendingDigest() { eraseDigest(kPendingDigestKey); }
+};
+
+struct BootSelectionOperations {
+  const esp_partition_t* partition;
+
   bool selectBootPartition() {
     return esp_ota_set_boot_partition(partition) == ESP_OK;
   }
+  void erasePendingDigest() { (void)eraseDigest(kPendingDigestKey); }
 };
 
 struct PendingBootOperations {
@@ -269,14 +354,19 @@ struct PendingBootOperations {
   bool saveInstalledIdentity() {
     return writeDigest(kInstalledDigestKey, identity.digest);
   }
-  void erasePendingIdentity() { eraseDigest(kPendingDigestKey); }
-  void rollback(freematics::ota::BootFailureReason reason) {
+  void erasePendingIdentity() { (void)eraseDigest(kPendingDigestKey); }
+  bool rollback(freematics::ota::BootFailureReason reason) {
     if (reason == freematics::ota::kBootCoreValidationFailed) {
       Serial.println("[OTA] New image failed identity or core-service validation; rolling back");
     } else {
       Serial.println("[OTA] Could not confirm new image; rolling back");
     }
-    esp_ota_mark_app_invalid_rollback_and_reboot();
+    const esp_err_t result = esp_ota_mark_app_invalid_rollback_and_reboot();
+    if (result != ESP_OK) {
+      Serial.printf("[OTA] CRITICAL: rollback request failed (%d); refusing normal startup\n",
+                    (int)result);
+    }
+    return result == ESP_OK;
   }
 };
 
@@ -293,6 +383,7 @@ extern "C" bool verifyRollbackLater()
 
 OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* cancelRequested)
 {
+  clearStagedCandidate();
 #if STORAGE != STORAGE_SD
   (void)cell;
   (void)cancelRequested;
@@ -382,7 +473,7 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     esp_ota_abort(firmware.handle);
     return OTA_ATTEMPT_CANCELLED;
   }
-  StageOperations stage = {firmware, calculatedDigest, updatePartition};
+  StageOperations stage = {firmware};
   const freematics::ota::StageResult staged =
       freematics::ota::stageVerifiedImage(stage, cancelRequested);
   if (staged == freematics::ota::kStageCancelled) return OTA_ATTEMPT_CANCELLED;
@@ -390,29 +481,81 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     Serial.println("[OTA] Image validation failed");
     return OTA_ATTEMPT_FAILED;
   }
-  if (staged == freematics::ota::kStagePendingDigestFailed) {
-    Serial.println("[OTA] Could not journal pending release identity");
+  if (staged != freematics::ota::kStageReadyForActivation) {
+    Serial.println("[OTA] Verified image was not ready for final activation");
     return OTA_ATTEMPT_FAILED;
   }
-  if (staged == freematics::ota::kStageBootSelectionFailed) {
-    Serial.println("[OTA] Could not select the inactive image");
-    return OTA_ATTEMPT_FAILED;
-  }
-  Serial.printf("[OTA] Verified %lu bytes; staged inactive slot %s\n",
+  saveStagedCandidate(makeIdentity(updatePartition, firmware.bytesWritten,
+                                   calculatedDigest));
+  Serial.printf("[OTA] Verified %lu bytes in inactive slot %s; boot slot unchanged\n",
                 (unsigned long)firmware.bytesWritten, updatePartition->label);
-  return OTA_ATTEMPT_INSTALLED;
+  return OTA_ATTEMPT_READY;
 }
 
-bool cancelStagedOtaUpdate()
+bool prepareVerifiedOtaUpdate()
 {
+  PendingOtaIdentity candidate = {};
   const esp_partition_t* running = esp_ota_get_running_partition();
-  if (!running || esp_ota_set_boot_partition(running) != ESP_OK) {
-    Serial.println("[OTA] Could not restore the current boot slot after motion wake");
+  const esp_partition_t* update = esp_ota_get_next_update_partition(nullptr);
+  uint8_t actualDigest[kSha256Bytes];
+  if (!copyStagedCandidate(&candidate) || !running || !update ||
+      update == running || !identityMatchesPartition(candidate, update) ||
+      !hashPartitionImage(update, candidate.imageSize, actualDigest) ||
+      !freematics::ota::constantTimeDigestEqual(candidate.digest, actualDigest)) {
+    Serial.println("[OTA] Cannot prepare activation: inactive image identity or contents do not match");
     return false;
   }
-  eraseDigest(kPendingDigestKey);
-  Serial.println("[OTA] Staged image cancelled after motion wake");
+  if (!writePendingIdentity(candidate)) {
+    const bool erased = eraseDigest(kPendingDigestKey);
+    Serial.printf("[OTA] Could not persist/read back pending image identity%s\n",
+                  erased ? "" : "; stale marker cleanup also failed");
+    return false;
+  }
+  Serial.printf("[OTA] Exact inactive image verified and activation identity journaled (%s)\n",
+                update->label);
   return true;
+}
+
+bool activateVerifiedOtaUpdate()
+{
+  PendingOtaIdentity candidate = {};
+  PendingOtaIdentity pending = {};
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* update = esp_ota_get_next_update_partition(nullptr);
+  if (!copyStagedCandidate(&candidate) || !readPendingIdentity(&pending) ||
+      !running || !update || update == running ||
+      !identityMatchesPartition(candidate, update) ||
+      !identityMatchesPartition(pending, update) ||
+      !sameIdentity(candidate, pending)) {
+    if (!eraseDigest(kPendingDigestKey)) {
+      Serial.println("[OTA] Could not clear invalid pending image identity");
+    }
+    Serial.println("[OTA] Cannot activate: verified inactive image identity is unavailable");
+    return false;
+  }
+
+  // prepareVerifiedOtaUpdate() already hashed this exact partition. Keep the
+  // final vehicle gate directly adjacent to this short identity check and
+  // boot-slot write; first-boot validation hashes the running image again.
+  BootSelectionOperations operations = {update};
+  const freematics::ota::StageResult result =
+      freematics::ota::activateVerifiedImage(operations, nullptr);
+  if (result != freematics::ota::kStageInstalled) {
+    Serial.println("[OTA] Could not select the verified inactive image");
+    clearStagedCandidate();
+    return false;
+  }
+  clearStagedCandidate();
+  Serial.printf("[OTA] Selected verified inactive slot %s\n", update->label);
+  return true;
+}
+
+void discardVerifiedOtaUpdate()
+{
+  clearStagedCandidate();
+  if (!eraseDigest(kPendingDigestKey)) {
+    Serial.println("[OTA] Could not clear discarded pending image identity");
+  }
 }
 
 bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
@@ -421,7 +564,28 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
 #if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t imageState;
-  if (!running || esp_ota_get_state_partition(running, &imageState) != ESP_OK) return true;
+  if (!running) {
+    Serial.println("[OTA] CRITICAL: running partition unavailable; refusing normal startup");
+    return false;
+  }
+  const esp_err_t stateResult = esp_ota_get_state_partition(running, &imageState);
+  if (stateResult != ESP_OK) {
+    PendingOtaIdentity orphaned = {};
+    if (readPendingIdentity(&orphaned)) {
+      if (orphaned.partitionAddress == running->address) {
+        Serial.println("[OTA] CRITICAL: running image has a pending OTA identity but no boot state");
+        return false;
+      }
+      if (!eraseDigest(kPendingDigestKey)) {
+        Serial.println("[OTA] CRITICAL: cannot clear orphaned OTA identity after boot-state error");
+        return false;
+      }
+    } else if (!pendingIdentityKeyAbsent()) {
+      Serial.println("[OTA] CRITICAL: pending OTA identity state is unreadable; refusing normal startup");
+      return false;
+    }
+    return true;
+  }
 
   if (imageState == ESP_OTA_IMG_PENDING_VERIFY) {
     PendingOtaIdentity pending = {};
@@ -429,6 +593,7 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
     bool identityValid = false;
     if (storageReady && motionSensorReady && telemetryCredentialReady) {
       identityValid = readPendingIdentity(&pending) &&
+          identityMatchesPartition(pending, running) &&
           hashPartitionImage(running, pending.imageSize, actualDigest) &&
           freematics::ota::matchesRunningImage(pending.imageSize, running->size,
                                                 pending.digest, actualDigest);
@@ -440,13 +605,21 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
             storageReady, motionSensorReady, telemetryCredentialReady,
             identityValid, operations);
     if (result == freematics::ota::kBootRolledBack) return false;
+    if (result == freematics::ota::kBootRollbackFailed) {
+      Serial.println("[OTA] CRITICAL: rollback failed; refusing normal startup");
+      return false;
+    }
     if (result == freematics::ota::kBootAcceptedIdentityNotSaved) {
       Serial.println("[OTA] Image confirmed, but release identity was not saved");
       return true;
     }
     Serial.println("[OTA] New image passed core-service validation");
   } else if (imageState == ESP_OTA_IMG_ABORTED) {
-    eraseDigest(kPendingDigestKey);
+    if (!eraseDigest(kPendingDigestKey)) {
+      Serial.println("[OTA] Could not clear aborted pending image identity");
+    }
+  } else if (!eraseDigest(kPendingDigestKey)) {
+    Serial.println("[OTA] Could not clear pending identity outside pending verification");
   }
 #elif ENABLE_OTA
   (void)storageReady;

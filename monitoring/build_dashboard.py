@@ -817,6 +817,41 @@ def build_dashboard(view: str = "combined") -> dict:
         )
     )
 
+    if view == "live":
+        panels.append(
+            timeseries(
+                51,
+                "Vehicle supply and ECU voltage",
+                0,
+                13,
+                24,
+                7,
+                [
+                    target(
+                        fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}"),
+                        "A",
+                        "Vehicle supply (Model B input)",
+                    ),
+                    target(
+                        fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x042"}}'),
+                        "B",
+                        "ECU control-module voltage (PID 0x042)",
+                    ),
+                ],
+                unit="volt",
+                description=(
+                    "Separate measurements: Model B device-input vehicle supply and ECU-reported "
+                    "control-module voltage (PID 0x042). Each series is hidden when its own existing "
+                    f"freshness limit exceeds {OBD_FRESH_MAX_AGE_SECONDS} seconds; missing or stale "
+                    "samples remain gaps, and the values are never substituted for each other."
+                ),
+                overrides=[
+                    by_name("Vehicle supply (Model B input)", ("color", {"fixedColor": "blue", "mode": "fixed"})),
+                    by_name("ECU control-module voltage (PID 0x042)", ("color", {"fixedColor": "orange", "mode": "fixed"})),
+                ],
+            )
+        )
+
     panels.extend(
         [
             timeseries(
@@ -1777,32 +1812,33 @@ def build_dashboard(view: str = "combined") -> dict:
 
     if view == "live":
         live_panel_ids = {
-            1, 2, 3, 4, 5, 6, 21, 22, 23, 24, 25, 26, 27, 28, 30,
+            1, 2, 3, 4, 5, 6, 21, 51, 22, 23, 24, 25, 26, 27, 28, 30,
             31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
         live_layout = {
             21: (0, 3, 20, 10),
             43: (20, 3, 4, 3),
-            22: (0, 13, 8, 7),
-            23: (8, 13, 8, 7),
-            24: (16, 13, 8, 7),
-            25: (0, 20, 8, 7),
-            26: (8, 20, 8, 7),
-            27: (16, 20, 8, 7),
-            28: (0, 27, 8, 5),
-            30: (8, 27, 8, 5),
-            38: (16, 27, 8, 5),
-            32: (0, 32, 6, 3),
-            33: (6, 32, 6, 3),
-            34: (12, 32, 6, 3),
-            35: (18, 32, 6, 3),
-            31: (0, 35, 24, 10),
-            39: (0, 45, 12, 7),
-            40: (12, 45, 12, 7),
-            45: (0, 52, 24, 7),
-            46: (0, 59, 24, 5),
-            47: (0, 64, 6, 3),
+            51: (0, 13, 24, 7),
+            22: (0, 20, 8, 7),
+            23: (8, 20, 8, 7),
+            24: (16, 20, 8, 7),
+            25: (0, 27, 8, 7),
+            26: (8, 27, 8, 7),
+            27: (16, 27, 8, 7),
+            28: (0, 34, 8, 5),
+            30: (8, 34, 8, 5),
+            38: (16, 34, 8, 5),
+            32: (0, 39, 6, 3),
+            33: (6, 39, 6, 3),
+            34: (12, 39, 6, 3),
+            35: (18, 39, 6, 3),
+            31: (0, 42, 24, 10),
+            39: (0, 52, 12, 7),
+            40: (12, 52, 12, 7),
+            45: (0, 59, 24, 7),
+            46: (0, 66, 24, 5),
+            47: (0, 71, 6, 3),
         }
         for panel in panels:
             layout = live_layout.get(panel["id"])

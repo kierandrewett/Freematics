@@ -10,13 +10,10 @@ namespace {
 struct FakeOperations {
   std::vector<std::string> calls;
   bool finishOkay;
-  bool pendingOkay;
   bool bootOkay;
   volatile bool* cancelOnFinish;
-  volatile bool* cancelOnPending;
 
-  FakeOperations() : finishOkay(true), pendingOkay(true), bootOkay(true),
-                     cancelOnFinish(0), cancelOnPending(0) {}
+  FakeOperations() : finishOkay(true), bootOkay(true), cancelOnFinish(0) {}
 
   void abortImage() { calls.push_back("abort"); }
   bool finishImage() {
@@ -24,24 +21,44 @@ struct FakeOperations {
     if (cancelOnFinish) *cancelOnFinish = true;
     return finishOkay;
   }
-  bool writePendingDigest() {
-    calls.push_back("pending");
-    if (cancelOnPending) *cancelOnPending = true;
-    return pendingOkay;
-  }
-  void erasePendingDigest() { calls.push_back("erase"); }
   bool selectBootPartition() {
     calls.push_back("select");
     return bootOkay;
   }
+  void erasePendingDigest() { calls.push_back("erase"); }
 };
 
-void testSuccessSelectsBootOnlyAfterPendingDigest() {
+void testVerificationFinishesImageWithoutPersistingIntentOrSelectingBoot() {
   volatile bool cancelled = false;
   FakeOperations operations;
   assert(freematics::ota::stageVerifiedImage(operations, &cancelled) ==
+         freematics::ota::kStageReadyForActivation);
+  assert((operations.calls == std::vector<std::string>{"finish"}));
+}
+
+void testActivationSelectsBootOnlyAfterFinalGate() {
+  volatile bool cancelled = false;
+  FakeOperations operations;
+  assert(freematics::ota::activateVerifiedImage(operations, &cancelled) ==
          freematics::ota::kStageInstalled);
-  assert((operations.calls == std::vector<std::string>{"finish", "pending", "select"}));
+  assert((operations.calls == std::vector<std::string>{"select"}));
+}
+
+void testBootSelectionFailureClearsPreparedIntent() {
+  volatile bool cancelled = false;
+  FakeOperations operations;
+  operations.bootOkay = false;
+  assert(freematics::ota::activateVerifiedImage(operations, &cancelled) ==
+         freematics::ota::kStageBootSelectionFailed);
+  assert((operations.calls == std::vector<std::string>{"select", "erase"}));
+}
+
+void testCancellationImmediatelyBeforeActivationClearsPreparedIntent() {
+  volatile bool cancelled = true;
+  FakeOperations operations;
+  assert(freematics::ota::activateVerifiedImage(operations, &cancelled) ==
+         freematics::ota::kStageCancelled);
+  assert((operations.calls == std::vector<std::string>{"erase"}));
 }
 
 void testCancellationBeforeFinishAbortsImage() {
@@ -70,43 +87,16 @@ void testCancellationAfterFinishLeavesRunningSlotSelected() {
   assert((operations.calls == std::vector<std::string>{"finish"}));
 }
 
-void testPendingFailureClearsMarkerAndNeverSelectsBoot() {
-  volatile bool cancelled = false;
-  FakeOperations operations;
-  operations.pendingOkay = false;
-  assert(freematics::ota::stageVerifiedImage(operations, &cancelled) ==
-         freematics::ota::kStagePendingDigestFailed);
-  assert((operations.calls == std::vector<std::string>{"finish", "pending", "erase"}));
-}
-
-void testCancellationAfterPendingClearsMarker() {
-  volatile bool cancelled = false;
-  FakeOperations operations;
-  operations.cancelOnPending = &cancelled;
-  assert(freematics::ota::stageVerifiedImage(operations, &cancelled) ==
-         freematics::ota::kStageCancelled);
-  assert((operations.calls == std::vector<std::string>{"finish", "pending", "erase"}));
-}
-
-void testBootSelectionFailureClearsMarker() {
-  volatile bool cancelled = false;
-  FakeOperations operations;
-  operations.bootOkay = false;
-  assert(freematics::ota::stageVerifiedImage(operations, &cancelled) ==
-         freematics::ota::kStageBootSelectionFailed);
-  assert((operations.calls == std::vector<std::string>{"finish", "pending", "select", "erase"}));
-}
-
 } // namespace
 
 int main() {
-  testSuccessSelectsBootOnlyAfterPendingDigest();
+  testVerificationFinishesImageWithoutPersistingIntentOrSelectingBoot();
+  testActivationSelectsBootOnlyAfterFinalGate();
+  testBootSelectionFailureClearsPreparedIntent();
+  testCancellationImmediatelyBeforeActivationClearsPreparedIntent();
   testCancellationBeforeFinishAbortsImage();
   testFinishFailureNeverWritesPendingOrSelectsBoot();
   testCancellationAfterFinishLeavesRunningSlotSelected();
-  testPendingFailureClearsMarkerAndNeverSelectsBoot();
-  testCancellationAfterPendingClearsMarker();
-  testBootSelectionFailureClearsMarker();
   puts("OTA staging transaction: all tests passed");
   return 0;
 }

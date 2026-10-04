@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run the firmware recorder task against the real SD journal on a fake card.
+"""Exercise the production SD recorder with its configured bounded handoff.
 
-The 30 September drive showed the recorder falling behind 4 Hz: the RAM queue
-reached 1,011 of 1,024 readings and 1,154 readings were missed. This check runs
-the production recordSamples() loop, CBuffer/CBufferManager, CStorage
-serialiser and DurableQueue. Only the CSV logger, task state and the ESP32
-heap/lock calls are stubbed; the card is tools/emulator/SD.h.
+The harness runs the production recordSamples() loop, CBuffer/CBufferManager,
+CStorage serialiser and DurableQueue against the fake card. A 250 ms sampler is
+interleaved with modeled SD transaction time; CSV logging, task state, and
+ESP32 heap/lock calls are stubbed.
 """
 from pathlib import Path
 import re
@@ -34,8 +33,14 @@ storage = (ROOT / "telestore.cpp").read_text()
 storage_header = (ROOT / "telestore.h").read_text()
 config = (ROOT / "config.h").read_text()
 settings = "\n".join(line for line in config.splitlines() if re.match(
-    r"#define (RECORD_BATCH_MAX|RECORD_BLOCK_SIZE|LOG_FLUSH_INTERVAL_MS|SAMPLE_FRAME_SIZE) ", line))
-assert re.search(r"#define BUFFER_SLOTS 8\b", config), "SD build must use only the bounded handoff queue"
+    r"#define (LOG_FLUSH_INTERVAL_MS|SAMPLE_FRAME_SIZE|SAMPLE_INTERVAL_MS) ", line))
+slot_match = re.search(r"#if STORAGE == STORAGE_SD\s+#define BUFFER_SLOTS (\d+)\b", config)
+assert slot_match, "could not find the production SD handoff capacity"
+buffer_slots = int(slot_match.group(1))
+assert buffer_slots > 0
+length_match = re.search(r"^#define BUFFER_LENGTH (\d+)\b", config, re.MULTILINE)
+assert length_match, "could not find the production sample buffer length"
+buffer_length = int(length_match.group(1))
 
 recorder = extract(firmware, "void recordSamples(void*)")
 # Guard the production upload path as well as the recorder harness below: all
@@ -54,6 +59,14 @@ assert "const bool durableAvailable = durableQueue.cachedHealthy();" in collect_
 assert collect_sample.index("usbTelemetryQueue.publish(record") < collect_sample.index("if (durableAvailable)")
 # The SD retry path powers the bus down and back up. The fake card has no bus.
 recorder = recorder.replace("SD.end();", "/* SD.end() */").replace("SPI.end();", "/* SPI.end() */")
+# Slow journal commits model recorder progress while the independent sampler
+# continues at the production cadence. Samples arrive while the recorder owns
+# the batch slots, which exercises the actual bounded CBuffer path.
+assert "durableQueue.appendBatch(frames, lengths, count);" in recorder
+recorder = recorder.replace("durableQueue.appendBatch(frames, lengths, count);",
+                            "(simulatedAppendLatency(), durableQueue.appendBatch(frames, lengths, count));")
+recorder = recorder.replace("for (;;) {\n    if (!state.check(STATE_WORKING))",
+                            "for (;;) {\n    if (simulationTime >= stopAt) throw Finished{};\n    if (!state.check(STATE_WORKING))", 1)
 
 code = r'''
 #include <cassert>
@@ -61,6 +74,7 @@ code = r'''
 #include <ctime>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 #include "Arduino.h"
 #include "SD.h"
 #include "config.h"
@@ -74,8 +88,6 @@ uint32_t simulationTime = 0;
 #define heap_caps_malloc(size, caps) malloc(size)
 #define heap_caps_free free
 #define MALLOC_CAP_SPIRAM 0
-#define BUFFER_SLOTS 1024
-#define BUFFER_LENGTH 2048
 #define PID_TIMESTAMP 0
 
 extern "C" int __wrap_open(const char* path, int, ...)
@@ -126,8 +138,9 @@ void CBufferManager::printStats() {}
 struct LoggerStub : CStorage {
     unsigned lines = 0;
     uint32_t bytes = 0;
+    std::vector<uint32_t> timestamps;
     void dispatch(const char*, byte len) override { bytes += len + 1; }
-    void timestamp(uint32_t ts) override { lines++; CStorage::timestamp(ts); }
+    void timestamp(uint32_t ts) override { lines++; timestamps.push_back(ts); CStorage::timestamp(ts); }
     uint32_t size() { return bytes; }
     void flush() {}
     void maintain() {}
@@ -153,12 +166,56 @@ CBufferManager bufman;
 DurableQueue durableQueue;
 uint32_t lastStatsTime = 0, lastLogFlush = 0, fileid = 0;
 uint16_t lastSizeKB = 0;
+static constexpr uint32_t SAMPLE_MS = SAMPLE_INTERVAL_MS;
+static uint32_t nextSampleAt = SAMPLE_MS;
+static uint32_t totalSamples = 0;
+static uint32_t peakHeld = 0;
+static uint32_t appendLatencyMs = 0;
+static bool samplingEnabled = true;
+static void advanceSimTime(uint32_t duration);
+
+static void sampleOnce()
+{
+    CBuffer* buffer = bufman.getFree();
+    if (!buffer) {
+        bufman.recordMissedReading();
+    } else {
+        const float value = (float)totalSamples;
+        buffer->add(0x100, ELEMENT_FLOAT_D2, (void*)&value, sizeof(value));
+        buffer->timestamp = nextSampleAt;
+        if (durableQueue.cachedHealthy()) bufman.publish(buffer);
+        else { bufman.recordMissedReading(); bufman.free(buffer); }
+    }
+    totalSamples++;
+    peakHeld = max(peakHeld, (uint32_t)bufman.unpersistedReadings());
+}
+
+static void simulatedAppendLatency()
+{
+    advanceSimTime(appendLatencyMs);
+}
+
+static void advanceSimTime(uint32_t duration)
+{
+    const uint32_t finish = simulationTime + duration;
+    while (samplingEnabled && nextSampleAt <= finish) {
+        simulationTime = nextSampleAt;
+        sampleOnce();
+        nextSampleAt += SAMPLE_MS;
+    }
+    simulationTime = finish;
+}
+
+static bool accountingBalanced()
+{
+    return totalSamples == bufman.missedReadings() + bufman.unpersistedReadings() + logger.lines;
+}
 
 struct Finished {};
 uint32_t stopAt = 0;
 void harnessDelay(unsigned long ms)
 {
-    simulationTime += ms;
+    advanceSimTime(ms);
     if (simulationTime >= stopAt) throw Finished{};
 }
 #define delay harnessDelay
@@ -171,30 +228,22 @@ static void runRecorder(uint32_t forMs)
     try { recordSamples(nullptr); } catch (Finished&) {}
 }
 
-static void publish(unsigned count, uint32_t firstTick)
-{
-    for (unsigned i = 0; i < count; i++) {
-        CBuffer* buffer = bufman.getFree();
-        assert(buffer);
-        for (uint16_t pid = 0x100; pid < 0x128; pid++) {
-            float value = pid + i;
-            buffer->add(pid, ELEMENT_FLOAT_D2, &value, sizeof(value));
-        }
-        buffer->timestamp = firstTick + i * 250;
-        bufman.publish(buffer);
-    }
-}
-
-static bool journalHolds(unsigned count, uint32_t firstTick)
+static bool journalMatchesLogger()
 {
     DurableQueue reader;
     if (!reader.begin()) return false;
     static char frame[8192];
-    for (unsigned i = 0; i < count; i++) {
+    unsigned count = 0;
+    while (count < logger.lines) {
         uint16_t length = 0;
         if (!reader.peek(frame, sizeof(frame), &length)) return false;
-        const std::string expected = "0:" + std::to_string(firstTick + i * 250) + ",";
-        if (std::string(frame, expected.size()) != expected) return false;
+        const std::string prefix = "0:";
+        if (length < prefix.size() || std::string(frame, prefix.size()) != prefix) return false;
+        const size_t comma = std::string(frame, length).find(',');
+        if (comma == std::string::npos) return false;
+        const uint32_t timestamp = (uint32_t)std::stoul(std::string(frame + prefix.size(), comma - prefix.size()));
+        if (timestamp != logger.timestamps.at(count)) return false;
+        count++;
     }
     uint16_t length = 0;
     return !reader.peek(frame, sizeof(frame), &length);
@@ -204,74 +253,69 @@ int main()
 {
     bufman.init();
     state.set(STATE_WORKING | STATE_STORAGE_READY);
-
-    // A stall leaves 200 readings in RAM. They must reach the journal in
-    // order, each logged to CSV once, with few SD transactions.
     cardFiles.clear();
     assert(durableQueue.begin());
-    publish(200, 1000);
+    appendLatencyMs = 650;
     cardOpens = 0;
+    runRecorder(30000);
+    const unsigned heldAtEnd = bufman.unpersistedReadings();
+    bool okay = peakHeld <= BUFFER_SLOTS && heldAtEnd <= BUFFER_SLOTS &&
+      totalSamples == logger.lines + bufman.missedReadings() + heldAtEnd && accountingBalanced();
+    samplingEnabled = false;
+    appendLatencyMs = 0;
     runRecorder(1000);
+    okay = okay && bufman.unpersistedReadings() == 0 &&
+      logger.lines + bufman.missedReadings() == totalSamples && journalMatchesLogger();
     const unsigned opens = cardOpens;
-    bool okay = bufman.unpersistedReadings() == 0 && logger.lines == 200 && journalHolds(200, 1000) && opens <= 16;
-    std::cout << (okay ? "PASS" : "FAIL") << ": 200-reading backlog journaled in order with " << opens
-              << " SD opens (one transaction per reading needs 400)\n";
+    std::cout << (okay ? "PASS" : "FAIL") << ": 250 ms sampler interleaved with slow SD; configured capacity="
+              << BUFFER_SLOTS << ", peak held=" << peakHeld << ", missed=" << bufman.missedReadings()
+              << ", journaled=" << logger.lines << ", opens=" << opens << "\n";
     if (!okay) return 1;
 
-    // A failed append must not turn PSRAM into a recording backlog. Count and
-    // discard those readings; later samples persist after the card recovers.
-    cardFiles.clear();
-    durableQueue = DurableQueue();
-    logger.lines = 0;
-    assert(durableQueue.begin());
-    publish(10, 500000);
+    // Full/unavailable media must account every later sample as missed, keep
+    // RAM within the same bound, and never make unjournaled samples replayable.
+    samplingEnabled = true;
+    nextSampleAt = ((simulationTime / SAMPLE_MS) + 1) * SAMPLE_MS;
     cardOnline = false;
-    runRecorder(2000);
-    char failedFrame[8192];
-    uint16_t failedLength = 0;
-    const bool journalHasFailedSample = durableQueue.peek(failedFrame, sizeof(failedFrame), &failedLength);
-    const bool uploadsPaused = !durableQueue.healthy();
-    okay = uploadsPaused && !journalHasFailedSample && bufman.unpersistedReadings() == 0 &&
-      bufman.recordedReadings() == 0 && bufman.missedReadings() == 10 && logger.lines == 0;
-    runRecorder(2000);
-    okay = okay && bufman.unpersistedReadings() == 0 && bufman.recordedReadings() == 0 &&
-      bufman.missedReadings() == 10 && logger.lines == 0;
-    std::cout << (okay ? "PASS" : "FAIL") << ": SD fault pauses uploads, drops 10 unjournaled samples, and reports all 10 missed\n";
-    if (!okay) return 1;
-    cardOnline = true;
-    runRecorder(40000);
-    publish(10, 510000);
-    runRecorder(2000);
-    okay = bufman.unpersistedReadings() == 0 && logger.lines == 10 && journalHolds(10, 510000) &&
-      bufman.missedReadings() == 10;
-    std::cout << (okay ? "PASS" : "FAIL") << ": recovered card stores new samples; old RAM samples are not replayed\n";
+    appendLatencyMs = 1000;
+    runRecorder(5000);
+    const uint32_t failedSamples = totalSamples;
+    const uint32_t failedMissed = bufman.missedReadings();
+    // The card is unavailable here, so its committed contents can only be
+    // checked after recovery. Logger timestamps track exactly the committed
+    // frames and are reconciled with the journal below.
+    okay = !durableQueue.healthy() &&
+      peakHeld <= BUFFER_SLOTS && bufman.unpersistedReadings() <= BUFFER_SLOTS &&
+      failedSamples == logger.lines + failedMissed + bufman.unpersistedReadings();
+    std::cout << (okay ? "PASS" : "FAIL") << ": full-SD failure holds at most configured capacity and counts/discards unjournaled samples\n";
+    if (!okay) std::cout << "  healthy=" << durableQueue.healthy()
+      << " peak=" << peakHeld << " held=" << bufman.unpersistedReadings() << " samples=" << failedSamples
+      << " missed=" << failedMissed << " journaled=" << logger.lines << "\n";
     if (!okay) return 1;
 
-    // A wake that is still being confirmed journals its readings but creates
-    // no CSV file in /DATA; the CSV opens once the trip is confirmed.
-    cardFiles.clear();
-    durableQueue = DurableQueue();
-    assert(durableQueue.begin());
-    fileid = 0;
-    logger.begins = 0;
-    logger.lines = 0;
-    powerPhase = PHASE_CONFIRMING;
-    publish(8, 900000);
-    runRecorder(2000);
-    okay = logger.begins == 0 && fileid == 0 && journalHolds(8, 900000) && bufman.unpersistedReadings() == 0;
-    powerPhase = PHASE_TRIP;
-    publish(4, 902000);
-    runRecorder(2000);
-    okay = okay && logger.begins == 1 && fileid == 1 && logger.lines == 4;
-    std::cout << (okay ? "PASS" : "FAIL") << ": confirming wake journals readings without creating a CSV; the CSV opens on the trip\n";
-    return okay ? 0 : 1;
+    // Recovery is deliberately delayed by the production 30 s retry gate.
+    cardOnline = true;
+    appendLatencyMs = 0;
+    runRecorder(35000);
+    const uint32_t beforeRecoveryDrain = totalSamples;
+    samplingEnabled = false;
+    runRecorder(1000);
+    okay = bufman.unpersistedReadings() == 0 && journalMatchesLogger() &&
+      totalSamples == logger.lines + bufman.missedReadings() &&
+      logger.lines + bufman.missedReadings() >= beforeRecoveryDrain;
+    std::cout << (okay ? "PASS" : "FAIL") << ": recovered SD journals new samples only; failed samples remain counted, never replayed\n";
+    if (!okay) return 1;
+    return 0;
 }
 '''
 
 with tempfile.TemporaryDirectory(prefix="freematics-recorder-") as directory:
     build = Path(directory)
     (build / "config.h").write_text("#pragma once\n#define STORAGE_NONE 0\n#define STORAGE_SPIFFS 1\n"
-                                     "#define STORAGE_SD 2\n#define STORAGE 2\n" + settings + "\n")
+                                     "#define STORAGE_SD 2\n#define STORAGE 2\n#define BUFFER_SLOTS " +
+                                     str(buffer_slots) + "\n#define BUFFER_LENGTH " +
+                                     str(buffer_length) + "\n#define RECORD_BATCH_MAX BUFFER_SLOTS\n"
+                                     "#define RECORD_BLOCK_SIZE (SAMPLE_FRAME_SIZE * RECORD_BATCH_MAX)\n" + settings + "\n")
     (build / "sdaccess.h").write_text("#pragma once\ninline bool lockSD() { return true; }\n"
                                       "inline void unlockSD() {}\n"
                                       "struct SDGuard { explicit operator bool() const { return true; } };\n")

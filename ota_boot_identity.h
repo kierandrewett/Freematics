@@ -9,6 +9,19 @@
 namespace freematics {
 namespace ota {
 
+inline bool matchesTargetPartition(size_t imageSize, size_t partitionSize,
+                                   uint32_t expectedAddress,
+                                   uint8_t expectedType,
+                                   uint8_t expectedSubtype,
+                                   uint32_t actualAddress,
+                                   uint8_t actualType,
+                                   uint8_t actualSubtype)
+{
+  return imageSize > 0 && imageSize <= partitionSize &&
+         expectedAddress == actualAddress && expectedType == actualType &&
+         expectedSubtype == actualSubtype;
+}
+
 inline bool matchesRunningImage(size_t imageSize, size_t partitionSize,
                                 const uint8_t expectedDigest[32],
                                 const uint8_t actualDigest[32])

@@ -82,7 +82,7 @@
 * Circular Buffer Configuration
 **************************************/
 #if STORAGE == STORAGE_SD
-#define BUFFER_SLOTS 8 /* bounded sampler-to-journal handoff; never an outage spool */
+#define BUFFER_SLOTS 8 /* bounded SD-latency handoff; never an outage spool */
 #elif BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
 #else
@@ -209,10 +209,14 @@
 // power the modem down before light sleep stops the modem UART.
 #define STANDBY_RADIO_OFF_WAIT_MS 45000UL
 #define SAMPLE_FRAME_SIZE 8192
-// The recorder journals every waiting reading in one SD transaction, up to
-// this many readings or bytes. Steady driving still writes one per 250 ms.
+// The SD build permits only the in-flight journal write and one handoff sample.
+#if STORAGE == STORAGE_SD
+#define RECORD_BATCH_MAX BUFFER_SLOTS
+#define RECORD_BLOCK_SIZE (SAMPLE_FRAME_SIZE * RECORD_BATCH_MAX)
+#else
 #define RECORD_BATCH_MAX 32
 #define RECORD_BLOCK_SIZE 65536UL
+#endif
 // The CSV trip log is a convenience copy; the SD journal is the durable one.
 #define LOG_FLUSH_INTERVAL_MS 2000UL
 #define OBD_FAST_INTERVAL_MS 250UL /* RPM and speed freshness target */
