@@ -271,6 +271,24 @@
   The credential scan confirms private values are present; the file is mode
   `0600` and remains local, not flashed or publishable.
 
+## Follow-up — 2026-10-04 (post-hardening release candidate)
+
+- After commit `c34a5a3779ac31cb0a24f6fdabd59bdfae8bab2c` hardened the
+  package/publish source gate and upload-time revalidation, rebuilt OTA-test
+  release `1.0.16` from that clean source. The tokenless candidate contains
+  the full source marker and matching boot build ID, is 714,544 bytes, and has
+  SHA-256
+  `86bac0f7188ef10de4c705e567255a090961889f1b4907826ec5dc8b4e74c1f2`.
+  Credential scanning, source binding, exact asset allowlisting, permissions,
+  and checksum-sidecar verification passed. It remains at
+  `.pio/ota-release-candidate-c34a5a3/` (directory `0700`, assets `0600`),
+  local-only, not published or flashed.
+- The complete documented OTA host-policy/release suite passed: parked gate,
+  staging, boot confirmation/rollback policy, image identity, digest sidecar,
+  version/release parsing, HTTP streaming/poweroff helpers, partition layout,
+  and 47 package/publish/config unit tests. These are host checks, not evidence
+  of cellular transfer or bootloader rollback on hardware.
+
 ## Scope and remaining validation
 
 The October 3 flash/serial entries are historical evidence and do not identify
