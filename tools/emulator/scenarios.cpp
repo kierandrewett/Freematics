@@ -26,6 +26,13 @@ public:
         return true;
     }
 
+    int sendCommand(const char* text, char* buffer, int capacity, unsigned int) override
+    {
+        command = text;
+        const int length = snprintf(buffer, capacity, "%s", reply.c_str());
+        return length < capacity ? length : capacity - 1;
+    }
+
     int receive(char* buffer, int capacity, unsigned int timeout) override
     {
         if (disconnected || latency > timeout) {
@@ -61,6 +68,28 @@ int main(int argc, char** argv)
     bridge.reply = "41 0C 0E 10\r>";
     bool okay = obd.readPID(PID_RPM, value);
     report("normal RPM 900", okay && value == 900 && bridge.command == "010C\r", false, value);
+
+    char vin[128] = {};
+    bridge.reply = "014\r\n0:49020157304C3053444C36384434303530383431\r\n>";
+    const bool vinOkay = obd.getVIN(vin, sizeof(vin));
+    report("VIN from compact ISO-TP response", vinOkay && std::string(vin) == "W0L0SDL68D4050841" &&
+           bridge.command == "0902\r", true, vinOkay ? 1 : 0);
+
+    bridge.reply = "014\r\n0: 49 02 01 57 30 4C\r\n1: 30 53 44 4C 36 38 44\r\n"
+                   "2: 34 30 35 30 38 34 31\r\n>";
+    const bool splitVinOkay = obd.getVIN(vin, sizeof(vin));
+    report("VIN from spaced numbered continuation frames",
+           splitVinOkay && std::string(vin) == "W0L0SDL68D4050841", true, splitVinOkay ? 1 : 0);
+
+    bridge.reply = "49 02 01 57 30 4C 30 53 44 4C 36 38 44 34 30 35 30 38 34 31\r>";
+    const bool rawVinOkay = obd.getVIN(vin, sizeof(vin));
+    report("VIN from a spaced single-frame response",
+           rawVinOkay && std::string(vin) == "W0L0SDL68D4050841", true, rawVinOkay ? 1 : 0);
+
+    bridge.reply = "014\r\n0: 49 02 01 49 30 4C 30 53 44 4C 36 38 44 34 30 35 30 38 34 31\r\n>";
+    const bool invalidVinOkay = obd.getVIN(vin, sizeof(vin));
+    report("reject invalid VIN alphabet", !invalidVinOkay, true, invalidVinOkay ? 1 : 0);
+
     bridge.reply = "41 0D 32\r>";
     okay = obd.readPID(PID_SPEED, value);
     report("normal speed 50", okay && value == 50, false, value);

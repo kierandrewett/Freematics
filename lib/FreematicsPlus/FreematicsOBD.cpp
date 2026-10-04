@@ -486,30 +486,86 @@ bool COBD::getVIN(char* buffer, byte bufsize)
 	if (!link || !buffer || bufsize < 5) return false;
 	for (byte n = 0; n < 2; n++) {
 		if (link->sendCommand("0902\r", buffer, bufsize, OBD_TIMEOUT_LONG)) {
-			int len = hex2uint16(buffer);
-			char *p = strstr(buffer + 4, "0: 49 02 01");
-			if (p && len >= 3 && len - 3 < bufsize) {
-				char *q = buffer;
-				bool overflow = false;
-				p += 11; // skip the header
-				do {
-					while (*(++p) == ' ');
-					for (;;) {
-						if (q >= buffer + bufsize - 1) {
-							overflow = true;
-							break;
-						}
-						*(q++) = hex2uint8(p);
-						while (*p && *p != ' ') p++;
-						while (*p == ' ') p++;
-						if (!*p || *p == '\r') break;
+			char vin[18];
+			char hex[34];
+			uint16_t hexLength = 0;
+			bool overflow = false;
+			bool started = false;
+			const char* line = buffer;
+			while (*line) {
+				const char* end = line;
+				while (*end && *end != '\r' && *end != '\n' && *end != '>') end++;
+				const bool prompt = *end == '>';
+
+				const char* data = line;
+				while (data < end && (*data == ' ' || *data == '\t')) data++;
+				if (data < end && data + 1 < end && data[0] >= '0' && data[0] <= '9' && data[1] == ':') {
+					data += 2;
+				}
+				while (data < end && (*data == ' ' || *data == '\t')) data++;
+
+				// ELM multi-frame responses may start with a byte-count line (e.g. "014").
+				if (end - data == 3 && data[0] >= '0' && data[0] <= '9' &&
+					data[1] >= '0' && data[1] <= '9' && data[2] >= '0' && data[2] <= '9') {
+					line = end;
+					while (*line == '\r' || *line == '\n') line++;
+					continue;
+				}
+
+				char compact[256];
+				uint16_t compactLength = 0;
+				bool validLine = true;
+				for (const char* p = data; p < end; p++) {
+					if (*p == ' ' || *p == '\t') continue;
+					if (!((*p >= '0' && *p <= '9') || (*p >= 'A' && *p <= 'F') || (*p >= 'a' && *p <= 'f')) ||
+						compactLength >= sizeof(compact) - 1) {
+						validLine = false;
+						break;
 					}
-					if (overflow) break;
-					p = strchr(p, ':');
-				} while(p);
-				if (overflow) continue;
-				*q = 0;
-				if (q - buffer == len - 3) {
+					compact[compactLength++] = *p;
+				}
+
+				if (validLine && compactLength > 0) {
+					byte offset = 0;
+					if (compactLength >= 6 && compact[0] == '4' && compact[1] == '9' &&
+						compact[2] == '0' && compact[3] == '2') {
+						offset = 6; // Mode 09 PID 02 and its message sequence/count byte.
+						started = true;
+					}
+					if (started) {
+						for (uint16_t i = offset; i < compactLength; i++) {
+							if (hexLength >= sizeof(hex)) {
+								overflow = true;
+								break;
+							}
+							hex[hexLength++] = compact[i];
+						}
+					}
+				}
+
+				if (prompt) break;
+				line = end;
+				while (*line == '\r' || *line == '\n') line++;
+			}
+
+			if (!overflow && hexLength == sizeof(hex)) {
+				for (byte i = 0; i < sizeof(vin) - 1; i++) {
+					byte hi = hex[i * 2] >= 'a' ? hex[i * 2] - 'a' + 10 :
+						hex[i * 2] >= 'A' ? hex[i * 2] - 'A' + 10 : hex[i * 2] - '0';
+					byte lo = hex[i * 2 + 1] >= 'a' ? hex[i * 2 + 1] - 'a' + 10 :
+						hex[i * 2 + 1] >= 'A' ? hex[i * 2 + 1] - 'A' + 10 : hex[i * 2 + 1] - '0';
+					char c = (char)((hi << 4) | lo);
+					if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+					if (!((c >= 'A' && c <= 'Z' && c != 'I' && c != 'O' && c != 'Q') ||
+						(c >= '0' && c <= '9'))) {
+						hexLength = 0;
+						break;
+					}
+					vin[i] = c;
+				}
+				if (hexLength == sizeof(hex)) {
+					vin[17] = 0;
+					memcpy(buffer, vin, sizeof(vin));
 					return true;
 				}
 			}

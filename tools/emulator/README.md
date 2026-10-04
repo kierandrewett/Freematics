@@ -40,6 +40,7 @@ The report includes source hashes, the command, compiler, environment, results a
 - Newest selection must work across rollover and at timestamp zero.
 - Two-byte and four-byte PIDs must reject missing required bytes.
 - Valid lowercase hexadecimal bytes and extra spaces must decode correctly.
+- Mode 09 VIN replies must decode from compact, spaced, and numbered continuation frames; malformed VIN alphabets must fail.
 - Journaled readings must survive a restart before acknowledgement.
 - A lost acknowledgement must replay the same records, without skipping them.
 - A failed acknowledgement checkpoint must replay from the last saved cursor.
