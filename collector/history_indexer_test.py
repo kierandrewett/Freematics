@@ -52,14 +52,14 @@ class HistoryIndexerTest(unittest.TestCase):
         self.assertEqual(captures, [1_790_683_813_000])
         self.assertEqual(qualities, ["gnss"])
 
-    def test_device_clock_utc_survives_journal_replay_without_gnss(self) -> None:
+    def test_device_clock_and_vehicle_voltage_survive_journal_replay_without_gnss(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"
             archive = root / "ZKUCALJ0/2026/10/03/20261003-170000.txt"
             archive.parent.mkdir(parents=True)
             archive.write_text(
-                "0:100,90:1791030012,91:345,10C:900,"
-                "0:350,90:1791030012,91:595,10C:902,"
+                "0:100,90:1791030012,91:345,24:1380,10C:900,"
+                "0:350,90:1791030012,91:595,24:1240,10C:902,"
             )
             database = Path(directory) / "history.sqlite"
             indexer = HistoryIndexer(
@@ -74,6 +74,15 @@ class HistoryIndexerTest(unittest.TestCase):
                 ).fetchall()
                 self.assertEqual(rows, [(1791030012345, "device_clock"),
                                         (1791030012595, "device_clock")])
+                voltage_rows = connection.execute(
+                    "SELECT s.capture_utc_ms, m.numeric_value FROM sample AS s "
+                    "JOIN sample_metric AS m USING (device_id, trip_id, sequence) "
+                    "WHERE m.pid = '0x024' ORDER BY s.sequence"
+                ).fetchall()
+                self.assertEqual(
+                    voltage_rows,
+                    [(1791030012345, 1380.0), (1791030012595, 1240.0)],
+                )
 
     def test_held_gnss_fix_preserves_250ms_capture_timeline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
