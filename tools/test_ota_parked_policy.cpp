@@ -82,7 +82,8 @@ static void testActivityAndRebootResetTimer() {
 }
 
 static void testVehicleSignalsAndReadinessRemainFailClosed() {
-  assert(Policy::vehicleSupplyPlausible(6.0f));
+  assert(Policy::vehicleSupplyPlausible(12.2f));
+  assert(!Policy::vehicleSupplyPlausible(12.19f));
   assert(Policy::vehicleSupplyPlausible(12.9f));
   assert(!Policy::vehicleSupplyPlausible(12.91f));
   assert(!Policy::vehicleSupplyPlausible(13.19f));
@@ -130,6 +131,9 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   state = parked(checkAt);
   state.modelBSupplyVolts.value = 0.0f;
   assert(policy.observe(checkAt, state) == Policy::kSupplyUnavailable);
+  state = parked(checkAt);
+  state.modelBSupplyVolts.value = 12.19f;
+  assert(policy.observe(checkAt, state) == Policy::kSupplyTooLow);
   state = parked(checkAt);
   assert(policy.observe(checkAt, state) == Policy::kEligible);
 }

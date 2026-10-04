@@ -21,9 +21,11 @@ then selects it for boot immediately after those checks pass. First-boot
 validation hashes the running image again.
 If preparation or a final check fails, the candidate is discarded without
 changing the boot selection. Model B supply must remain in
-the conservative resting range (6.0 V through 12.9 V); a missing, weak, or
+the conservative resting range (12.2 V through 12.9 V); a missing, weak, or
 elevated reading cancels the transfer because it does not prove the car is
-off. After six hours the standby
+off. The 12.2 V lower limit is a conservative firmware threshold; validate
+Model B ADC accuracy and modem-load sag on hardware before enabling OTA.
+After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
 fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
 Any fresh nonzero speed or RPM observation also invalidates the accumulated
@@ -195,6 +197,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 /tmp/test_cell_poweroff_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 python3 -m unittest discover -s tools -p 'test_publish_ota_release.py' -v
+python3 -m unittest discover -s tools -p 'test_ota_partition_table.py' -v
 ```
 
 If OTA is cancelled, modem shutdown first probes whether the modem responds,

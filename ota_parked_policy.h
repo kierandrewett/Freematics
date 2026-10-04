@@ -12,7 +12,10 @@
 class OTAParkedPolicy {
  public:
   static const uint32_t kRequiredQuietMs = 60UL * 60UL * 1000UL;
-  static constexpr float kMinimumVehicleSupplyVolts = 6.0f;
+  // Require a stable 12 V-class battery before modem activity or flash writes.
+  // This conservative lower bound is intentionally above the board's
+  // brownout region; a live hardware soak must still validate ADC accuracy.
+  static constexpr float kMinimumVehicleSupplyVolts = 12.2f;
   // Match RESTING_VOLTAGE_MAX: an elevated reading is ambiguous (charging,
   // recently charged, or sensor error), so it must not authorize OTA.
   static constexpr float kMaximumRestingVoltage = 12.9f;
@@ -58,6 +61,7 @@ class OTAParkedPolicy {
     kRpmUnavailable,
     kRpmNotZero,
     kSupplyUnavailable,
+    kSupplyTooLow,
     kSupplyNotResting,
   };
 
@@ -118,8 +122,9 @@ class OTAParkedPolicy {
     if (!fresh(observation.rpm, nowMs)) return kRpmUnavailable;
     if (observation.rpm.value != 0.0f) return reset(nowMs, kRpmNotZero);
     if (!fresh(observation.modelBSupplyVolts, nowMs)) return kSupplyUnavailable;
+    if (observation.modelBSupplyVolts.value <= 0.0f) return kSupplyUnavailable;
     if (observation.modelBSupplyVolts.value > kMaximumRestingVoltage) return kSupplyNotResting;
-    if (!vehicleSupplyPlausible(observation.modelBSupplyVolts.value)) return kSupplyUnavailable;
+    if (observation.modelBSupplyVolts.value < kMinimumVehicleSupplyVolts) return kSupplyTooLow;
 
     return kEligible;
   }
