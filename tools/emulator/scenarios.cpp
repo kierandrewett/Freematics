@@ -194,6 +194,12 @@ int main(int argc, char** argv)
            true, partialDtcCount);
     bridge.scriptedDtcReplies = false;
 
+    bridge.reply = "43\r>";
+    const int truncatedDtcCount = obd.readDTC(0x03, codes, 4);
+    report("truncated positive DTC header is not a clean response",
+           truncatedDtcCount == 0 && obd.getDTCStatus() == DTC_STATUS_NO_RESPONSE,
+           true, truncatedDtcCount);
+
     CBuffer older = {BUFFER_STATE_FILLED, true, 0xffffff00};
     CBuffer newer = {BUFFER_STATE_FILLED, true, 10};
     CBuffer* entries[] = {&older, &newer};
