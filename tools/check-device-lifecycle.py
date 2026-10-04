@@ -70,6 +70,14 @@ void noteOtaResetEvent(uint32_t, bool) {}
 int sensorMux = 0; float cachedVoltage = 0;
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
+struct SemaphoreStub {};
+SemaphoreStub memsMutexStorage;
+SemaphoreStub* memsMutex = &memsMutexStorage;
+#define pdTRUE 1
+#define portMAX_DELAY 0x7fffffff
+#define pdMS_TO_TICKS(milliseconds) (milliseconds)
+int xSemaphoreTake(SemaphoreStub*, int) { return pdTRUE; }
+void xSemaphoreGive(SemaphoreStub*) {}
 bool sensorOK = true;
 bool loginReplies = false;
 bool dataReplies = false, collectReplies = false;
