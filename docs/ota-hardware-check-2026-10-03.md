@@ -199,6 +199,19 @@
   `.pio/ota-release-40c4c1e-v1.0.8/`; it has not been published or flashed.
   Device-side cellular download, cancellation, first boot, and rollback remain
   unverified.
+- Commit `a2c05de34a44` serializes standby motion reads with the background
+  MEMS task. The wake/gate reader waits at most 100 ms for the shared mutex;
+  contention becomes an invalid sample, which breaks the quiet proof and
+  cancels OTA rather than allowing concurrent sensor transactions to count as
+  confirmed-off time. Parked-policy tests and Clang ASan/UBSan pass, and all
+  three PlatformIO environments build successfully.
+- Rebuilt tokenless OTA `1.0.8` from `a2c05de34a44` (boot build ID
+  `a2c05de34a44`). Its image SHA-256 is
+  `b75446915946dbc7a5907614b198b5a03c4c5b18422064021468545d04f3f159`; the
+  credential-aware package gate and sidecar verification pass. The candidate
+  at `.pio/ota-release-a2c05de-v1.0.8/` is local-only, with directory mode
+  `0700` and files `0600`; it supersedes the earlier local 1.0.8 candidate and
+  has not been published or flashed.
 
 ## Scope and remaining validation
 
