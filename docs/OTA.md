@@ -84,6 +84,13 @@ they are not treated as authentication credentials. These checks guard
 against accidental publication, not deliberately falsified binaries or
 markers.
 
+Only publish the two files created by `tools/package_ota_release.py`. Never
+attach the regular `esp32dev` production image, ELF/map files, build logs, or
+the `.pio` build directory: the regular production image intentionally embeds
+the telemetry token, and other build outputs may contain private build data.
+The packager is the release boundary; `.gitignore` alone does not protect
+manual uploads.
+
 ## Local checks
 
 ```sh
@@ -102,6 +109,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_boot_identity.cpp -o /tmp/test_ota_boot_identity
 /tmp/test_ota_boot_identity
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_boot_policy.cpp -o /tmp/test_ota_boot_policy
+/tmp/test_ota_boot_policy
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_stage_policy.cpp -o /tmp/test_ota_stage_policy
 /tmp/test_ota_stage_policy

@@ -3,6 +3,7 @@
 #include "FreematicsCellTLS.h"
 #include "config.h"
 #include "ota_boot_identity.h"
+#include "ota_boot_policy.h"
 #include "ota_release_policy.h"
 #include "ota_sha256_sidecar.h"
 #include "ota_stage_policy.h"
@@ -259,6 +260,26 @@ struct StageOperations {
   }
 };
 
+struct PendingBootOperations {
+  const PendingOtaIdentity& identity;
+
+  bool confirmBoot() {
+    return esp_ota_mark_app_valid_cancel_rollback() == ESP_OK;
+  }
+  bool saveInstalledIdentity() {
+    return writeDigest(kInstalledDigestKey, identity.digest);
+  }
+  void erasePendingIdentity() { eraseDigest(kPendingDigestKey); }
+  void rollback(freematics::ota::BootFailureReason reason) {
+    if (reason == freematics::ota::kBootCoreValidationFailed) {
+      Serial.println("[OTA] New image failed identity or core-service validation; rolling back");
+    } else {
+      Serial.println("[OTA] Could not confirm new image; rolling back");
+    }
+    esp_ota_mark_app_invalid_rollback_and_reboot();
+  }
+};
+
 } // namespace
 
 #if ENABLE_OTA
@@ -405,26 +426,24 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
   if (imageState == ESP_OTA_IMG_PENDING_VERIFY) {
     PendingOtaIdentity pending = {};
     uint8_t actualDigest[kSha256Bytes];
-    if (!storageReady || !motionSensorReady || !telemetryCredentialReady ||
-        !readPendingIdentity(&pending) ||
-        !hashPartitionImage(running, pending.imageSize, actualDigest) ||
-        !freematics::ota::matchesRunningImage(pending.imageSize, running->size,
-                                               pending.digest, actualDigest)) {
-      Serial.println("[OTA] New image failed identity or core-service validation; rolling back");
-      esp_ota_mark_app_invalid_rollback_and_reboot();
-      return false;
+    bool identityValid = false;
+    if (storageReady && motionSensorReady && telemetryCredentialReady) {
+      identityValid = readPendingIdentity(&pending) &&
+          hashPartitionImage(running, pending.imageSize, actualDigest) &&
+          freematics::ota::matchesRunningImage(pending.imageSize, running->size,
+                                                pending.digest, actualDigest);
     }
-    if (esp_ota_mark_app_valid_cancel_rollback() != ESP_OK) {
-      Serial.println("[OTA] Could not confirm new image; rolling back");
-      esp_ota_mark_app_invalid_rollback_and_reboot();
-      return false;
-    }
-    if (!writeDigest(kInstalledDigestKey, pending.digest)) {
+
+    PendingBootOperations operations = {pending};
+    const freematics::ota::BootResult result =
+        freematics::ota::validateAndAcceptPendingImage(
+            storageReady, motionSensorReady, telemetryCredentialReady,
+            identityValid, operations);
+    if (result == freematics::ota::kBootRolledBack) return false;
+    if (result == freematics::ota::kBootAcceptedIdentityNotSaved) {
       Serial.println("[OTA] Image confirmed, but release identity was not saved");
-      eraseDigest(kPendingDigestKey);
       return true;
     }
-    eraseDigest(kPendingDigestKey);
     Serial.println("[OTA] New image passed core-service validation");
   } else if (imageState == ESP_OTA_IMG_ABORTED) {
     eraseDigest(kPendingDigestKey);
