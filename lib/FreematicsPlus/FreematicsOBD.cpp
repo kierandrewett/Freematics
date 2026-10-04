@@ -9,6 +9,7 @@
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
 #include "utility/OBDPidScaling.h"
+#include "mode02_response.h"
 
 int dumpLine(char* buffer, int len)
 {
@@ -166,6 +167,34 @@ bool COBD::readPID(byte pid, float& result)
     }
     result = normalizeData(pid, validated);
     errors = 0;
+	return true;
+}
+
+bool COBD::readFreezeFramePID(byte pid, float& result, uint32_t timeout)
+{
+	char command[12];
+	char response[128] = {};
+	char normalized[16] = {};
+	snprintf(command, sizeof(command), "02%02X00\r", pid);
+	if (!link || !link->send(command)) {
+		if (errors < 255) errors++;
+		return false;
+	}
+	idleTasks();
+	int length = link->receive(response, sizeof(response) - 1, timeout);
+	if (length <= 0) {
+		if (errors < 255) errors++;
+		return false;
+	}
+	response[length < (int)sizeof(response) ? length : sizeof(response) - 1] = 0;
+	if (checkErrorMessage(response) ||
+		!freematics::mode02::parseFrame0(response, pid, decodedPIDBytes(pid),
+			normalized, sizeof(normalized))) {
+		if (errors < 255) errors++;
+		return false;
+	}
+	result = normalizeData(pid, normalized);
+	errors = 0;
 	return true;
 }
 

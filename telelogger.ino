@@ -72,6 +72,16 @@ PID_POLLING_INFO obdData[]= {
 #include "obd_pids.h"
 };
 
+// Read Mode 02 only after a stored DTC has been observed and the normal
+// diagnostic scheduler has proven the car stopped. Values use 0x200+PID in
+// telemetry so they remain distinct from live Mode 01 readings.
+const byte freezeFramePids[] = {
+  0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D,
+  0x0E, 0x0F, 0x10, 0x11, 0x2F, 0x42
+};
+PID_POLLING_INFO freezeFrameReadings[
+  sizeof(freezeFramePids) / sizeof(freezeFramePids[0])] = {};
+
 typedef struct {
   byte mode;
   uint16_t countPid;
@@ -143,6 +153,8 @@ SensorWaveforms sensorWaveforms;
 
 struct OBDSnapshot {
   PID_POLLING_INFO readings[sizeof(obdData) / sizeof(obdData[0])];
+  PID_POLLING_INFO freezeFrame[
+    sizeof(freezeFramePids) / sizeof(freezeFramePids[0])];
   uint8_t supportedByPid[sizeof(obdData) / sizeof(obdData[0])];
   DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
   char vin[18];
@@ -150,7 +162,10 @@ struct OBDSnapshot {
   char ecuName[21];
   uint32_t timeouts;
   uint32_t latency;
+  uint32_t freezeFrameCapturedAt;
+  uint16_t freezeFrameDtc;
   uint16_t supported;
+  uint8_t freezeFrameStatus;
   uint8_t protocol;
   uint8_t failures;
   uint8_t status;
@@ -306,6 +321,10 @@ byte nextOBDPollIndex = 0;
 uint32_t obdScheduleStarted = 0;
 byte fastOBDFailureCycles = 0;
 uint16_t supportedOBDPIDs = 0;
+uint32_t freezeFrameCapturedAt = 0;
+uint16_t freezeFrameDtc = 0;
+uint8_t freezeFrameStatus = 0; // 0 not captured, 1 values read, 2 unavailable, 3 in progress
+byte freezeFrameReadIndex = 0;
 uint32_t lastOBDReadLatency = 0;
 uint32_t lastOBDInitAttempt = 0;
 #endif
@@ -461,6 +480,11 @@ void clearOBDReadings()
     obdData[i].ts = 0;
   }
   memset(dtcData, 0, sizeof(dtcData));
+  memset(freezeFrameReadings, 0, sizeof(freezeFrameReadings));
+  freezeFrameCapturedAt = 0;
+  freezeFrameDtc = 0;
+  freezeFrameStatus = 0;
+  freezeFrameReadIndex = 0;
   dtcData[0].mode = 0x03;
   dtcData[0].countPid = PID_DTC_STORED_COUNT;
   dtcData[0].basePid = PID_DTC_STORED_BASE;
@@ -815,6 +839,48 @@ int handlerLiveData(UrlHandlerParam* param)
   Reading and processing OBD data
 *******************************************************************************/
 #if ENABLE_OBD
+void beginFreezeFrameCapture(uint16_t triggerDtc)
+{
+  if ((freezeFrameStatus == 1 || freezeFrameStatus == 3) &&
+      freezeFrameDtc == triggerDtc) return;
+  memset(freezeFrameReadings, 0, sizeof(freezeFrameReadings));
+  freezeFrameDtc = triggerDtc;
+  freezeFrameCapturedAt = 0;
+  freezeFrameReadIndex = 0;
+  freezeFrameStatus = 3;
+}
+
+void serviceFreezeFrameRead(uint32_t timeout)
+{
+  const byte count = sizeof(freezeFramePids) / sizeof(freezeFramePids[0]);
+  if (freezeFrameStatus != 3) return;
+  if (freezeFrameReadIndex >= count) {
+    freezeFrameStatus = freezeFrameCapturedAt ? 1 : 2;
+    return;
+  }
+
+  // Mode 02 has no Mode 01 support bitmap. Probe each requested frame PID
+  // directly, one bounded request per scheduler turn, so a slow ECU cannot
+  // monopolize the bridge for a whole multi-PID sweep.
+  const byte index = freezeFrameReadIndex++;
+  const byte pid = freezeFramePids[index];
+  float value = 0;
+  const uint32_t started = millis();
+  if (obd.readFreezeFramePID(pid, value, timeout)) {
+    freezeFrameReadings[index].pid = pid;
+    freezeFrameReadings[index].value = value;
+    freezeFrameReadings[index].ts = millis();
+    if (!freezeFrameCapturedAt) freezeFrameCapturedAt = freezeFrameReadings[index].ts;
+  } else {
+    reportOBDReadFailure(pid, "Freeze-frame");
+  }
+  const uint32_t elapsed = millis() - started;
+  if (elapsed >= OBD_PID_READ_WARN_MS)
+    reportSlowOBDRead(pid, "Freeze-frame", elapsed);
+  if (freezeFrameReadIndex >= count)
+    freezeFrameStatus = freezeFrameCapturedAt ? 1 : 2;
+}
+
 void scanDiagnostics()
 {
   DTC_POLLING_INFO& item = dtcData[dtcScanIndex];
@@ -822,6 +888,16 @@ void scanDiagnostics()
   item.count = obd.readDTC(item.mode, item.codes, DTC_CODE_SLOTS);
   item.status = obd.getDTCStatus();
   item.lastScan = millis();
+  if (item.mode == 0x03 && item.count) {
+    beginFreezeFrameCapture(item.codes[0]);
+  } else if (item.mode == 0x03 && item.count == 0 &&
+             (item.status == DTC_STATUS_RESPONSE || item.status == DTC_STATUS_CODES)) {
+    memset(freezeFrameReadings, 0, sizeof(freezeFrameReadings));
+    freezeFrameCapturedAt = 0;
+    freezeFrameDtc = 0;
+    freezeFrameStatus = 0;
+    freezeFrameReadIndex = 0;
+  }
   Serial.print("DTC mode ");
   Serial.print(item.mode, HEX);
   Serial.print(':');
@@ -886,6 +962,7 @@ void publishOBDSnapshot()
   // hold a spinlock across serial I/O, delays or buffer serialisation.
   OBDSnapshot snapshot;
   memcpy(snapshot.readings, obdData, sizeof(obdData));
+  memcpy(snapshot.freezeFrame, freezeFrameReadings, sizeof(freezeFrameReadings));
   memcpy(snapshot.diagnostics, dtcData, sizeof(dtcData));
   portENTER_CRITICAL(&vinMux);
   memcpy(snapshot.vin, vin, sizeof(snapshot.vin));
@@ -897,6 +974,9 @@ void publishOBDSnapshot()
   snapshot.ecuName[sizeof(snapshot.ecuName) - 1] = 0;
   snapshot.timeouts = timeoutsOBD;
   snapshot.latency = lastOBDReadLatency;
+  snapshot.freezeFrameCapturedAt = freezeFrameCapturedAt;
+  snapshot.freezeFrameDtc = freezeFrameDtc;
+  snapshot.freezeFrameStatus = freezeFrameStatus;
   snapshot.supported = supportedOBDPIDs;
   for (byte index = 0; index < sizeof(obdData) / sizeof(obdData[0]); index++) {
     snapshot.supportedByPid[index] = obd.isValidPID(obdData[index].pid) ? 1 : 0;
@@ -941,6 +1021,20 @@ void emitOBDSnapshot(CBuffer* buffer)
     buffer->add(PID_DTC_AGE_BASE + index, ELEMENT_UINT32, &age, sizeof(age));
     for (byte i = 0; i < DTC_CODE_SLOTS; i++) buffer->add(item.basePid + i, ELEMENT_UINT16, item.codes + i, sizeof(item.codes[i]));
   }
+  if (snapshot.freezeFrameStatus) {
+    for (auto& item : snapshot.freezeFrame) {
+      if (!item.ts) continue;
+      buffer->add(0x200 | item.pid, ELEMENT_FLOAT_D2, &item.value, sizeof(item.value));
+    }
+    if (snapshot.freezeFrameCapturedAt) {
+      uint32_t age = now - snapshot.freezeFrameCapturedAt;
+      buffer->add(PID_FREEZE_FRAME_AGE, ELEMENT_UINT32, &age, sizeof(age));
+    }
+    buffer->add(PID_FREEZE_FRAME_DTC, ELEMENT_UINT16, &snapshot.freezeFrameDtc,
+                sizeof(snapshot.freezeFrameDtc));
+  }
+  buffer->add(PID_FREEZE_FRAME_STATUS, ELEMENT_UINT8, &snapshot.freezeFrameStatus,
+              sizeof(snapshot.freezeFrameStatus));
   buffer->add(PID_OBD_PROTOCOL, ELEMENT_UINT8, &snapshot.protocol, sizeof(snapshot.protocol));
   buffer->add(PID_OBD_SUPPORTED_PIDS, ELEMENT_UINT16, &snapshot.supported, sizeof(snapshot.supported));
   buffer->add(PID_OBD_TIMEOUTS, ELEMENT_UINT32, &snapshot.timeouts, sizeof(snapshot.timeouts));
@@ -955,6 +1049,7 @@ int selectOBDPID(uint32_t now)
     int selected = -1;
     uint32_t greatestAge = 0;
     uint32_t selectedInterval = 1;
+    bool selectedCoreDue = false;
     for (byte offset = 0; offset < count; offset++) {
         const byte index = (nextOBDPollIndex + offset) % count;
         const auto& item = obdData[index];
@@ -966,13 +1061,18 @@ int selectOBDPID(uint32_t now)
         const uint32_t interval = item.pid == PID_RPM || item.pid == PID_SPEED ?
             OBD_FAST_INTERVAL_MS : OBD_PID_INTERVAL_MS;
         const uint32_t age = now - (poll.attempted ? poll.lastAttempt : obdScheduleStarted);
+        const bool coreDue = (item.pid == PID_RPM || item.pid == PID_SPEED) &&
+            age >= OBD_FAST_INTERVAL_MS;
         // Compare the fraction of each freshness budget already used. Core
         // signals age four times faster, including during the first sweep.
         // Cross multiplication avoids rounding and floating-point scheduling.
-        if (selected < 0 || (uint64_t)age * selectedInterval > (uint64_t)greatestAge * interval) {
+        if ((coreDue && !selectedCoreDue) ||
+            (coreDue == selectedCoreDue &&
+             (selected < 0 || (uint64_t)age * selectedInterval > (uint64_t)greatestAge * interval))) {
             selected = index;
             greatestAge = age;
             selectedInterval = interval;
+            selectedCoreDue = coreDue;
         }
     }
     // Use available capacity before deadlines expire. One request per worker
@@ -1032,6 +1132,31 @@ void pollOBD()
     if (diagnostic >= 0 && rpmKnown && speedKnown && engineStopped && vehicleStopped) {
         dtcScanIndex = diagnostic;
         scanDiagnostics();
+        publishOBDSnapshot();
+        return;
+    }
+    // Continue a pending Mode 02 sweep incrementally only while fresh core
+    // signals confirm the vehicle is stopped and the next live-PID deadline
+    // is not near. Live acquisition always wins scheduler deadlines.
+    const byte count = sizeof(obdData) / sizeof(obdData[0]);
+    uint32_t timeUntilCoreDeadline = OBD_FAST_INTERVAL_MS;
+    for (byte index = 0; index < count; index++) {
+        const auto& core = obdData[index];
+        if (core.pid != PID_RPM && core.pid != PID_SPEED) continue;
+        const uint32_t due = (obdPollState[index].attempted ?
+            obdPollState[index].lastAttempt : obdScheduleStarted) + OBD_FAST_INTERVAL_MS;
+        const int32_t lateness = (int32_t)(now - due);
+        if (lateness >= 0) {
+            timeUntilCoreDeadline = 0;
+            break;
+        }
+        const uint32_t remaining = (uint32_t)(-lateness);
+        if (remaining < timeUntilCoreDeadline) timeUntilCoreDeadline = remaining;
+    }
+    if (freezeFrameStatus == 3 && rpmKnown && speedKnown && engineStopped &&
+        vehicleStopped && timeUntilCoreDeadline > 10) {
+        const uint32_t boundedTimeout = timeUntilCoreDeadline - 10;
+        serviceFreezeFrameRead(boundedTimeout);
         publishOBDSnapshot();
         return;
     }

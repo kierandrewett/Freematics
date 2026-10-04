@@ -49,6 +49,10 @@ class TelemetryGitMirrorTests(unittest.TestCase):
                 {"pid": "0x091", "value": "345"},
                 {"pid": "0x092", "value": "3745452038203130203430"},
                 {"pid": "0x310", "value": "2"},
+                {"pid": "0x20C", "value": "812.5"},
+                {"pid": "0x363", "value": "2400"},
+                {"pid": "0x364", "value": "1"},
+                {"pid": "0x365", "value": "1281"},
             ]
         )
         self.assertEqual(metrics["engine_rpm"]["label"], "Engine speed")
@@ -64,12 +68,19 @@ class TelemetryGitMirrorTests(unittest.TestCase):
         self.assertEqual(metrics["can_frame"]["value"], "3745452038203130203430")
         self.assertEqual(metrics["stored_dtc_read_status"]["value"], {"code": 2, "name": "codes"})
         self.assertEqual(metrics["obd_protocol"]["value"], {"code": 6, "name": "iso15765_11bit_500k"})
+        self.assertEqual(metrics["freeze_frame_engine_rpm"]["value"], 812.5)
+        self.assertEqual(metrics["freeze_frame_read_age"]["value"], 2400)
+        self.assertEqual(metrics["freeze_frame_status"]["value"], {"code": 1, "name": "values_read"})
+        self.assertEqual(metrics["freeze_frame_trigger_dtc"]["value"], 1281)
 
     def test_catalog_covers_shared_standard_odometer_and_unknown_fields(self) -> None:
         catalog = metric_catalog()
         self.assertEqual(catalog[0x1A6].key, "odometer")
         self.assertEqual(catalog[0x90].key, "capture_utc_seconds")
         self.assertEqual(catalog[0x91].key, "capture_utc_milliseconds")
+        self.assertEqual(catalog[0x20C].key, "freeze_frame_engine_rpm")
+        self.assertEqual(catalog[0x20C].namespace, "standard/sae-j1979/mode-02-frame-0")
+        self.assertEqual(catalog[0x363].key, "freeze_frame_read_age")
         metrics = readable_metrics([{"pid": "0x1A6", "value": "123456.7"}, {"pid": "0x7EE", "value": "abc"}])
         self.assertEqual(metrics["odometer"]["value"], 123456.7)
         self.assertEqual(metrics["pid_7EE"]["namespace"], "unknown")

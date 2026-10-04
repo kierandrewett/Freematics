@@ -120,6 +120,10 @@ byte fastOBDFailureCycles = 0;
 uint16_t supportedOBDPIDs = PID_COUNT;
 uint32_t lastOBDReadLatency = 0;
 uint32_t timeoutsOBD = 0;
+uint8_t freezeFrameStatus = 0;
+unsigned freezeFrameRequests = 0;
+uint32_t freezeFrameResponseMs = 0;
+uint32_t freezeFrameTimeoutObserved = 0;
 
 // Baseline globals.  The new scheduler replaces these.  Keep both declarations
 // available until the source transition is complete.
@@ -160,6 +164,7 @@ void reportSlowOBDRead(byte, const char*, uint32_t) { slowReports++; }
 void reportOBDReadFailure(byte, const char*) { failures++; }
 void publishOBDSnapshot() { publishes++; }
 void scanDiagnostics() { diagnosticCalls++; diagnosticThisCall++; diagnosticMaxPerCall = std::max(diagnosticMaxPerCall, diagnosticThisCall); tick += diagnosticResponseMs; dtcData[dtcScanIndex].lastScan = millis(); dtcScanIndex = (dtcScanIndex + 1) % DTC_COUNT; }
+void serviceFreezeFrameRead(uint32_t timeout) { freezeFrameRequests++; freezeFrameTimeoutObserved = timeout; tick += std::min(freezeFrameResponseMs, timeout); }
 
 ''' + helpers + poll + r'''
 
@@ -176,6 +181,7 @@ static void seed(uint32_t start = 0) {
   obd.responseMs[PID_RPM] = obd.responseMs[PID_SPEED] = 10;
   dtcScanIndex = 0; fastOBDFailureCycles = 0; timeoutsOBD = 0; failures = 0;
   publishes = 0; diagnosticCalls = 0; diagnosticThisCall = 0; diagnosticMaxPerCall = 0; diagnosticResponseMs = 0; state.clears = 0;
+  freezeFrameStatus = 0; freezeFrameRequests = 0; freezeFrameResponseMs = 0; freezeFrameTimeoutObserved = 0;
   // Prevent DTC traffic during throughput cases.  The diagnostic case enables it.
   for (auto& item : dtcData) item.lastScan = 1;
   resetOBDSchedule();
@@ -287,6 +293,25 @@ int main() {
             << " cost_visible=" << dtcCostVisible << "\n";
   pass &= dtcCostVisible;
 
+  seed(100);
+  obd.fixed[PID_RPM] = obd.fixed[PID_SPEED] = true;
+  obd.fixedValue[PID_RPM] = obd.fixedValue[PID_SPEED] = 0;
+  obdData[0].value = obdData[1].value = 0;
+  obdData[0].ts = obdData[1].ts = tick;
+  obdPollState[0].attempted = obdPollState[1].attempted = true;
+  obdPollState[0].lastAttempt = obdPollState[1].lastAttempt = tick;
+  freezeFrameStatus = 3; freezeFrameResponseMs = OBD_DTC_TIMEOUT_MS; callFor(6000);
+  bool freezeFrameBounded = freezeFrameRequests > 0 &&
+      maxCompletionGap(PID_RPM) <= OBD_FAST_INTERVAL_MS &&
+      maxCompletionGap(PID_SPEED) <= OBD_FAST_INTERVAL_MS &&
+      freezeFrameTimeoutObserved <= OBD_FAST_INTERVAL_MS;
+  std::cout << "freeze_frame_requests=" << freezeFrameRequests
+            << " freeze_frame_timeout_ms=" << freezeFrameTimeoutObserved
+            << " rpm_gap_ms=" << maxCompletionGap(PID_RPM)
+            << " speed_gap_ms=" << maxCompletionGap(PID_SPEED)
+            << " preserves_core_deadlines=" << freezeFrameBounded << "\n";
+  pass &= freezeFrameBounded;
+
   seed(); callFor(60000); resetScheduleUnderTest(); started = tick; for (auto& item : obdData) item.ts = 0; obd.completions.clear(); callFor(60000);
   bool reconnect = completionGapsAtMost(1000);
   std::cout << "reconnect=" << reconnect << "\n";
@@ -344,7 +369,7 @@ def run(report: Path | None, source_ref: str | None = None) -> int:
             "command": " ".join([sys.executable, *sys.argv]),
             "source_ref": source_ref,
             "sources": source_hashes(source, config, obd_header),
-            "coverage": "Extracted production pollOBD with fake ECU. Initial acquisition is reported separately from successive reading gaps. DTC scheduler calls use an injected delay equal to production OBD_DTC_TIMEOUT; separate production-code emulator scenarios verify no-response timeout and partial-result handling. It does not measure Model B, bridge, FreeRTOS or Corsa throughput.",
+            "coverage": "Extracted production pollOBD with fake ECU. Initial acquisition is reported separately from successive reading gaps. DTC scheduler calls use an injected delay equal to production OBD_DTC_TIMEOUT; pending Mode 02 reads use an injected ECU latency and verify bounded waits preserve core deadlines. Separate production-code emulator scenarios verify no-response timeout and partial-result handling. It does not measure Model B, bridge, FreeRTOS or Corsa throughput.",
             "scheduler_helpers_extracted": {"resetOBDSchedule": reset is not None, "selectOBDPID": selector is not None},
             "configured_timing_ms": defines,
             "compile": {"returncode": compile_result.returncode, "stderr": compile_result.stderr},

@@ -41,6 +41,8 @@ public:
 	// read specified OBD-II PID value
 	bool readPID(byte pid, int& result);
 	bool readPID(byte pid, float& result);
+	// Read one SAE J1979 Mode 02, frame-0 value using the Mode 01 decoder.
+	bool readFreezeFramePID(byte pid, float& result, uint32_t timeout = OBD_TIMEOUT_SHORT);
 	// read multiple OBD-II PID values, return number of values obtained
 	byte readPID(const byte pid[], byte count, int result[]);
 	// set device into low power mode

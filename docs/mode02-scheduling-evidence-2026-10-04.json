@@ -1,0 +1,30 @@
+{
+  "command": "/usr/bin/python3 tools/check-obd-scheduling.py --report docs/mode02-scheduling-evidence-2026-10-04.json",
+  "source_ref": null,
+  "sources": {
+    "telelogger.ino": "56603126a54a491dfd0670ee579fc18fd646f6cfaaf621327eb74f3d8cf1a399",
+    "config.h": "4ffa2b0bead331f7580ee6c840f35ad58a630efa6ab610bde7bb247d58405f19",
+    "lib/FreematicsPlus/FreematicsOBD.h": "4137fcccf4793d064a9997f8eaed289dffb926615c1023079d4173b9abedb2e5",
+    "tools/check-obd-scheduling.py": "afc1c2d98979f4e9899d80a2406669b1844f6ab42dcf8f4f5ef904edd099e9a0"
+  },
+  "coverage": "Extracted production pollOBD with fake ECU. Initial acquisition is reported separately from successive reading gaps. DTC scheduler calls use an injected delay equal to production OBD_DTC_TIMEOUT; pending Mode 02 reads use an injected ECU latency and verify bounded waits preserve core deadlines. Separate production-code emulator scenarios verify no-response timeout and partial-result handling. It does not measure Model B, bridge, FreeRTOS or Corsa throughput.",
+  "scheduler_helpers_extracted": {
+    "resetOBDSchedule": true,
+    "selectOBDPID": true
+  },
+  "configured_timing_ms": {
+    "OBD_FAST_INTERVAL_MS": 250,
+    "OBD_PID_INTERVAL_MS": 1000,
+    "OBD_FAILED_RETRY_MS": 1000,
+    "OBD_DTC_TIMEOUT_MS": 1000
+  },
+  "compile": {
+    "returncode": 0,
+    "stderr": ""
+  },
+  "run": {
+    "returncode": 0,
+    "stdout": "first_sweep_ms=1010\nmaximum_gap_ms=860 rpm_gap_ms=240 speed_gap_ms=240\ncompletion_gaps_33=1 core_250=1 reads=3000\nvariable_latency=1\nunsupported_skipped=1\nfailed_read_unchanged=1 fair_after_failure=1\nsilent_one_call_ms=50 bounded=1\nrollover=1\ndtc_preserved=1 calls=1\ndtc_deferred_while_engine_running=1\ndtc_timeout_ms=1000 dtc_timeout_rpm_gap_ms=1090 cost_visible=1\nfreeze_frame_requests=24 freeze_frame_timeout_ms=200 rpm_gap_ms=250 speed_gap_ms=250 preserves_core_deadlines=1\nreconnect=1\nsaturation_progress=1\n",
+    "stderr": ""
+  }
+}

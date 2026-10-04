@@ -89,6 +89,9 @@ _CUSTOM: tuple[MetricDefinition, ...] = (
     MetricDefinition(0xA3, "waveform_angular_rate", "Raw waveform angular rate", "Gyroscope vector. It forms one adjacent waveform motion group with 0x0A1 and 0x0A2.", "degree_per_second", "freematics/condition-monitoring", decoder="vector3"),
     MetricDefinition(0xA4, "waveform_losses", "Waveform loss counters", "Cumulative dropped voltage, dropped motion, invalid voltage and invalid motion counters since boot. Dropped includes storage-outage discard and bounded-buffer overflow.", "count;count;count;count", "freematics/condition-monitoring", decoder="waveform_losses"),
     MetricDefinition(0xA5, "waveform_format", "Waveform format", "Waveform field format version. Version 1 is required before waveform fields can be decoded.", "version", "freematics/condition-monitoring", decoder="integer"),
+    MetricDefinition(0x363, "freeze_frame_read_age", "Freeze-frame device read age", "Elapsed time since the logger's first successful Mode 02 read of this frame. The ECU fault-time capture timestamp is not provided.", "millisecond", "freematics/diagnostics", decoder="integer"),
+    MetricDefinition(0x364, "freeze_frame_status", "Freeze-frame read status", "Freeze-frame status: 0 not captured, 1 values read, 2 Mode 02 unavailable, 3 capture in progress.", "enum", "freematics/diagnostics", decoder="freeze_frame_status"),
+    MetricDefinition(0x365, "freeze_frame_trigger_dtc", "Freeze-frame trigger DTC", "Raw 16-bit stored DTC value associated with the Mode 02 frame-0 snapshot.", "hex_code", "freematics/diagnostics", decoder="integer"),
     MetricDefinition(0x96, "signal_age", "Network signal value age", "Elapsed time since the last signal-strength measurement; 4294967295 means not measured yet.", "millisecond", "freematics/transport", decoder="integer"),
     MetricDefinition(0x92, "can_frame", "Passive CAN frame", "Raw CAN monitor line encoded as hexadecimal bytes.", "hex", "freematics/can", decoder="string"),
     MetricDefinition(0x310, "stored_dtc_read_status", "Stored DTC read status", "Stored DTC read status: 0 no response, 1 response, 2 codes.", "enum", "freematics/diagnostics", decoder="dtc_status"),
@@ -114,6 +117,12 @@ _OBD_PROTOCOL_NAMES = {
     15: "iso11898_29bit_250k",
 }
 _DTC_STATUS_NAMES = {0: "no_response", 1: "response", 2: "codes"}
+_FREEZE_FRAME_STATUS_NAMES = {
+    0: "not_captured",
+    1: "values_read",
+    2: "mode_02_unavailable",
+    3: "capture_in_progress",
+}
 
 
 def _standard_definitions() -> dict[int, MetricDefinition]:
@@ -152,6 +161,17 @@ def metric_catalog() -> dict[int, MetricDefinition]:
             age_pid, f"obd_age_{measured_pid & 0xFF:02X}", f"{measured.label} age",
             "Elapsed time since this PID last responded; a held value is not a fresh measurement.",
             "millisecond", "freematics/obd", decoder="integer",
+        )
+        freeze_pid = 0x200 + (measured_pid & 0xFF)
+        catalog[freeze_pid] = MetricDefinition(
+            freeze_pid,
+            f"freeze_frame_{measured.key}",
+            f"Freeze-frame {measured.label}",
+            f"ECU Mode 02 frame-0 value for the corresponding Mode 01 PID: {measured.label}. The original fault-time timestamp is not provided by the ECU response.",
+            measured.unit,
+            "standard/sae-j1979/mode-02-frame-0",
+            scale=measured.scale,
+            decoder=measured.decoder,
         )
     for index, group in enumerate(("stored", "pending", "permanent")):
         catalog[0x360 + index] = MetricDefinition(
@@ -210,6 +230,12 @@ def _decode(definition: MetricDefinition, raw: str) -> Any:
         if isinstance(numeric, (int, float)):
             code = int(numeric)
             return {"code": code, "name": _DTC_STATUS_NAMES.get(code, "unknown")}
+        return {"raw": raw, "name": "unknown"}
+    if definition.decoder == "freeze_frame_status":
+        numeric = _number(raw)
+        if isinstance(numeric, (int, float)):
+            code = int(numeric)
+            return {"code": code, "name": _FREEZE_FRAME_STATUS_NAMES.get(code, "unknown")}
         return {"raw": raw, "name": "unknown"}
     if definition.decoder == "vector3":
         parts = [part.strip() for part in raw.split(";")]
