@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
+#include "../../obd_raw_mode01.h"
 #include "utility/OBDPidScaling.h"
 #include "mode02_response.h"
 
@@ -119,6 +120,19 @@ static byte decodedPIDBytes(byte pid)
 
 bool COBD::readPID(byte pid, float& result)
 {
+	byte ignoredLength = 0;
+	return readPID(pid, result, nullptr, 0, ignoredLength);
+}
+
+bool COBD::readPID(byte pid, float& result, byte* rawBytes, byte rawCapacity, byte& rawLength)
+{
+	if (rawBytes && rawCapacity) memset(rawBytes, 0, rawCapacity);
+	rawLength = 0;
+	const byte decodedRequired = decodedPIDBytes(pid);
+	const byte catalogRawRequired = rawBytes ? freematics::obd_raw::expectedBytes(pid) : 0;
+	const byte rawRequired = catalogRawRequired > decodedRequired ?
+		catalogRawRequired : (rawBytes ? decodedRequired : 0);
+	if (rawRequired && rawCapacity < rawRequired) return false;
 	char buffer[64] = {};
 	char* data = 0;
 	sprintf(buffer, "%02X%02X\r", dataMode, pid);
@@ -146,27 +160,29 @@ bool COBD::readPID(byte pid, float& result)
 		}
 	}
 
-    char validated[12] = {};
-    const byte required = decodedPIDBytes(pid);
-    bool valid = data != nullptr;
-    for (byte index = 0; valid && index < required; index++) {
-        while (*data == ' ') data++;
-        if (!data[0] || !data[1] || !isxdigit((unsigned char)data[0]) ||
-            !isxdigit((unsigned char)data[1]) ||
-            (data[2] && data[2] != ' ' && data[2] != '\r' && data[2] != '\n' && data[2] != '>')) {
-            valid = false;
-            break;
-        }
-        snprintf(validated + index * 3, sizeof(validated) - index * 3, "%02X", hex2uint8(data));
-        if (index) validated[index * 3 - 1] = ' ';
-        data += 2;
-    }
+	char validated[12] = {};
+	const byte required = decodedRequired;
+	bool valid = data != nullptr;
+	const byte parsedBytes = rawRequired > required ? rawRequired : required;
+	byte parsed[4] = {};
+	if (valid) valid = freematics::obd_raw::parseBytes(data, parsedBytes, parsed);
+	for (byte index = 0; valid && index < parsedBytes; index++) {
+		if (index < required) {
+			snprintf(validated + index * 3, sizeof(validated) - index * 3, "%02X", parsed[index]);
+			if (index) validated[index * 3 - 1] = ' ';
+		}
+		data += 2;
+	}
     if (!valid) {
         if (errors < 255) errors++;
         return false;
     }
-    result = normalizeData(pid, validated);
-    errors = 0;
+	result = normalizeData(pid, validated);
+	if (rawBytes && rawRequired && rawCapacity >= rawRequired) {
+		memcpy(rawBytes, parsed, rawRequired);
+		rawLength = rawRequired;
+	}
+	errors = 0;
 	return true;
 }
 

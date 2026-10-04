@@ -22,3 +22,8 @@ void discardVerifiedOtaUpdate();
 bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
                              bool telemetryEndpointReady,
                              bool telemetryCredentialReady);
+bool pendingOtaImageNeedsTelemetry();
+bool confirmPendingOtaImage(bool storageReady, bool motionSensorReady,
+                            bool telemetryEndpointReady,
+                            bool telemetryCredentialReady);
+bool rollbackPendingOtaImage();

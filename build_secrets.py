@@ -12,6 +12,7 @@ project_dir = Path(env.subst("$PROJECT_DIR"))
 sys.path.insert(0, str(project_dir / "tools"))
 from production_config import load_build_environment, validate_production_config
 from ota_release_config import generate_header
+from build_secret_header import write_build_secret_header
 
 build_dir = Path(env.subst("$BUILD_DIR"))
 build_dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +91,9 @@ elif ota_release:
     if os.name == "posix":
         os.chmod(public_config, 0o600)
     env.Append(CPPPATH=[str(build_dir.resolve())])
-env.Append(CPPDEFINES=[("SERVER_TOKEN", env.StringifyMacro(token))])
+if not ota_release:
+    write_build_secret_header(build_dir, token)
+    env.Append(CPPPATH=[str(build_dir.resolve())])
 env.Append(CPPDEFINES=[("FREEMATICS_TOKEN_EMBEDDED", "1" if token else "0")])
 env.Append(CPPDEFINES=[("FREEMATICS_OTA_RELEASE_BUILD", "1" if ota_release else "0")])
 if format_sd_once:

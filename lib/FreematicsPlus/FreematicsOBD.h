@@ -41,6 +41,9 @@ public:
 	// read specified OBD-II PID value
 	bool readPID(byte pid, int& result);
 	bool readPID(byte pid, float& result);
+	// Optional raw Mode 01 response bytes from the same ECU request. Existing
+	// callers remain unchanged; rawLength is zeroed on failure or truncation.
+	bool readPID(byte pid, float& result, byte* rawBytes, byte rawCapacity, byte& rawLength);
 	// Read one SAE J1979 Mode 02, frame-0 value using the Mode 01 decoder.
 	bool readFreezeFramePID(byte pid, float& result, uint32_t timeout = OBD_TIMEOUT_SHORT);
 	// read multiple OBD-II PID values, return number of values obtained

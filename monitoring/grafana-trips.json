@@ -31,18 +31,6 @@
       "tooltip": "Open the trip index and route evidence",
       "type": "link",
       "url": "/d/freematics-trips?var-device=$device"
-    },
-    {
-      "asDropdown": false,
-      "icon": "external link",
-      "includeVars": true,
-      "keepTime": true,
-      "tags": [],
-      "targetBlank": true,
-      "title": "Raw Freematics trip archive",
-      "tooltip": "Open the collector's archived trip files",
-      "type": "link",
-      "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device"
     }
   ],
   "liveNow": false,
@@ -2074,7 +2062,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 58
       },
       "id": 38,
       "options": {
@@ -2179,7 +2167,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 63
       },
       "id": 31,
       "options": {
@@ -2335,7 +2323,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 61
+        "y": 73
       },
       "id": 39,
       "options": {
@@ -2432,7 +2420,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 61
+        "y": 73
       },
       "id": 40,
       "options": {
@@ -2630,6 +2618,311 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
+      "description": "Raw Model B supply-voltage captures from the durable waveform archive, timestamped from the device monotonic capture tick aligned to the stored display timeline. A null break marks capture intervals over 40 ms; no missing voltage is interpolated. This shows what reached the local archive, not collector arrival time. Legacy trips without waveform records remain empty rather than being filled from the lower-rate PID snapshot.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "volt"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vehicle supply (Model B input)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 52,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH raw_points AS (SELECT f.sequence, f.ordinal, (s.timeline_ms + (((CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) - s.device_monotonic_ms + 2147483648) & 4294967295) - 2147483648)) AS point_time_ms, CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) / 100.0 AS voltage FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A0' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL AND instr(f.text_value, ';') > 0 AND length(f.text_value) - length(replace(f.text_value, ';', '')) = 1 AND f.text_value NOT GLOB '*[^0-9;]*' AND CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) BETWEEN 0 AND 4294967295 AND CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) BETWEEN 0 AND 65535), ordered_points AS (SELECT sequence, ordinal, point_time_ms, voltage, LAG(point_time_ms) OVER (ORDER BY point_time_ms, sequence, ordinal) AS previous_time_ms FROM raw_points), chart_rows AS (SELECT point_time_ms AS time_ms, voltage FROM ordered_points UNION ALL SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage FROM ordered_points WHERE previous_time_ms IS NOT NULL AND point_time_ms - previous_time_ms > 40) SELECT time_ms / 1000.0 AS time, voltage AS \"Vehicle supply (Model B input)\" FROM chart_rows WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time_ms",
+          "rawQueryText": "WITH raw_points AS (SELECT f.sequence, f.ordinal, (s.timeline_ms + (((CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) - s.device_monotonic_ms + 2147483648) & 4294967295) - 2147483648)) AS point_time_ms, CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) / 100.0 AS voltage FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A0' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL AND instr(f.text_value, ';') > 0 AND length(f.text_value) - length(replace(f.text_value, ';', '')) = 1 AND f.text_value NOT GLOB '*[^0-9;]*' AND CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) BETWEEN 0 AND 4294967295 AND CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) BETWEEN 0 AND 65535), ordered_points AS (SELECT sequence, ordinal, point_time_ms, voltage, LAG(point_time_ms) OVER (ORDER BY point_time_ms, sequence, ordinal) AS previous_time_ms FROM raw_points), chart_rows AS (SELECT point_time_ms AS time_ms, voltage FROM ordered_points UNION ALL SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage FROM ordered_points WHERE previous_time_ms IS NOT NULL AND point_time_ms - previous_time_ms > 40) SELECT time_ms / 1000.0 AS time, voltage AS \"Vehicle supply (Model B input)\" FROM chart_rows WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time_ms",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "Device supply voltage — raw waveform",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Per-boot PID 0x0A4 counters on the archived sample timeline. Dropped voltage/motion includes bounded-buffer overflow and points released without a verified durable append; these counters do not separate those causes. Invalid readings are shown separately. Values can reset after a device reboot. No records means the counter was not reported, not that losses were zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Dropped voltage (unverified append or buffer overflow)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Dropped motion (unverified append or buffer overflow)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Invalid voltage readings"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Invalid motion readings"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "id": 53,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH first_separator AS (SELECT f.sequence, f.ordinal, f.text_value, s.timeline_ms, instr(f.text_value, ';') AS p1 FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A4' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL), second_separator AS (SELECT *, p1 + instr(substr(text_value, p1 + 1), ';') AS p2 FROM first_separator WHERE p1 > 0), third_separator AS (SELECT *, p2 + instr(substr(text_value, p2 + 1), ';') AS p3 FROM second_separator WHERE p2 > p1), parsed AS (SELECT sequence, ordinal, timeline_ms, CAST(substr(text_value, 1, p1 - 1) AS INTEGER) AS dropped_voltage, CAST(substr(text_value, p1 + 1, p2 - p1 - 1) AS INTEGER) AS dropped_motion, CAST(substr(text_value, p2 + 1, p3 - p2 - 1) AS INTEGER) AS invalid_voltage, CAST(substr(text_value, p3 + 1) AS INTEGER) AS invalid_motion FROM third_separator WHERE p3 > p2 AND length(text_value) - length(replace(text_value, ';', '')) = 3 AND text_value NOT GLOB '*[^0-9;]*') SELECT timeline_ms / 1000.0 AS time, dropped_voltage AS \"Dropped voltage (unverified append or buffer overflow)\", dropped_motion AS \"Dropped motion (unverified append or buffer overflow)\", invalid_voltage AS \"Invalid voltage readings\", invalid_motion AS \"Invalid motion readings\" FROM parsed WHERE dropped_voltage BETWEEN 0 AND 4294967295 AND dropped_motion BETWEEN 0 AND 4294967295 AND invalid_voltage BETWEEN 0 AND 4294967295 AND invalid_motion BETWEEN 0 AND 4294967295 AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_ms, sequence, ordinal",
+          "rawQueryText": "WITH first_separator AS (SELECT f.sequence, f.ordinal, f.text_value, s.timeline_ms, instr(f.text_value, ';') AS p1 FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A4' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL), second_separator AS (SELECT *, p1 + instr(substr(text_value, p1 + 1), ';') AS p2 FROM first_separator WHERE p1 > 0), third_separator AS (SELECT *, p2 + instr(substr(text_value, p2 + 1), ';') AS p3 FROM second_separator WHERE p2 > p1), parsed AS (SELECT sequence, ordinal, timeline_ms, CAST(substr(text_value, 1, p1 - 1) AS INTEGER) AS dropped_voltage, CAST(substr(text_value, p1 + 1, p2 - p1 - 1) AS INTEGER) AS dropped_motion, CAST(substr(text_value, p2 + 1, p3 - p2 - 1) AS INTEGER) AS invalid_voltage, CAST(substr(text_value, p3 + 1) AS INTEGER) AS invalid_motion FROM third_separator WHERE p3 > p2 AND length(text_value) - length(replace(text_value, ';', '')) = 3 AND text_value NOT GLOB '*[^0-9;]*') SELECT timeline_ms / 1000.0 AS time, dropped_voltage AS \"Dropped voltage (unverified append or buffer overflow)\", dropped_motion AS \"Dropped motion (unverified append or buffer overflow)\", invalid_voltage AS \"Invalid voltage readings\", invalid_motion AS \"Invalid motion readings\" FROM parsed WHERE dropped_voltage BETWEEN 0 AND 4294967295 AND dropped_motion BETWEEN 0 AND 4294967295 AND invalid_voltage BETWEEN 0 AND 4294967295 AND invalid_motion BETWEEN 0 AND 4294967295 AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY timeline_ms, sequence, ordinal",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "Waveform loss counters",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
       "description": "Decoded stored, pending and permanent DTC detail from the raw archive. No rows means no decodable code was recorded; raw fields remain in the metric timeline.",
       "fieldConfig": {
         "defaults": {
@@ -2646,7 +2939,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 76
+        "y": 88
       },
       "id": 44,
       "options": {
@@ -2698,7 +2991,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 68
+        "y": 80
       },
       "id": 42,
       "options": {
@@ -2843,7 +3136,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 96
       },
       "id": 48,
       "options": {
@@ -2965,6 +3258,6 @@
   "timezone": "browser",
   "title": "Vehicle · Trips",
   "uid": "freematics-trips",
-  "version": 11,
+  "version": 13,
   "weekStart": "monday"
 }

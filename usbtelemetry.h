@@ -2,13 +2,16 @@
 #define USB_TELEMETRY_H_INCLUDED
 
 #include <Arduino.h>
+#include <stddef.h>
+#include <string.h>
 #include "config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
+#include "usbtelemetry_metadata.h"
 
-#define USB_TELEMETRY_QUEUE_DEPTH 4
+#define USB_TELEMETRY_QUEUE_DEPTH 2
 #define USB_TELEMETRY_LINE_SIZE SAMPLE_FRAME_SIZE
-#define USB_TELEMETRY_SUPPORT_SIZE 256
+#define USB_TELEMETRY_TX_BUFFER_SIZE (USB_TELEMETRY_LINE_SIZE + 512)
 
 struct UsbTelemetryRecord {
     uint16_t length;
@@ -27,24 +30,20 @@ public:
   UsbTelemetryRecord* reserve()
   {
     portENTER_CRITICAL(&m_mux);
+    // This stream is a live view, so queued snapshots have no replay value.
+    // Keep only the record already being written and replace any waiting
+    // snapshot with the newest acquisition on every producer pass.
+    for (int index = 0; index < USB_TELEMETRY_QUEUE_DEPTH; ++index) {
+      if (m_states[index] == READY) {
+        m_states[index] = FREE;
+        if (m_dropped != UINT32_MAX) ++m_dropped;
+      }
+    }
     int slot = findFree();
     if (slot < 0) {
-      // The USB stream is a live view, not an upload queue. Keep a record
-      // already in flight immutable, discard every older waiting snapshot,
-      // and let the producer publish the newest one without delaying the
-      // sampler or recorder.
-      for (int index = 0; index < USB_TELEMETRY_QUEUE_DEPTH; ++index) {
-        if (m_states[index] == READY) {
-          m_states[index] = FREE;
-          if (m_dropped != UINT32_MAX) ++m_dropped;
-        }
-      }
-      slot = findFree();
-      if (slot < 0) {
-        if (m_dropped != UINT32_MAX) ++m_dropped;
-        portEXIT_CRITICAL(&m_mux);
-        return nullptr;
-      }
+      if (m_dropped != UINT32_MAX) ++m_dropped;
+      portEXIT_CRITICAL(&m_mux);
+      return nullptr;
     }
     m_states[slot] = RESERVED;
     UsbTelemetryRecord* record = &m_records[slot];

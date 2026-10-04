@@ -6,9 +6,9 @@
 // Host-testable fail-closed gate for beginning a parked OTA attempt.
 // The integration layer must feed every MEMS read through
 // observeMotionSample() and call observe() with current acquisition timestamps
-// and support/validity flags. Quiet time is earned only while MEMS samples
-// continuously prove the device has remained still; OBD signals are checked
-// separately as a final, fail-closed eligibility gate.
+// and support/validity flags. Quiet time is earned only while MEMS and passive
+// Model B supply samples continuously support a parked vehicle; OBD signals
+// are checked separately as a final, fail-closed eligibility gate.
 class OTAParkedPolicy {
  public:
   static const uint32_t kRequiredQuietMs = 60UL * 60UL * 1000UL;
@@ -22,6 +22,7 @@ class OTAParkedPolicy {
   // Standby polls the accelerometer every 250 ms. A missed or stalled poll
   // longer than this breaks the evidence of continuous quiet.
   static const uint32_t kMotionSampleMaxGapMs = 1500UL;
+  static const uint32_t kSupplySampleMaxGapMs = 1500UL;
 
   static bool vehicleSupplyPlausible(float volts) {
     return volts == volts && volts <= FLT_MAX && volts >= -FLT_MAX &&
@@ -67,7 +68,8 @@ class OTAParkedPolicy {
 
   OTAParkedPolicy()
       : m_quietSinceMs(0), m_lastMotionSampleMs(0), m_started(false),
-        m_motionProofValid(false) {}
+        m_motionProofValid(false), m_supplyQuietSinceMs(0),
+        m_lastSupplySampleMs(0), m_supplyProofValid(false) {}
 
   // Call once on every boot. A prior off timer is never restored across boots.
   void beginBoot(uint32_t nowMs) {
@@ -75,6 +77,9 @@ class OTAParkedPolicy {
     m_lastMotionSampleMs = nowMs;
     m_started = true;
     m_motionProofValid = false;
+    m_supplyQuietSinceMs = nowMs;
+    m_lastSupplySampleMs = nowMs;
+    m_supplyProofValid = false;
   }
 
   // Quiet time is earned only from a continuous series of successful MEMS
@@ -85,14 +90,32 @@ class OTAParkedPolicy {
       m_quietSinceMs = nowMs;
       m_lastMotionSampleMs = nowMs;
       m_motionProofValid = false;
+      invalidateSupplyProof(nowMs);
       return;
     }
     if (motionDetected || !m_motionProofValid ||
         static_cast<uint32_t>(nowMs - m_lastMotionSampleMs) > kMotionSampleMaxGapMs) {
       m_quietSinceMs = nowMs;
+      invalidateSupplyProof(nowMs);
     }
     m_lastMotionSampleMs = nowMs;
     m_motionProofValid = true;
+  }
+
+  // The Model B input is sampled passively during every parked motion poll.
+  // Charging/ignition voltage, weak or missing voltage, or a long observation
+  // gap invalidates the separate electrical evidence that the car was not
+  // recently started. Weak supply must not accumulate quiet time.
+  void observeSupplySample(uint32_t nowMs, bool sampleValid, float volts) {
+    if (!m_started) beginBoot(nowMs);
+    const bool resting = sampleValid && vehicleSupplyPlausible(volts);
+    const bool gap = m_supplyProofValid &&
+        static_cast<uint32_t>(nowMs - m_lastSupplySampleMs) > kSupplySampleMaxGapMs;
+    if (!resting || gap || !m_supplyProofValid) {
+      m_supplyQuietSinceMs = nowMs;
+      m_supplyProofValid = resting;
+    }
+    m_lastSupplySampleMs = nowMs;
   }
 
   bool motionProofCurrent(uint32_t nowMs) const {
@@ -100,8 +123,18 @@ class OTAParkedPolicy {
         static_cast<uint32_t>(nowMs - m_lastMotionSampleMs) <= kMotionSampleMaxGapMs;
   }
 
-  bool quietPeriodComplete(uint32_t nowMs) const {
+  bool motionQuietPeriodComplete(uint32_t nowMs) const {
     return motionProofCurrent(nowMs) && elapsed(nowMs) >= kRequiredQuietMs;
+  }
+
+  bool quietPeriodComplete(uint32_t nowMs) const {
+    return motionQuietPeriodComplete(nowMs) && supplyQuietPeriodComplete(nowMs);
+  }
+
+  bool supplyQuietPeriodComplete(uint32_t nowMs) const {
+    return m_started && m_supplyProofValid &&
+        static_cast<uint32_t>(nowMs - m_lastSupplySampleMs) <= kSupplySampleMaxGapMs &&
+        static_cast<uint32_t>(nowMs - m_supplyQuietSinceMs) >= kRequiredQuietMs;
   }
 
   Denial observe(uint32_t nowMs, const Observation& observation) {
@@ -112,6 +145,11 @@ class OTAParkedPolicy {
 
     if (!motionProofCurrent(nowMs)) return kMotionUnavailable;
     if (elapsed(nowMs) < kRequiredQuietMs) return kQuietPeriod;
+    if (!m_supplyProofValid ||
+        static_cast<uint32_t>(nowMs - m_lastSupplySampleMs) > kSupplySampleMaxGapMs)
+      return kSupplyUnavailable;
+    if (static_cast<uint32_t>(nowMs - m_supplyQuietSinceMs) < kRequiredQuietMs)
+      return kQuietPeriod;
 
     if (!observation.durableStorageHealthy) return kStorageUnavailable;
     if (!observation.telemetryEndpointConfigured) return kEndpointUnavailable;
@@ -150,11 +188,21 @@ class OTAParkedPolicy {
     m_quietSinceMs = nowMs;
     m_lastMotionSampleMs = nowMs;
     m_motionProofValid = false;
+    invalidateSupplyProof(nowMs);
     return reason;
+  }
+
+  void invalidateSupplyProof(uint32_t nowMs) {
+    m_supplyQuietSinceMs = nowMs;
+    m_lastSupplySampleMs = nowMs;
+    m_supplyProofValid = false;
   }
 
   uint32_t m_quietSinceMs;
   uint32_t m_lastMotionSampleMs;
   bool m_started;
   bool m_motionProofValid;
+  uint32_t m_supplyQuietSinceMs;
+  uint32_t m_lastSupplySampleMs;
+  bool m_supplyProofValid;
 };

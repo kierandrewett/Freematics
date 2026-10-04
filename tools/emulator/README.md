@@ -130,7 +130,7 @@ Remaining limits:
 
 - Bytes that fail the record CRC remain in the original recovery archive. The firmware cannot reconstruct an
   unknown measurement. The recovery log reports the number of damaged bytes.
-- An abrupt power loss can destroy the one in-flight sampler/recorder handoff before journal verification. The
+- An abrupt power loss can interrupt the one in-flight sample or SD commit before journal verification. The
   simulator does not measure this short persistence window. SD faults do not accumulate a RAM outage spool:
   samples without a verified journal append are counted as missed and discarded. Large journal repairs use the
   storage worker and SD lock; sampling remains independent and live USB continues.

@@ -1,0 +1,540 @@
+{
+  "command": "/usr/bin/python3 tools/emulator/run.py --strict --sanitize --compiler clang++ --report tools/emulator/host-sanitizer-20261004.json",
+  "environment": "Linux-6.19.10-300.fc44.x86_64-x86_64-with-glibc2.43",
+  "compiler": "clang version 22.1.4 (Fedora 22.1.4-1.fc44)",
+  "sources": {
+    "teleclient.cpp": "72adc24f5799e3a67b6a22f6bb453d2f9e1ba803fa9bc10c7110da3a58d18e92",
+    "lib/FreematicsPlus/FreematicsOBD.cpp": "01e3539d886dc04ec1630260490b11416f9e93556048c8b34f5d429df0b3df53",
+    "lib/FreematicsPlus/FreematicsOBD.h": "465e1a0f443a3d65d1ba8238b854eea75ebfe428401ba1eab1296757621ed2eb",
+    "lib/FreematicsPlus/FreematicsBase.h": "2c6b673ac83291b4bcb9dfdae505b00affa1c9e89072ad896501bff662582889",
+    "lib/FreematicsPlus/utility/OBD.h": "5adfbe7c7b821c40ad788406c25d9a4d88079734558c90654e1aeedccef9c809",
+    "tools/emulator/Arduino.h": "b398c33a084d3d6802e3c6612f22acc7f66aa4c5e577bd7fe6ebf1ffee0db34c",
+    "telequeue.cpp": "e524129d5dcb4f61d10cf5f8e6591fd64d7869c719da50885b1b5b14dc25032b",
+    "telequeue.h": "e2517953c8372410981873e64aaa1743edac11408f253cae28f59a9d493d21fa",
+    "ota_first_upload_policy.h": "22080e83104fc252a184a06c0ecfa4e0ecf8b9349ef404f2ba01478236b70513",
+    "telestore.cpp": "64a83acbf3658b128872ed3ea4aae1a924f37564185c44457e123923a8c031dc",
+    "tools/emulator/SD.h": "730a6681e8018fce01f44a3390b96d992bb4b11be3be6e77877f538fee9e8a5b",
+    "lib/FreematicsPlus/FreematicsMEMS.cpp": "530e60a18b0416fb383fee4e15feefe5e6566aba21042c9a17299a81aae23a23",
+    "lib/FreematicsPlus/FreematicsMEMS.h": "48f86ac629f2edca34ea2b073e1c2f1e66322122bbfdbec17f9ba261cfb190dd",
+    "lib/FreematicsPlus/utility/ICM_42627.h": "ff28775e80bdd868a95b4cb7e59c34b574285139f74ddb782947a2a8185575cf",
+    "tools/emulator/mems_scenarios.cpp": "1ecb5757e258f77d94c2378ee221e5f7cfcbd965bb59b8338373893838476c9e",
+    "tools/emulator/journal_scenarios.cpp": "c74af3417cf228627f8d3faaf6fcd915c256808e310003797cd9e09df7f35413",
+    "tools/emulator/scenarios.cpp": "7897bca698996fea2c809ff7d69ff4851758c1b849e3fa1d99e46e877ca410e9",
+    "tools/emulator/run.py": "eefc907ad994169fdf9609880a3d235c82d0c7df0ddbe926a0e1486e6a46a384"
+  },
+  "coverage": "Actual OBD decoder, queue methods, wire checksum, IMU methods and journal with fake SD; no ESP32 boot or concurrent tasks",
+  "results": [
+    {
+      "scenario": "normal RPM 900",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "engine load raw byte shares the normalized read",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "odometer preserves all four raw bytes from one read",
+      "status": "PASS",
+      "observed": 4
+    },
+    {
+      "scenario": "VIN from compact ISO-TP response",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "VIN from spaced numbered continuation frames",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "VIN from a spaced single-frame response",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "reject invalid VIN alphabet",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "normal speed 50",
+      "status": "PASS",
+      "observed": 50
+    },
+    {
+      "scenario": "ECU outage and unchanged output",
+      "status": "PASS",
+      "observed": 1005
+    },
+    {
+      "scenario": "recovery resets errors",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "reject NO DATA",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject wrong PID",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject empty payload",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated RPM payload",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject invalid hexadecimal speed",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated two-byte voltage",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "reject truncated four-byte oxygen value",
+      "status": "PASS",
+      "observed": -123
+    },
+    {
+      "scenario": "RPM with lowercase bytes and extra spaces",
+      "status": "PASS",
+      "observed": 900
+    },
+    {
+      "scenario": "200 changing RPM replies with 10 timeouts",
+      "status": "PASS",
+      "observed": 190
+    },
+    {
+      "scenario": "stored DTC P0108",
+      "status": "PASS",
+      "observed": 264
+    },
+    {
+      "scenario": "DTC no-response stops after first timeout",
+      "status": "PASS",
+      "observed": 1000
+    },
+    {
+      "scenario": "partial DTC response retained when continuation ends",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "truncated positive DTC header is not a clean response",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "FIFO across millisecond rollover",
+      "status": "PASS",
+      "observed": 4294967040
+    },
+    {
+      "scenario": "queue entry at maximum timestamp",
+      "status": "PASS",
+      "observed": 4294967295
+    },
+    {
+      "scenario": "newest across millisecond rollover",
+      "status": "PASS",
+      "observed": 10
+    },
+    {
+      "scenario": "queue entry at zero timestamp",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "unacknowledged journal survives restart",
+      "status": "PASS",
+      "observed": 54
+    },
+    {
+      "scenario": "lost acknowledgement replays first record",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "saved cursor resumes at second record",
+      "status": "PASS",
+      "observed": 54
+    },
+    {
+      "scenario": "partial acknowledgement checkpoint cannot skip data",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "torn append preserves prefix and stops at damage",
+      "status": "PASS",
+      "observed": 15
+    },
+    {
+      "scenario": "torn tail repair permits a new journal append",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "CRC failure cannot advance replay",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "damaged journal preserves evidence and resumes all intact records",
+      "status": "PASS",
+      "observed": 81
+    },
+    {
+      "scenario": "reset during recovery promotion resumes verified replacement",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "recovery write read and rename failures preserve source until retry",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "recovery does not replay accepted prefix",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "SD opens for 16 readings",
+      "status": "PASS",
+      "observed": 2,
+      "single_append_opens": 32,
+      "replay_opens": 1
+    },
+    {
+      "scenario": "batched append and read-ahead replay open the journal once each",
+      "status": "PASS",
+      "observed": 3
+    },
+    {
+      "scenario": "upload batch build takes the SD lock once",
+      "status": "PASS",
+      "observed": 1
+    },
+    {
+      "scenario": "absent card cannot accept a reading",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "full card keeps existing journal bytes",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "accepted journal rotates into retained archive",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "reset during accepted rotation cannot apply stale cursor to new journal",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "failed archive rename preserves journal",
+      "status": "PASS",
+      "observed": 27
+    },
+    {
+      "scenario": "IMU rejects failed acceleration read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "IMU rejects failed gyro read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "IMU rejects failed temperature read",
+      "status": "PASS",
+      "observed": 0
+    },
+    {
+      "scenario": "successful IMU conversion",
+      "status": "PASS",
+      "observed": 25
+    },
+    {
+      "scenario": "offline drive restart and acknowledgement loss",
+      "status": "PASS",
+      "observed": 240
+    }
+  ],
+  "drive_packets": [
+    "0:1000,10C:900,10D:50,89:1*46",
+    "0:1000,10C:900,10D:50,89:1*46",
+    "0:1250,10C:910,10D:50,89:1*4E",
+    "0:1500,10C:920,10D:50,89:1*4D",
+    "0:1750,10C:930,10D:50,89:1*55",
+    "0:2000,10C:940,10D:50,89:1*4B",
+    "0:2250,10C:950,10D:50,89:1*53",
+    "0:2500,10C:960,10D:50,89:1*52",
+    "0:2750,10C:970,10D:50,89:1*5A",
+    "0:3000,10C:980,10D:50,89:1*50",
+    "0:3250,10C:990,10D:50,89:1*58",
+    "0:3500,10C:1000,10D:50,89:1*75",
+    "0:3750,10C:1010,10D:50,89:1*7D",
+    "0:4000,10C:1020,10D:50,89:1*73",
+    "0:4250,10C:1030,10D:50,89:1*7B",
+    "0:4500,10C:1040,10D:50,89:1*7A",
+    "0:4750,10C:1050,10D:50,89:1*82",
+    "0:5000,10C:1060,10D:50,89:1*78",
+    "0:5250,10C:1070,10D:50,89:1*80",
+    "0:5500,10C:1080,10D:50,89:1*7F",
+    "0:5750,10C:1090,10D:50,89:1*87",
+    "0:6000,10C:1100,10D:50,89:1*74",
+    "0:6000,10C:1100,10D:50,89:1*74",
+    "0:6250,10C:1110,10D:50,89:1*7C",
+    "0:6500,10C:1120,10D:50,89:1*7B",
+    "0:6750,10C:1130,10D:50,89:1*83",
+    "0:7000,10C:1140,10D:50,89:1*79",
+    "0:7250,10C:1150,10D:50,89:1*81",
+    "0:7500,10C:1160,10D:50,89:1*80",
+    "0:7750,10C:1170,10D:50,89:1*88",
+    "0:8000,10C:1180,10D:50,89:1*7E",
+    "0:8250,10C:1190,10D:50,89:1*86",
+    "0:8500,10C:1200,10D:50,89:1*7C",
+    "0:8750,10C:1210,10D:50,89:1*84",
+    "0:9000,10C:1220,10D:50,89:1*7A",
+    "0:9250,10C:1230,10D:50,89:1*82",
+    "0:9500,10C:1240,10D:50,89:1*81",
+    "0:9750,10C:1250,10D:50,89:1*89",
+    "0:10000,10C:1260,10D:50,89:1*A6",
+    "0:10250,10C:1270,10D:50,89:1*AE",
+    "0:10500,10C:1280,10D:50,89:1*AD",
+    "0:10750,10C:1290,10D:50,89:1*B5",
+    "0:11000,10C:1300,10D:50,89:1*A2",
+    "0:11000,10C:1300,10D:50,89:1*A2",
+    "0:11250,10C:1310,10D:50,89:1*AA",
+    "0:11500,10C:1320,10D:50,89:1*A9",
+    "0:11750,10C:1330,10D:50,89:1*B1",
+    "0:12000,10C:1340,10D:50,89:1*A7",
+    "0:12250,10C:1350,10D:50,89:1*AF",
+    "0:12500,10C:1360,10D:50,89:1*AE",
+    "0:12750,10C:1370,10D:50,89:1*B6",
+    "0:13000,10C:1380,10D:50,89:1*AC",
+    "0:13250,10C:1390,10D:50,89:1*B4",
+    "0:13500,10C:1400,10D:50,89:1*AA",
+    "0:13750,10C:1410,10D:50,89:1*B2",
+    "0:14000,10C:1420,10D:50,89:1*A8",
+    "0:14250,10C:1430,10D:50,89:1*B0",
+    "0:14500,10C:1440,10D:50,89:1*AF",
+    "0:14750,10C:1450,10D:50,89:1*B7",
+    "0:15000,10C:1460,10D:50,89:1*AD",
+    "0:15250,10C:1470,10D:50,89:1*B5",
+    "0:15500,10C:1480,10D:50,89:1*B4",
+    "0:15750,10C:1490,10D:50,89:1*BC",
+    "0:16000,10C:1500,10D:50,89:1*A9",
+    "0:16000,10C:1500,10D:50,89:1*A9",
+    "0:16250,10C:1510,10D:50,89:1*B1",
+    "0:16500,10C:1520,10D:50,89:1*B0",
+    "0:16750,10C:1530,10D:50,89:1*B8",
+    "0:17000,10C:1540,10D:50,89:1*AE",
+    "0:17250,10C:1550,10D:50,89:1*B6",
+    "0:17500,10C:1560,10D:50,89:1*B5",
+    "0:17750,10C:1570,10D:50,89:1*BD",
+    "0:18000,10C:1580,10D:50,89:1*B3",
+    "0:18250,10C:1590,10D:50,89:1*BB",
+    "0:18500,10C:1600,10D:50,89:1*B1",
+    "0:18750,10C:1610,10D:50,89:1*B9",
+    "0:19000,10C:1620,10D:50,89:1*AF",
+    "0:19250,10C:1630,10D:50,89:1*B7",
+    "0:19500,10C:1640,10D:50,89:1*B6",
+    "0:19750,10C:1650,10D:50,89:1*BE",
+    "0:20000,10C:1660,10D:50,89:1*AB",
+    "0:20250,10C:1670,10D:50,89:1*B3",
+    "0:20500,10C:1680,10D:50,89:1*B2",
+    "0:20750,10C:1690,10D:50,89:1*BA",
+    "0:21000,10C:1700,10D:50,89:1*A7",
+    "0:21000,10C:1700,10D:50,89:1*A7",
+    "0:21250,10C:1710,10D:50,89:1*AF",
+    "0:21500,10C:1720,10D:50,89:1*AE",
+    "0:21750,10C:1730,10D:50,89:1*B6",
+    "0:22000,10C:1740,10D:50,89:1*AC",
+    "0:22250,10C:1750,10D:50,89:1*B4",
+    "0:22500,10C:1760,10D:50,89:1*B3",
+    "0:22750,10C:1770,10D:50,89:1*BB",
+    "0:23000,10C:1780,10D:50,89:1*B1",
+    "0:23250,10C:1790,10D:50,89:1*B9",
+    "0:23500,10C:1800,10D:50,89:1*AF",
+    "0:23750,10C:1810,10D:50,89:1*B7",
+    "0:24000,10C:1820,10D:50,89:1*AD",
+    "0:24250,10C:1830,10D:50,89:1*B5",
+    "0:24500,10C:1840,10D:50,89:1*B4",
+    "0:24750,10C:1850,10D:50,89:1*BC",
+    "0:25000,10C:1860,10D:50,89:1*B2",
+    "0:25250,10C:1870,10D:50,89:1*BA",
+    "0:25500,10C:1880,10D:50,89:1*B9",
+    "0:25750,10C:1890,10D:50,89:1*C1",
+    "0:26000,10C:1900,10D:50,89:1*AE",
+    "0:26000,10C:1900,10D:50,89:1*AE",
+    "0:26250,10C:1910,10D:50,89:1*B6",
+    "0:26500,10C:1920,10D:50,89:1*B5",
+    "0:26750,10C:1930,10D:50,89:1*BD",
+    "0:27000,10C:1940,10D:50,89:1*B3",
+    "0:27250,10C:1950,10D:50,89:1*BB",
+    "0:27500,10C:1960,10D:50,89:1*BA",
+    "0:27750,10C:1970,10D:50,89:1*C2",
+    "0:28000,10C:1980,10D:50,89:1*B8",
+    "0:28250,10C:1990,10D:50,89:1*C0",
+    "0:28500,10C:2000,10D:50,89:1*AD",
+    "0:28750,10C:2010,10D:50,89:1*B5",
+    "0:29000,10C:2020,10D:50,89:1*AB",
+    "0:29250,10C:2030,10D:50,89:1*B3",
+    "0:29500,10C:2040,10D:50,89:1*B2",
+    "0:29750,10C:2050,10D:50,89:1*BA",
+    "0:30000,10C:2060,10D:50,89:1*A7",
+    "0:30250,10C:2070,10D:50,89:1*AF",
+    "0:30500,10C:2080,10D:50,89:1*AE",
+    "0:30750,10C:2090,10D:50,89:1*B6",
+    "0:31000,10C:2100,10D:50,89:1*A3",
+    "0:31000,10C:2100,10D:50,89:1*A3",
+    "0:31250,10C:2110,10D:50,89:1*AB",
+    "0:31500,10C:2120,10D:50,89:1*AA",
+    "0:31750,10C:2130,10D:50,89:1*B2",
+    "0:32000,10C:2140,10D:50,89:1*A8",
+    "0:32250,10C:2150,10D:50,89:1*B0",
+    "0:32500,10C:2160,10D:50,89:1*AF",
+    "0:32750,10C:2170,10D:50,89:1*B7",
+    "0:33000,10C:2180,10D:50,89:1*AD",
+    "0:33250,10C:2190,10D:50,89:1*B5",
+    "0:33500,10C:2200,10D:50,89:1*AB",
+    "0:33750,10C:2210,10D:50,89:1*B3",
+    "0:34000,10C:2220,10D:50,89:1*A9",
+    "0:34250,10C:2230,10D:50,89:1*B1",
+    "0:34500,10C:2240,10D:50,89:1*B0",
+    "0:34750,10C:2250,10D:50,89:1*B8",
+    "0:35000,10C:2260,10D:50,89:1*AE",
+    "0:35250,10C:2270,10D:50,89:1*B6",
+    "0:35500,10C:2280,10D:50,89:1*B5",
+    "0:35750,10C:2290,10D:50,89:1*BD",
+    "0:36000,10C:2300,10D:50,89:1*AA",
+    "0:36000,10C:2300,10D:50,89:1*AA",
+    "0:36250,10C:2310,10D:50,89:1*B2",
+    "0:36500,10C:2320,10D:50,89:1*B1",
+    "0:36750,10C:2330,10D:50,89:1*B9",
+    "0:37000,10C:2340,10D:50,89:1*AF",
+    "0:37250,10C:2350,10D:50,89:1*B7",
+    "0:37500,10C:2360,10D:50,89:1*B6",
+    "0:37750,10C:2370,10D:50,89:1*BE",
+    "0:38000,10C:2380,10D:50,89:1*B4",
+    "0:38250,10C:2390,10D:50,89:1*BC",
+    "0:38500,10C:2400,10D:50,89:1*B2",
+    "0:38750,10C:2410,10D:50,89:1*BA",
+    "0:39000,10C:2420,10D:50,89:1*B0",
+    "0:39250,10C:2430,10D:50,89:1*B8",
+    "0:39500,10C:2440,10D:50,89:1*B7",
+    "0:39750,10C:2450,10D:50,89:1*BF",
+    "0:40000,10C:2460,10D:50,89:1*AC",
+    "0:40250,10C:2470,10D:50,89:1*B4",
+    "0:40500,10C:2480,10D:50,89:1*B3",
+    "0:40750,10C:2490,10D:50,89:1*BB",
+    "0:41000,10C:2500,10D:50,89:1*A8",
+    "0:41000,10C:2500,10D:50,89:1*A8",
+    "0:41250,10C:2510,10D:50,89:1*B0",
+    "0:41500,10C:2520,10D:50,89:1*AF",
+    "0:41750,10C:2530,10D:50,89:1*B7",
+    "0:42000,10C:2540,10D:50,89:1*AD",
+    "0:42250,10C:2550,10D:50,89:1*B5",
+    "0:42500,10C:2560,10D:50,89:1*B4",
+    "0:42750,10C:2570,10D:50,89:1*BC",
+    "0:43000,10C:2580,10D:50,89:1*B2",
+    "0:43250,10C:2590,10D:50,89:1*BA",
+    "0:43500,10C:2600,10D:50,89:1*B0",
+    "0:43750,10C:2610,10D:50,89:1*B8",
+    "0:44000,10C:2620,10D:50,89:1*AE",
+    "0:44250,10C:2630,10D:50,89:1*B6",
+    "0:44500,10C:2640,10D:50,89:1*B5",
+    "0:44750,10C:2650,10D:50,89:1*BD",
+    "0:45000,10C:2660,10D:50,89:1*B3",
+    "0:45250,10C:2670,10D:50,89:1*BB",
+    "0:45500,10C:2680,10D:50,89:1*BA",
+    "0:45750,10C:2690,10D:50,89:1*C2",
+    "0:46000,10C:2700,10D:50,89:1*AF",
+    "0:46000,10C:2700,10D:50,89:1*AF",
+    "0:46250,10C:2710,10D:50,89:1*B7",
+    "0:46500,10C:2720,10D:50,89:1*B6",
+    "0:46750,10C:2730,10D:50,89:1*BE",
+    "0:47000,10C:2740,10D:50,89:1*B4",
+    "0:47250,10C:2750,10D:50,89:1*BC",
+    "0:47500,10C:2760,10D:50,89:1*BB",
+    "0:47750,10C:2770,10D:50,89:1*C3",
+    "0:48000,10C:2780,10D:50,89:1*B9",
+    "0:48250,10C:2790,10D:50,89:1*C1",
+    "0:48500,10C:2800,10D:50,89:1*B7",
+    "0:48750,10C:2810,10D:50,89:1*BF",
+    "0:49000,10C:2820,10D:50,89:1*B5",
+    "0:49250,10C:2830,10D:50,89:1*BD",
+    "0:49500,10C:2840,10D:50,89:1*BC",
+    "0:49750,10C:2850,10D:50,89:1*C4",
+    "0:50000,10C:2860,10D:50,89:1*B1",
+    "0:50250,10C:2870,10D:50,89:1*B9",
+    "0:50500,10C:2880,10D:50,89:1*B8",
+    "0:50750,10C:2890,10D:50,89:1*C0",
+    "0:51000,10C:2900,10D:50,89:1*AD",
+    "0:51000,10C:2900,10D:50,89:1*AD",
+    "0:51250,10C:2910,10D:50,89:1*B5",
+    "0:51500,10C:2920,10D:50,89:1*B4",
+    "0:51750,10C:2930,10D:50,89:1*BC",
+    "0:52000,10C:2940,10D:50,89:1*B2",
+    "0:52250,10C:2950,10D:50,89:1*BA",
+    "0:52500,10C:2960,10D:50,89:1*B9",
+    "0:52750,10C:2970,10D:50,89:1*C1",
+    "0:53000,10C:2980,10D:50,89:1*B7",
+    "0:53250,10C:2990,10D:50,89:1*BF",
+    "0:53500,10C:3000,10D:50,89:1*AC",
+    "0:53750,10C:3010,10D:50,89:1*B4",
+    "0:54000,10C:3020,10D:50,89:1*AA",
+    "0:54250,10C:3030,10D:50,89:1*B2",
+    "0:54500,10C:3040,10D:50,89:1*B1",
+    "0:54750,10C:3050,10D:50,89:1*B9",
+    "0:55000,10C:3060,10D:50,89:1*AF",
+    "0:55250,10C:3070,10D:50,89:1*B7",
+    "0:55500,10C:3080,10D:50,89:1*B6",
+    "0:55750,10C:3090,10D:50,89:1*BE",
+    "0:56000,10C:3100,10D:50,89:1*AB",
+    "0:56000,10C:3100,10D:50,89:1*AB",
+    "0:56250,10C:3110,10D:50,89:1*B3",
+    "0:56500,10C:3120,10D:50,89:1*B2",
+    "0:56750,10C:3130,10D:50,89:1*BA",
+    "0:57000,10C:3140,10D:50,89:1*B0",
+    "0:57250,10C:3150,10D:50,89:1*B8",
+    "0:57500,10C:3160,10D:50,89:1*B7",
+    "0:57750,10C:3170,10D:50,89:1*BF",
+    "0:58000,10C:3180,10D:50,89:1*B5",
+    "0:58250,10C:3190,10D:50,89:1*BD",
+    "0:58500,10C:3200,10D:50,89:1*B3",
+    "0:58750,10C:3210,10D:50,89:1*BB",
+    "0:59000,10C:3220,10D:50,89:1*B1",
+    "0:59250,10C:3230,10D:50,89:1*B9",
+    "0:59500,10C:3240,10D:50,89:1*B8",
+    "0:59750,10C:3250,10D:50,89:1*C0",
+    "0:60000,10C:3260,10D:50,89:1*AD",
+    "0:60250,10C:3270,10D:50,89:1*B5",
+    "0:60500,10C:3280,10D:50,89:1*B4",
+    "0:60750,10C:3290,10D:50,89:1*BC"
+  ],
+  "collector_log": ""
+}

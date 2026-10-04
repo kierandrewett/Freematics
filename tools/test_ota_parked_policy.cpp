@@ -19,8 +19,10 @@ static Policy::Observation parked(uint32_t sampledAt) {
 }
 
 static void quietSamples(Policy& policy, uint32_t start, uint32_t end) {
-  for (uint32_t at = start; (uint32_t)(at - start) <= (uint32_t)(end - start); at += 250)
+  for (uint32_t at = start; (uint32_t)(at - start) <= (uint32_t)(end - start); at += 250) {
     policy.observeMotionSample(at, true, false);
+    policy.observeSupplySample(at, true, 12.5f);
+  }
 }
 
 static void testRequiresAnHourOfContinuousSensorEvidence() {
@@ -207,6 +209,61 @@ static void testMotionDuringDownloadInvalidatesTheQuietProof() {
   assert(!policy.quietPeriodComplete(checkAt + 500));
 }
 
+static void testSupplyEvidenceMustRemainContinuousAndResting() {
+  const uint32_t start = 42000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  assert(policy.quietPeriodComplete(checkAt));
+
+  // Charging/ignition voltage invalidates the full-hour proof even if the
+  // supply returns to a resting level on the next poll.
+  policy.observeMotionSample(checkAt + 250, true, false);
+  policy.observeSupplySample(checkAt + 250, true, 13.8f);
+  policy.observeMotionSample(checkAt + 500, true, false);
+  policy.observeSupplySample(checkAt + 500, true, 12.5f);
+  assert(!policy.supplyQuietPeriodComplete(checkAt + 500));
+  assert(!policy.quietPeriodComplete(checkAt + 500));
+  quietSamples(policy, checkAt + 750,
+               checkAt + 750 + Policy::kRequiredQuietMs - 250);
+  assert(policy.quietPeriodComplete(
+      checkAt + 750 + Policy::kRequiredQuietMs - 250));
+
+  const uint32_t invalidAt = checkAt + Policy::kRequiredQuietMs + 1000;
+  policy.observeMotionSample(invalidAt, true, false);
+  policy.observeSupplySample(invalidAt, false, 0.0f);
+  policy.observeMotionSample(invalidAt + 250, true, false);
+  policy.observeSupplySample(invalidAt + 250, true, 12.5f);
+  assert(!policy.supplyQuietPeriodComplete(invalidAt + 250));
+
+  // A weak battery is not evidence that the car remained off. It must break
+  // the hour, even when voltage later returns to the healthy resting range.
+  const uint32_t weakAt = invalidAt + 500;
+  policy.observeMotionSample(weakAt, true, false);
+  policy.observeSupplySample(weakAt, true, 12.1f);
+  assert(!policy.supplyQuietPeriodComplete(weakAt));
+  policy.observeMotionSample(weakAt + 250, true, false);
+  policy.observeSupplySample(weakAt + 250, true, 12.5f);
+  assert(!policy.supplyQuietPeriodComplete(weakAt + 250));
+  assert(!policy.quietPeriodComplete(weakAt + 250));
+}
+
+static void testSupplyObservationGapInvalidatesParkedProof() {
+  const uint32_t start = 70000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  assert(policy.quietPeriodComplete(checkAt));
+  const uint32_t afterGap = checkAt + 250 + Policy::kSupplySampleMaxGapMs + 1;
+  for (uint32_t at = checkAt + 250; at < afterGap; at += 250)
+    policy.observeMotionSample(at, true, false);
+  policy.observeSupplySample(afterGap, true, 12.5f);
+  assert(!policy.supplyQuietPeriodComplete(afterGap));
+  assert(!policy.quietPeriodComplete(afterGap));
+}
+
 static void testWrapSafeContinuousQuietTimer() {
   const uint32_t start = UINT32_MAX - 120000UL;
   const uint32_t boundary = start + Policy::kRequiredQuietMs;
@@ -225,6 +282,8 @@ int main() {
   testParkedSignalsAreRecheckedAfterDownload();
   testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();
+  testSupplyEvidenceMustRemainContinuousAndResting();
+  testSupplyObservationGapInvalidatesParkedProof();
   testWrapSafeContinuousQuietTimer();
   puts("OTA parked eligibility: all tests passed");
   return 0;

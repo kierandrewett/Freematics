@@ -19,7 +19,7 @@ _FIXTURE = """\
 #define SERVER_PORT 443
 #define SERVER_PROTOCOL PROTOCOL_HTTPS_POST
 #define ENABLE_BLE 0
-#define ENABLE_HTTPD 0
+#define ENABLE_HTTPD 1
 #define SERVER_HOST "private.example.test"
 #define SERVER_PATH "/private/fixture"
 #define CELL_APN "fixture-apn"
@@ -44,13 +44,16 @@ class OtaReleaseConfigTests(unittest.TestCase):
             "#define STORAGE STORAGE_SD",
             "#define ENABLE_WIFI 0",
             "#define ENABLE_BLE 0",
-            "#define ENABLE_HTTPD 0",
             "#define PREFER_CELLULAR 1",
             "#define SERVER_PORT 443",
             "#define SERVER_PROTOCOL PROTOCOL_HTTPS_POST",
         ):
             with self.subTest(macro=expected.split()[1]):
                 self.assertIn(expected, header)
+
+    def test_ota_release_disables_httpd_even_when_private_config_enables_it(self) -> None:
+        header = generate_header(_FIXTURE)
+        self.assertNotIn("ENABLE_HTTPD", header)
 
     def test_excludes_all_network_identity_and_credential_keys_and_values(self) -> None:
         header = generate_header(_FIXTURE)

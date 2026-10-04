@@ -21,6 +21,7 @@
 #include "config.h"
 #include "telemetry_token.h"
 #include "telemetry_endpoint_policy.h"
+#include "ota_collector_ack.h"
 #include <nvs.h>
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
 #include "teledeflate.h"
@@ -226,6 +227,8 @@ void CBuffer::purge()
   timestamp = 0;
   offset = 0;
   total = 0;
+  waveformVoltageSamples = 0;
+  waveformMotionSamples = 0;
   recorded = false;
 }
 
@@ -956,9 +959,7 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
       if (end == packetSize || packetBuffer[end] == '*') break;
       at = end + 1;
     }
-    char* countEnd = 0;
-    unsigned long reported = !strncmp(content, "OK ", 3) ? strtoul(content + 3, &countEnd, 10) : 0;
-    accepted = expected > 0 && countEnd && countEnd != content + 3 && reported == expected;
+    accepted = otaCollectorAckMatches(content, (size_t)recvBytes, expected);
     if (!accepted) {
       Serial.print("[HTTP] Collector acknowledgement mismatch; expected fields: ");
       Serial.print(expected);

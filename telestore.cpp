@@ -311,6 +311,10 @@ void SDLogger::dispatch(const char* buf, byte len)
 
 void SDLogger::maintain()
 {
+    // Protect the whole lifecycle operation, including date rollover.
+    // Logger methods re-enter this recursive SD lock safely.
+    SDGuard guard;
+    if (!guard) return;
     time_t clock = time(nullptr);
     if (clock < 1704067200 || clock > UINT32_MAX || !m_id) return;
     const uint32_t now = (uint32_t)clock;
@@ -319,8 +323,6 @@ void SDLogger::maintain()
         end();
         if (!begin()) return;
     }
-    SDGuard guard;
-    if (!guard) return;
     if (!m_retentionRoot) {
         if (m_retentionDay == day && millis() - m_lastMaintenance < 3600000UL) return;
         m_retentionRoot = SD.open("/DATA");

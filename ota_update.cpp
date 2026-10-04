@@ -53,6 +53,7 @@ static_assert(sizeof(PendingOtaIdentity) == 48,
 
 PendingOtaIdentity stagedCandidate = {};
 bool stagedCandidateAvailable = false;
+bool pendingBootNeedsTelemetry = false;
 portMUX_TYPE stagedCandidateMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool cancelled(const volatile bool* requested)
@@ -580,6 +581,7 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
                              bool telemetryCredentialReady)
 {
 #if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  pendingBootNeedsTelemetry = false;
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t imageState;
   if (!running) {
@@ -618,22 +620,19 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
                                                 pending.digest, actualDigest);
     }
 
-    PendingBootOperations operations = {pending};
-    const freematics::ota::BootResult result =
-        freematics::ota::validateAndAcceptPendingImage(
-            storageReady, motionSensorReady, telemetryEndpointReady,
-            telemetryCredentialReady,
-            identityValid, operations);
-    if (result == freematics::ota::kBootRolledBack) return false;
-    if (result == freematics::ota::kBootRollbackFailed) {
-      Serial.println("[OTA] CRITICAL: rollback failed; refusing normal startup");
+    if (!storageReady || !motionSensorReady || !telemetryEndpointReady ||
+        !telemetryCredentialReady || !identityValid) {
+      PendingBootOperations operations = {pending};
+      const freematics::ota::BootResult result =
+          freematics::ota::validateAndAcceptPendingImage(
+              storageReady, motionSensorReady, telemetryEndpointReady,
+              telemetryCredentialReady, identityValid, operations);
+      if (result == freematics::ota::kBootRollbackFailed)
+        Serial.println("[OTA] CRITICAL: rollback failed; refusing normal startup");
       return false;
     }
-    if (result == freematics::ota::kBootAcceptedIdentityNotSaved) {
-      Serial.println("[OTA] Image confirmed, but release identity was not saved");
-      return true;
-    }
-    Serial.println("[OTA] New image passed core-service validation");
+    pendingBootNeedsTelemetry = true;
+    Serial.println("[OTA] Core services and image identity valid; awaiting accepted current-boot telemetry");
   } else if (imageState == ESP_OTA_IMG_ABORTED) {
     if (!eraseDigest(kPendingDigestKey)) {
       Serial.println("[OTA] Could not clear aborted pending image identity");
@@ -654,4 +653,69 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
   (void)telemetryCredentialReady;
 #endif
   return true;
+}
+
+bool pendingOtaImageNeedsTelemetry()
+{
+#if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  return pendingBootNeedsTelemetry;
+#else
+  return false;
+#endif
+}
+
+bool confirmPendingOtaImage(bool storageReady, bool motionSensorReady,
+                            bool telemetryEndpointReady,
+                            bool telemetryCredentialReady)
+{
+#if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  if (!pendingBootNeedsTelemetry) return false;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t imageState;
+  PendingOtaIdentity pending = {};
+  uint8_t actualDigest[kSha256Bytes];
+  bool identityValid = running &&
+      esp_ota_get_state_partition(running, &imageState) == ESP_OK &&
+      imageState == ESP_OTA_IMG_PENDING_VERIFY &&
+      readPendingIdentity(&pending) && identityMatchesPartition(pending, running) &&
+      hashPartitionImage(running, pending.imageSize, actualDigest) &&
+      freematics::ota::matchesRunningImage(pending.imageSize, running->size,
+                                            pending.digest, actualDigest);
+  PendingBootOperations operations = {pending};
+  const freematics::ota::BootResult result =
+      freematics::ota::validateAndAcceptPendingImage(
+          storageReady, motionSensorReady, telemetryEndpointReady,
+          telemetryCredentialReady, identityValid, operations);
+  if (result == freematics::ota::kBootRollbackFailed) {
+    Serial.println("[OTA] CRITICAL: first-upload rollback failed; refusing normal startup");
+    return false;
+  }
+  if (result == freematics::ota::kBootRolledBack) return false;
+  pendingBootNeedsTelemetry = false;
+  if (result == freematics::ota::kBootAcceptedIdentityNotSaved)
+    Serial.println("[OTA] First upload accepted; image confirmed, but release identity was not saved");
+  else
+    Serial.println("[OTA] First upload accepted; new image confirmed");
+  return true;
+#else
+  (void)storageReady;
+  (void)motionSensorReady;
+  (void)telemetryEndpointReady;
+  (void)telemetryCredentialReady;
+  return false;
+#endif
+}
+
+bool rollbackPendingOtaImage()
+{
+#if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  if (!pendingBootNeedsTelemetry) return false;
+  const esp_err_t result = esp_ota_mark_app_invalid_rollback_and_reboot();
+  if (result != ESP_OK)
+    Serial.printf("[OTA] CRITICAL: first-upload rollback request failed (%d); forcing reboot\n",
+                  (int)result);
+  return result == ESP_OK;
+#else
+  return false;
+#endif
 }

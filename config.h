@@ -74,6 +74,9 @@
 // features. Device-specific network settings are loaded from NVS.
 #include "ota_release_config.h"
 #elif defined(__has_include)
+#if __has_include("freematics_build_secrets.h")
+#include "freematics_build_secrets.h"
+#endif
 #if __has_include("local_config.h")
 #include "local_config.h"
 #endif
@@ -90,7 +93,7 @@
 * Circular Buffer Configuration
 **************************************/
 #if STORAGE == STORAGE_SD
-#define BUFFER_SLOTS 8 /* bounded SD-latency handoff; never an outage spool */
+#define BUFFER_SLOTS 1 /* one in-flight frame; completed samples go straight to SD */
 #elif BOARD_HAS_PSRAM
 #define BUFFER_SLOTS 1024 /* max number of buffer slots */
 #else
@@ -227,10 +230,10 @@
 // power the modem down before light sleep stops the modem UART.
 #define STANDBY_RADIO_OFF_WAIT_MS 45000UL
 #define SAMPLE_FRAME_SIZE 8192
-// The SD build permits only the in-flight journal write and one handoff sample.
+// The SD build journals one sample at a time; no completed-reading backlog exists in RAM.
 #if STORAGE == STORAGE_SD
-#define RECORD_BATCH_MAX BUFFER_SLOTS
-#define RECORD_BLOCK_SIZE (SAMPLE_FRAME_SIZE * RECORD_BATCH_MAX)
+#define RECORD_BATCH_MAX 1
+#define RECORD_BLOCK_SIZE SAMPLE_FRAME_SIZE
 #else
 #define RECORD_BATCH_MAX 32
 #define RECORD_BLOCK_SIZE 65536UL

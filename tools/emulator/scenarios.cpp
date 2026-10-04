@@ -79,6 +79,25 @@ int main(int argc, char** argv)
     bool okay = obd.readPID(PID_RPM, value);
     report("normal RPM 900", okay && value == 900 && bridge.command == "010C\r", false, value);
 
+    byte rawBytes[4] = {};
+    byte rawLength = 0;
+    unsigned requestsBeforeRaw = bridge.sendCount;
+    bridge.reply = "41 04 80\r>";
+    okay = obd.readPID(0x04, value, rawBytes, sizeof(rawBytes), rawLength);
+    report("engine load raw byte shares the normalized read",
+           okay && value > 50.0f && value < 50.2f && rawLength == 1 &&
+           rawBytes[0] == 0x80 && bridge.command == "0104\r" &&
+           bridge.sendCount == requestsBeforeRaw + 1, false, rawLength);
+
+    requestsBeforeRaw = bridge.sendCount;
+    bridge.reply = "41 A6 00 00 03 E8\r>";
+    okay = obd.readPID(0xA6, value, rawBytes, sizeof(rawBytes), rawLength);
+    report("odometer preserves all four raw bytes from one read",
+           okay && value == 100.0f && rawLength == 4 && rawBytes[0] == 0 &&
+           rawBytes[1] == 0 && rawBytes[2] == 3 && rawBytes[3] == 0xE8 &&
+           bridge.command == "01A6\r" && bridge.sendCount == requestsBeforeRaw + 1,
+           false, rawLength);
+
     char vin[128] = {};
     bridge.reply = "014\r\n0:49020157304C3053444C36384434303530383431\r\n>";
     const bool vinOkay = obd.getVIN(vin, sizeof(vin));

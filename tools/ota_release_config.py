@@ -27,7 +27,6 @@ _BOOLEAN_KEYS = frozenset(
         "ENABLE_MEMS",
         "ENABLE_WIFI",
         "ENABLE_BLE",
-        "ENABLE_HTTPD",
         "PREFER_CELLULAR",
     }
 )

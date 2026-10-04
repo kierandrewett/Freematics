@@ -414,3 +414,18 @@ there is no software-controlled card power cycle available. This makes a full
 device power disconnect the relevant next isolation step after the current
 warm-reset failures, but does not by itself prove a card latch or power fault.
 See the [official Model B schematic](https://freematics.com/dl/schematics_oneplus_r14_20190612.pdf).
+
+### Model B bus/startup source audit
+
+The schematic's SD signals are `IO23_MOSI`, `IO18_SCK`, `IO19_MISO`, and
+`IO5_SD_CS`, matching the ESP32 default VSPI pins and `PIN_SD_CS=5` in
+`FreematicsPlus.h`. Model B's OBD coprocessor signals are the separate UART
+pins `IO13_M2M_RXD`/`IO14_M2M_TXD`. The library's legacy `CLink_SPI` path is
+inside a compile-time-disabled block in `FreematicsESP32::begin`; this firmware
+selects the UART path for Model B. Storage mounting occurs synchronously in
+`initialize()` before the OBD/GNSS/MEMS/recorder tasks are created. This source
+trace found no active Model B OBD/SPI bus contention or startup task race that
+explains the recorded mount failure. It does not rule out a physical
+card/contact/rail issue or an internal card state that survives an MCU reset.
+The next discriminating test remains a complete power disconnect, followed by
+the same card and then a known-good card, preserving existing card contents.

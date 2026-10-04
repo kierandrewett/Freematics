@@ -6,12 +6,61 @@ from pathlib import Path
 
 
 MONITORING = Path(__file__).parent
+REPOSITORY = MONITORING.parent
 sys.path.insert(0, str(MONITORING))
+sys.path.insert(0, str(REPOSITORY / "tools"))
 
 from build_dashboard import build_dashboard  # noqa: E402
+from package_ota_release import (  # noqa: E402
+    _credential_signatures,
+    _configured_credentials,
+    _configured_server_paths,
+)
 
 
 class DashboardViewsTest(unittest.TestCase):
+    def test_generated_and_checked_in_exports_exclude_configured_private_values(self) -> None:
+        if not (REPOSITORY / "local_config.h").exists():
+            self.skipTest("private firmware configuration is unavailable for local-value scan")
+
+        private_values = _configured_credentials() | _configured_server_paths()
+        private_signatures = {
+            signature
+            for value in private_values
+            for signature in _credential_signatures(value)
+        }
+        artifacts = {
+            "combined": "grafana-dashboard.json",
+            "live": "grafana-live.json",
+            "trips": "grafana-trips.json",
+        }
+        for view, filename in artifacts.items():
+            with self.subTest(view=view):
+                generated = json.dumps(build_dashboard(view), sort_keys=True).encode()
+                checked_in = (MONITORING / filename).read_bytes()
+                content = generated + b"\n" + checked_in
+                contains_private_value = any(
+                    signature and signature in content
+                    for signature in private_signatures
+                )
+                self.assertFalse(
+                    contains_private_value,
+                    "Grafana export contains a configured private value",
+                )
+
+    def test_published_dashboard_links_do_not_expose_private_archive_origins(self) -> None:
+        for view in ("live", "trips", "combined"):
+            with self.subTest(view=view):
+                dashboard = build_dashboard(view)
+                self.assertTrue(
+                    all(not link["url"].startswith(("https://", "http://"))
+                        for link in dashboard.get("links", []))
+                )
+                self.assertNotIn(
+                    "Raw Freematics trip archive",
+                    {link["title"] for link in dashboard.get("links", [])},
+                )
+
     def test_live_view_is_current_and_does_not_require_trip_selection(self) -> None:
         dashboard = build_dashboard("live")
         self.assertTrue(dashboard["liveNow"])
@@ -153,14 +202,16 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertNotIn("transformations", route)
 
         expected_layout = {
-            38: {"h": 5, "w": 24, "x": 0, "y": 46},
-            31: {"h": 10, "w": 24, "x": 0, "y": 51},
-            39: {"h": 7, "w": 12, "x": 0, "y": 61},
-            40: {"h": 7, "w": 12, "x": 12, "y": 61},
-            42: {"h": 8, "w": 24, "x": 0, "y": 68},
-            44: {"h": 8, "w": 24, "x": 0, "y": 76},
-            48: {"h": 8, "w": 24, "x": 0, "y": 84},
+            38: {"h": 5, "w": 24, "x": 0, "y": 58},
+            31: {"h": 10, "w": 24, "x": 0, "y": 63},
+            39: {"h": 7, "w": 12, "x": 0, "y": 73},
+            40: {"h": 7, "w": 12, "x": 12, "y": 73},
+            42: {"h": 8, "w": 24, "x": 0, "y": 80},
+            44: {"h": 8, "w": 24, "x": 0, "y": 88},
+            48: {"h": 8, "w": 24, "x": 0, "y": 96},
             50: {"h": 7, "w": 24, "x": 0, "y": 39},
+            52: {"h": 7, "w": 24, "x": 0, "y": 46},
+            53: {"h": 5, "w": 24, "x": 0, "y": 53},
         }
         layout = {panel["id"]: panel["gridPos"] for panel in dashboard["panels"]}
         for panel_id in (22, 24):
@@ -354,6 +405,128 @@ class DashboardViewsTest(unittest.TestCase):
                 sql = sql.replace(variable, value)
             rows = connection.execute(sql).fetchall()
             self.assertEqual(rows, [(1.0, 13.8, 14.1), (2.0, None, None), (3.0, 12.4, 13.2)])
+        finally:
+            connection.close()
+
+    def test_voltage_waveform_uses_device_capture_ticks_and_marks_missing_intervals(self) -> None:
+        panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 52)
+        self.assertEqual(panel["title"], "Device supply voltage — raw waveform")
+        self.assertEqual(panel["datasource"]["uid"], "freematics-history")
+        self.assertEqual(panel["targets"][0]["queryType"], "time series")
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["insertNulls"])
+        self.assertEqual(panel["fieldConfig"]["defaults"]["custom"]["showPoints"], "always")
+
+        sql = panel["targets"][0]["queryText"]
+        self.assertIn("f.pid = '0x0A0'", sql)
+        self.assertIn("s.device_monotonic_ms", sql)
+        self.assertIn("LAG(point_time_ms)", sql)
+        self.assertIn("point_time_ms - previous_time_ms > 40", sql)
+        self.assertNotIn("collector_received_ms", sql)
+        self.assertNotIn("archive_mtime_ms", sql)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1, 10000, 10130, 'gnss', 3, 9000000, 9000000)"
+            )
+            sample_rows = (
+                (0, 4294967290, 10000, "4294967295;1200"),
+                (1, 5, 10016, "15;1198"),
+                (2, 105, 10116, "115;1170"),
+                (3, 205, 10216, "bad;1400"),
+            )
+            for sequence, monotonic, timeline, raw in sample_rows:
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, collector_received_ms, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 8000000000000, 9000000, 'gnss')",
+                    (sequence, monotonic, timeline),
+                )
+                connection.execute(
+                    "INSERT INTO sample_field(device_id, trip_id, sequence, ordinal, pid, text_value) "
+                    "VALUES ('CAR', 'TRIP', ?, 0, '0x0A0', ?)",
+                    (sequence, raw),
+                )
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual(rows, [
+                (10.005, 12.0),
+                (10.026, 11.98),
+                (10.076, None),
+                (10.126, 11.7),
+            ])
+        finally:
+            connection.close()
+
+    def test_waveform_loss_panel_reports_exact_counters_and_ignores_malformed_fields(self) -> None:
+        panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 53)
+        self.assertEqual(panel["title"], "Waveform loss counters")
+        self.assertEqual(panel["datasource"]["uid"], "freematics-history")
+        self.assertEqual(panel["targets"][0]["queryType"], "time series")
+        self.assertIn("No records means the counter was not reported", panel["description"])
+        self.assertIn("do not separate those causes", panel["description"])
+        custom = panel["fieldConfig"]["defaults"]["custom"]
+        self.assertFalse(custom["spanNulls"])
+        self.assertFalse(custom["insertNulls"])
+        self.assertEqual(custom["showPoints"], "never")
+
+        sql = panel["targets"][0]["queryText"]
+        for label in (
+            "Dropped voltage (unverified append or buffer overflow)",
+            "Dropped motion (unverified append or buffer overflow)",
+            "Invalid voltage readings",
+            "Invalid motion readings",
+        ):
+            self.assertIn(label, sql)
+        self.assertNotIn("collector_received_ms", sql)
+        self.assertNotIn("archive_mtime_ms", sql)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1, 1000, 2000, 'gnss', 5, 9000000, 9000000)"
+            )
+            loss_fields = (
+                (0, 1000, "0;0;0;0"),
+                (1, 1250, "2;1;0;0"),
+                (2, 1500, "2;1;1;0"),
+                (3, 1750, "1;2;3;4;5"),
+                (4, 2000, "bad;0;0;0"),
+            )
+            for sequence, timeline, raw in loss_fields:
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, collector_received_ms, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 8000000000000, 9000000, 'gnss')",
+                    (sequence, sequence * 250, timeline),
+                )
+                connection.execute(
+                    "INSERT INTO sample_field(device_id, trip_id, sequence, ordinal, pid, text_value) "
+                    "VALUES ('CAR', 'TRIP', ?, 0, '0x0A4', ?)",
+                    (sequence, raw),
+                )
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual(rows, [
+                (1.0, 0, 0, 0, 0),
+                (1.25, 2, 1, 0, 0),
+                (1.5, 2, 1, 1, 0),
+            ])
         finally:
             connection.close()
 

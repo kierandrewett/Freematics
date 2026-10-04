@@ -49,6 +49,10 @@ public:
     uint32_t timestamp;
     uint16_t offset;
     uint16_t total;
+    // Counts acquisitions copied into this volatile frame. The SD recorder
+    // uses them if it must release the frame without a verified journal copy.
+    uint8_t waveformVoltageSamples = 0;
+    uint8_t waveformMotionSamples = 0;
     bool recorded = false;
     uint8_t state;
 private:

@@ -45,7 +45,7 @@ The `motion-20260930-prod` image (flashed 30 September) never entered standby, b
 
 ## Six-month unattended-use boundary
 
-This firmware is not certified for six months connected directly to a vehicle battery. The published Model B low-power floor is approximately 10 mA with radios and GPS off; that is about 44 Ah over six months before the vehicle's own parasitic load, and the standby motion-monitoring loop may draw more. Use a measured current budget plus a switched or low-voltage-cutoff OBD supply before leaving it installed for months. The SD source uses an acknowledged microSD journal and an eight-slot transient sampler handoff, not an outage-retention RAM queue. If the card fails or fills, live USB data continues, unjournaled samples are counted as missed and discarded, and upload pauses until SD recovers. This is not an absolute zero-loss guarantee.
+This firmware is not certified for six months connected directly to a vehicle battery. The published Model B low-power floor is approximately 10 mA with radios and GPS off; that is about 44 Ah over six months before the vehicle's own parasitic load, and the standby motion-monitoring loop may draw more. Use a measured current budget plus a switched or low-voltage-cutoff OBD supply before leaving it installed for months. The SD source uses an acknowledged microSD journal and synchronously verifies each sample before recording the next; it has no completed-reading RAM backlog. If the card fails or fills, live USB data continues, unjournaled samples are counted as missed and discarded, and upload pauses until SD recovers. Slow journal writes can also delay sampling and create counted cadence misses. This is not an absolute zero-loss guarantee.
 
 ## Inserted card and firmware changeover
 

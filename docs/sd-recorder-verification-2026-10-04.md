@@ -6,27 +6,28 @@ Repeatable command:
 python3 tools/check-recorder.py
 ```
 
-The fixture compiles and runs the production sampler-to-recorder path, SD
+The fixture compiles and runs the production `journalSample()` path, SD
 journal, and serializer against the repository's fake SD implementation. It
-uses the configured eight-slot handoff and injects 650 ms per journal append
-while sampling continues at the configured 250 ms interval.
+injects 650 ms per append while exercising the 250 ms sample deadline. The
+sampler blocks on the in-flight SD commit; expired sample deadlines are
+counted, and no completed samples wait in a RAM queue.
 
 Recorded output:
 
 ```text
-PASS: 250 ms sampler interleaved with slow SD; configured capacity=8, peak held=6, missed=0, journaled=120, opens=98
-PASS: full-SD failure holds at most configured capacity and counts/discards unjournaled samples
-PASS: recovered SD journals new samples only; failed samples remain counted, never replayed
+PASS: slow SD blocks sampling; one in-flight frame, skipped intervals counted, committed bytes verified; missed=80, journaled=40, opens=84
+PASS: unavailable SD produces counted misses, no retained samples or upload candidates
+PASS: SD recovery records new samples only; failed samples remain counted, never replayed
 ```
 
-The test checks sample accounting, the handoff bound, and timestamp/order
-agreement between committed journal frames and the CSV convenience logger. In
-the injected card-failure phase, new samples are counted as missed rather than
-retained for upload; after recovery, only successfully journaled samples are
-replayable. This is host simulation evidence, not a physical-card endurance or
-warm-reset test. The recorded device-side `FR_NOT_READY`/card-select failures
-occurred during mount and remain unresolved; that points to card initialization
-or electrical response, not evidence that this append/readback path failed.
+The test checks one-slot working memory, sample accounting, the deliberate
+cadence loss under a 650 ms append, timestamp/order agreement between committed
+journal frames and the CSV convenience logger, and no replay of samples from a
+card-failure window. Recovery only records new samples. This is host simulation
+evidence, not a physical-card endurance or warm-reset test. The recorded
+device-side `FR_NOT_READY`/card-select failures occurred during mount and remain
+unresolved; that points to card initialization or electrical response, not
+evidence that this append/readback path failed.
 
 ## Mount-path follow-up
 

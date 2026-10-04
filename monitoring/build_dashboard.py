@@ -93,6 +93,87 @@ def trip_archive_sql() -> str:
     )
 
 
+def voltage_waveform_sql() -> str:
+    """Plot raw Model B voltage captures on the archive's capture-time axis."""
+    signed_offset = (
+        "(((CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) "
+        "- s.device_monotonic_ms + 2147483648) & 4294967295) - 2147483648)"
+    )
+    point_time = f"(s.timeline_ms + {signed_offset})"
+    return (
+        "WITH raw_points AS ("
+        "SELECT f.sequence, f.ordinal, " + point_time + " AS point_time_ms, "
+        "CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) / 100.0 AS voltage "
+        "FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id "
+        "AND s.trip_id = f.trip_id AND s.sequence = f.sequence "
+        "WHERE f.device_id = '$device' AND f.trip_id = '$trip' AND f.pid = '0x0A0' "
+        "AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL "
+        "AND instr(f.text_value, ';') > 0 "
+        "AND length(f.text_value) - length(replace(f.text_value, ';', '')) = 1 "
+        "AND f.text_value NOT GLOB '*[^0-9;]*' "
+        "AND CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) "
+        "BETWEEN 0 AND 4294967295 "
+        "AND CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) "
+        "BETWEEN 0 AND 65535"
+        "), ordered_points AS ("
+        "SELECT sequence, ordinal, point_time_ms, voltage, "
+        "LAG(point_time_ms) OVER (ORDER BY point_time_ms, sequence, ordinal) AS previous_time_ms "
+        "FROM raw_points"
+        "), chart_rows AS ("
+        "SELECT point_time_ms AS time_ms, voltage FROM ordered_points "
+        "UNION ALL "
+        # A voltage capture normally arrives every 20 ms. A null at the midpoint
+        # of larger intervals makes missing persisted observations visible; it
+        # does not interpolate or invent a voltage value.
+        "SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage "
+        "FROM ordered_points WHERE previous_time_ms IS NOT NULL "
+        "AND point_time_ms - previous_time_ms > 40"
+        ") SELECT time_ms / 1000.0 AS time, voltage AS "
+        '"Vehicle supply (Model B input)" FROM chart_rows '
+        "WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+        "ORDER BY time_ms"
+    )
+
+
+def waveform_loss_sql() -> str:
+    """Return per-boot waveform counters from each archived report frame."""
+    return (
+        "WITH first_separator AS ("
+        "SELECT f.sequence, f.ordinal, f.text_value, s.timeline_ms, "
+        "instr(f.text_value, ';') AS p1 "
+        "FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id "
+        "AND s.trip_id = f.trip_id AND s.sequence = f.sequence "
+        "WHERE f.device_id = '$device' AND f.trip_id = '$trip' AND f.pid = '0x0A4' "
+        "AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL"
+        "), second_separator AS ("
+        "SELECT *, p1 + instr(substr(text_value, p1 + 1), ';') AS p2 "
+        "FROM first_separator WHERE p1 > 0"
+        "), third_separator AS ("
+        "SELECT *, p2 + instr(substr(text_value, p2 + 1), ';') AS p3 "
+        "FROM second_separator WHERE p2 > p1"
+        "), parsed AS ("
+        "SELECT sequence, ordinal, timeline_ms, "
+        "CAST(substr(text_value, 1, p1 - 1) AS INTEGER) AS dropped_voltage, "
+        "CAST(substr(text_value, p1 + 1, p2 - p1 - 1) AS INTEGER) AS dropped_motion, "
+        "CAST(substr(text_value, p2 + 1, p3 - p2 - 1) AS INTEGER) AS invalid_voltage, "
+        "CAST(substr(text_value, p3 + 1) AS INTEGER) AS invalid_motion "
+        "FROM third_separator WHERE p3 > p2 "
+        "AND length(text_value) - length(replace(text_value, ';', '')) = 3 "
+        "AND text_value NOT GLOB '*[^0-9;]*'"
+        ") SELECT timeline_ms / 1000.0 AS time, "
+        'dropped_voltage AS "Dropped voltage (unverified append or buffer overflow)", '
+        'dropped_motion AS "Dropped motion (unverified append or buffer overflow)", '
+        'invalid_voltage AS "Invalid voltage readings", '
+        'invalid_motion AS "Invalid motion readings" FROM parsed '
+        "WHERE dropped_voltage BETWEEN 0 AND 4294967295 "
+        "AND dropped_motion BETWEEN 0 AND 4294967295 "
+        "AND invalid_voltage BETWEEN 0 AND 4294967295 "
+        "AND invalid_motion BETWEEN 0 AND 4294967295 "
+        "AND timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+        "ORDER BY timeline_ms, sequence, ordinal"
+    )
+
+
 def trip_archive_link() -> dict:
     return {
         "matcher": {"id": "byName", "options": "Trip"},
@@ -1662,6 +1743,78 @@ def build_dashboard(view: str = "combined") -> dict:
             "spanNulls": False,
         })
         panels.append(voltage_panel)
+        voltage_waveform_panel = timeseries(
+            52,
+            "Device supply voltage — raw waveform",
+            0,
+            46,
+            24,
+            7,
+            [history_target(voltage_waveform_sql(), format="time_series")],
+            unit="volt",
+            description=(
+                "Raw Model B supply-voltage captures from the durable waveform archive, timestamped from "
+                "the device monotonic capture tick aligned to the stored display timeline. A null break "
+                "marks capture intervals over 40 ms; no missing voltage is interpolated. This shows what "
+                "reached the local archive, not collector arrival time. Legacy trips without waveform "
+                "records remain empty rather than being filled from the lower-rate PID snapshot."
+            ),
+            overrides=[
+                by_name(
+                    "Vehicle supply (Model B input)",
+                    ("color", {"fixedColor": "blue", "mode": "fixed"}),
+                ),
+            ],
+        )
+        voltage_waveform_panel["datasource"] = HISTORY_DS
+        voltage_waveform_panel["fieldConfig"]["defaults"]["custom"].update({
+            "insertNulls": False,
+            "showPoints": "always",
+            "spanNulls": False,
+        })
+        panels.append(voltage_waveform_panel)
+        waveform_loss_panel = timeseries(
+            53,
+            "Waveform loss counters",
+            0,
+            53,
+            24,
+            5,
+            [history_target(waveform_loss_sql(), format="time_series")],
+            unit="short",
+            description=(
+                "Per-boot PID 0x0A4 counters on the archived sample timeline. Dropped voltage/motion "
+                "includes bounded-buffer overflow and points released without a verified durable append; "
+                "these counters do not separate those causes. Invalid readings are shown separately. "
+                "Values can reset after a device reboot. No records means the counter was not reported, "
+                "not that losses were zero."
+            ),
+            overrides=[
+                by_name("Dropped voltage (unverified append or buffer overflow)",
+                        ("color", {"fixedColor": "orange", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"),
+                        ("decimals", 0)),
+                by_name("Dropped motion (unverified append or buffer overflow)",
+                        ("color", {"fixedColor": "purple", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"),
+                        ("decimals", 0)),
+                by_name("Invalid voltage readings",
+                        ("color", {"fixedColor": "red", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"),
+                        ("decimals", 0)),
+                by_name("Invalid motion readings",
+                        ("color", {"fixedColor": "blue", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"),
+                        ("decimals", 0)),
+            ],
+        )
+        waveform_loss_panel["datasource"] = HISTORY_DS
+        waveform_loss_panel["fieldConfig"]["defaults"]["custom"].update({
+            "insertNulls": False,
+            "showPoints": "never",
+            "spanNulls": False,
+        })
+        panels.append(waveform_loss_panel)
         trip_index = next(item for item in panels if item["id"] == 19)
         trip_index["title"] = "Trip archive — click a trip to inspect"
         trip_index["description"] = "All stored trips. Click a Trip value to set Grafana's time range to that trip's stored start and end."
@@ -1848,7 +2001,7 @@ def build_dashboard(view: str = "combined") -> dict:
     elif view == "trips":
         trips_panel_ids = {
             7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 42, 44, 48, 50,
+            22, 23, 24, 25, 26, 27, 31, 38, 39, 40, 42, 44, 48, 50, 52, 53,
         }
         panels = [panel for panel in panels if panel["id"] in trips_panel_ids]
         # Keep the sync panel at the top: Grafana does not load panels outside
@@ -1856,13 +2009,15 @@ def build_dashboard(view: str = "combined") -> dict:
         panels.insert(0, trip_time_sync_panel())
         trips_layout = {
             50: (0, 39, 24, 7),
-            38: (0, 46, 24, 5),
-            31: (0, 51, 24, 10),
-            39: (0, 61, 12, 7),
-            40: (12, 61, 12, 7),
-            42: (0, 68, 24, 8),
-            44: (0, 76, 24, 8),
-            48: (0, 84, 24, 8),
+            52: (0, 46, 24, 7),
+            53: (0, 53, 24, 5),
+            38: (0, 58, 24, 5),
+            31: (0, 63, 24, 10),
+            39: (0, 73, 12, 7),
+            40: (12, 73, 12, 7),
+            42: (0, 80, 24, 8),
+            44: (0, 88, 24, 8),
+            48: (0, 96, 24, 8),
         }
         for panel in panels:
             layout = trips_layout.get(panel["id"])
@@ -1916,22 +2071,6 @@ def build_dashboard(view: str = "combined") -> dict:
             "url": "/d/freematics-trips?var-device=$device",
         },
     ]
-    if view in {"combined", "trips"}:
-        dashboard_links.append(
-            {
-                "asDropdown": False,
-                "icon": "external link",
-                "includeVars": True,
-                "keepTime": True,
-                "tags": [],
-                "targetBlank": True,
-                "title": "Raw Freematics trip archive",
-                "tooltip": "Open the collector's archived trip files",
-                "type": "link",
-                "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device",
-            }
-        )
-
     if view == "trips":
         device_query = ("SELECT DISTINCT device_id AS __text, device_id AS __value FROM trip "
                         "WHERE device_id <> 'CODEXTEST' ORDER BY device_id")
@@ -2050,7 +2189,7 @@ def build_dashboard(view: str = "combined") -> dict:
         "timezone": "browser",
         "title": dashboard_title,
         "uid": dashboard_uid,
-        "version": 11,
+        "version": 13,
         "weekStart": "monday",
     }
 

@@ -31,18 +31,6 @@
       "tooltip": "Open the trip index and route evidence",
       "type": "link",
       "url": "/d/freematics-trips?var-device=$device"
-    },
-    {
-      "asDropdown": false,
-      "icon": "external link",
-      "includeVars": true,
-      "keepTime": true,
-      "tags": [],
-      "targetBlank": true,
-      "title": "Raw Freematics trip archive",
-      "tooltip": "Open the collector's archived trip files",
-      "type": "link",
-      "url": "https://freematics-admin.drewett.dev/trips.html?devid=$device"
     }
   ],
   "liveNow": true,
@@ -4794,6 +4782,6 @@
   "timezone": "browser",
   "title": "Vehicle · Freematics",
   "uid": "freematics-vehicle",
-  "version": 11,
+  "version": 13,
   "weekStart": "monday"
 }

@@ -43,6 +43,14 @@ public:
     m_motionCount = 0;
   }
 
+  // Count waveform points already copied into volatile sample frames whose
+  // durable SD append did not succeed. Later records carry the updated totals.
+  void noteUnjournaled(uint32_t voltageSamples, uint32_t motionSamples)
+  {
+    saturatingAdd(m_voltageDropped, voltageSamples);
+    saturatingAdd(m_motionDropped, motionSamples);
+  }
+
   bool recordVoltage(uint32_t acquiredMs, float voltage)
   {
     // uint32 centivolts is the wire type. The physical envelope is much
@@ -100,6 +108,8 @@ public:
       const VoltageReading& reading = m_voltage[m_voltageHead];
       uint32_t values[2] = {reading.timestamp, reading.centivolts};
       if (!destination->add(PID_WAVEFORM_VOLTAGE, ELEMENT_UINT32, values, sizeof(values), 2)) break;
+      if (destination->waveformVoltageSamples != UINT8_MAX)
+        ++destination->waveformVoltageSamples;
       m_voltageHead = next(m_voltageHead);
       --m_voltageCount;
     }
@@ -116,6 +126,8 @@ public:
           !destination->add(PID_WAVEFORM_RAW_ACCELERATION, ELEMENT_FLOAT, reading.acceleration,
                             sizeof(reading.acceleration), 3) ||
           !destination->add(PID_WAVEFORM_GYRO, ELEMENT_FLOAT, reading.gyro, sizeof(reading.gyro), 3)) break;
+      if (destination->waveformMotionSamples != UINT8_MAX)
+        ++destination->waveformMotionSamples;
       m_motionHead = next(m_motionHead);
       --m_motionCount;
     }

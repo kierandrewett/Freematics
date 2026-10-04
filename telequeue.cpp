@@ -4,6 +4,7 @@
 #include <SD.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
 #include "sdaccess.h"
@@ -182,6 +183,7 @@ bool DurableQueue::begin()
     }
     uint32_t size = data.size();
     m_size = size;
+    m_bootStart = size;
     data.close();
     dropReadCache();
     uint32_t a = 0, b = 0;
@@ -253,6 +255,7 @@ bool DurableQueue::recover()
     if (okay) {
         m_ack = m_read = 0; // offsets refer to the verified replacement journal
         m_size = recovered;
+        m_bootStart = recovered; // recovered bytes predate the current recording session
         dropReadCache();
         m_nextCursorB = false;
         m_fault = m_corrupt = false;
@@ -277,13 +280,15 @@ void DurableQueue::suspend()
     }
 }
 
-bool DurableQueue::append(const char* frame, uint16_t length)
+bool DurableQueue::append(const char* frame, uint16_t length, bool* lockTimedOut)
 {
-    return appendBatch(&frame, &length, 1);
+    return appendBatch(&frame, &length, 1, lockTimedOut);
 }
 
-bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count)
+bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count,
+                               bool* lockTimedOut)
 {
+    if (lockTimedOut) *lockTimedOut = false;
     if (!m_ready || m_fault || m_corrupt || !frames || !lengths || !count) return false;
     uint32_t total = 0;
     for (uint8_t i = 0; i < count; i++) {
@@ -291,7 +296,10 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
         if (!frames[i] || length < 3 || length > MAX_FRAME || frames[i][length - 1] != ',') return false;
         total += sizeof(RecordHeader) + length;
     }
-    if (!lock()) return false;
+    if (!lock()) {
+        if (lockTimedOut) *lockTimedOut = true;
+        return false;
+    }
     File file = ensureDataFile() ? SD.open(DATA_PATH, FILE_APPEND) : File();
     if (!file) {
         Serial.print("[QUEUE] Append open errno: ");
@@ -367,7 +375,7 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
         Serial.print(" errno=");
         Serial.println(errno);
     }
-    if (!okay && !m_fault) Serial.println("[QUEUE] SD append failed or journal full; retaining RAM reading");
+    if (!okay && !m_fault) Serial.println("[QUEUE] SD append failed or journal full; batch is unjournaled and will be discarded");
     if (!okay) m_fault = true;
     if (partial) m_corrupt = true;
     if (okay) {
@@ -376,6 +384,11 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
     }
     unlock();
     return okay;
+}
+
+DurableQueue::~DurableQueue()
+{
+    free(m_cache);
 }
 
 bool DurableQueue::fillReadCache()
@@ -464,6 +477,7 @@ bool DurableQueue::acknowledge()
             if (SD.exists(CURSOR_B)) SD.remove(CURSOR_B);
             m_ack = m_read = 0;
             m_size = 0;
+            m_bootStart = 0;
             m_nextCursorB = false;
             dropReadCache();
             if (!ensureDataFile()) m_fault = true;

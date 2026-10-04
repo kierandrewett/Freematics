@@ -5,15 +5,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
-from package_ota_release import firmware_release_version, verify_release_directory
+from package_ota_release import (
+    firmware_release_version,
+    firmware_source_commit,
+    verify_release_directory,
+)
 
 
 REPOSITORY = "kierandrewett/Freematics"
+
+
+def _tag_commit(tag: str) -> str:
+    result = subprocess.run(
+        ["gh", "api", f"repos/{REPOSITORY}/commits/{tag}", "--jq", ".sha"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    commit = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("could not verify the source commit for the target Git tag")
+    return commit
 
 
 def publish(tag: str, asset_dir: Path) -> None:
@@ -23,6 +45,11 @@ def publish(tag: str, asset_dir: Path) -> None:
     version = firmware_release_version(image)
     if version is None or tag not in {version, f"v{version}"}:
         raise ValueError("release tag does not match the firmware's embedded version")
+    source_commit = firmware_source_commit(image)
+    if source_commit is None:
+        raise ValueError("firmware has no valid source commit; refusing publication")
+    if _tag_commit(tag) != source_commit:
+        raise ValueError("Git tag does not point to the firmware's embedded source commit")
     inspection = subprocess.run(
         ["gh", "release", "view", tag, "--json", "assets", "--repo", REPOSITORY],
         stdin=subprocess.DEVNULL,
@@ -47,20 +74,39 @@ def publish(tag: str, asset_dir: Path) -> None:
         raise ValueError(
             "target GitHub release is not empty; refusing to append unverified assets"
         )
-    # Re-read and verify the allowlisted bytes immediately before handing paths
-    # to gh, so a changed/replaced asset cannot inherit an earlier approval.
-    verified_image, verified_sidecar = verify_release_directory(asset_dir)
-    if verified_image != image or verified_sidecar != sidecar:
-        raise ValueError("release assets changed during publication; refusing upload")
-    result = subprocess.run(
-        ["gh", "release", "upload", tag, str(image), str(sidecar), "--repo", REPOSITORY],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError(f"GitHub release upload failed (exit {result.returncode})")
+    # Upload a private snapshot, not paths in the caller-owned directory. This
+    # closes the verify-then-open race where gh could read replaced bytes.
+    with tempfile.TemporaryDirectory(prefix="freematics-ota-publish-") as temporary:
+        snapshot_dir = Path(temporary)
+        if os.name == "posix":
+            snapshot_dir.chmod(0o700)
+        snapshot_paths = []
+        for source in (image, sidecar):
+            snapshot = snapshot_dir / source.name
+            with source.open("rb") as input_file, snapshot.open("xb") as output_file:
+                shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+                output_file.flush()
+                os.fsync(output_file.fileno())
+            if os.name == "posix":
+                snapshot.chmod(0o600)
+            snapshot_paths.append(snapshot)
+        verify_release_directory(snapshot_dir)
+
+        # The tag may have moved while GitHub release metadata was queried or
+        # the validated snapshot was copied. Resolve it again just before upload.
+        if _tag_commit(tag) != source_commit:
+            raise ValueError("Git tag changed during publication; refusing upload")
+
+        result = subprocess.run(
+            ["gh", "release", "upload", tag,
+             *(str(path) for path in snapshot_paths), "--repo", REPOSITORY],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"GitHub release upload failed (exit {result.returncode})")
 
 
 def main(argv: list[str] | None = None) -> int:

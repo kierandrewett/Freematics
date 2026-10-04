@@ -34,6 +34,7 @@
 #include "mode09_identity.h"
 #include "ota_update.h"
 #include "ota_parked_policy.h"
+#include "ota_first_upload_policy.h"
 #include "sdaccess.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
@@ -111,6 +112,7 @@ SemaphoreHandle_t memsMutex = nullptr;
 Task recorderTask;
 Task usbTelemetryTask;
 UsbTelemetryQueue usbTelemetryQueue;
+bool usbTelemetrySerialReady = false;
 uint64_t usbBootId = 0;
 OTAParkedPolicy otaParkedPolicy;
 volatile bool otaCheckRequested = false;
@@ -118,6 +120,9 @@ volatile bool otaAttemptStarted = false;
 volatile bool otaAttemptDone = false;
 volatile bool otaCancelRequested = false;
 volatile OtaAttemptResult otaAttemptResult = OTA_ATTEMPT_FAILED;
+volatile bool otaCurrentBootUploadAccepted = false;
+OTAFirstUploadPolicy otaFirstUploadPolicy;
+Task otaBootValidationTask;
 uint32_t otaNextCheckTime = 0;
 SemaphoreHandle_t coprocessorMutex = nullptr;
 portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
@@ -156,6 +161,7 @@ struct OBDSnapshot {
   PID_POLLING_INFO freezeFrame[
     sizeof(freezeFramePids) / sizeof(freezeFramePids[0])];
   uint8_t supportedByPid[sizeof(obdData) / sizeof(obdData[0])];
+  UsbRawMode01Value rawMode01[USB_TELEMETRY_RAW_PID_COUNT];
   DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
   char vin[18];
   char calibrationId[17];
@@ -171,6 +177,10 @@ struct OBDSnapshot {
   uint8_t status;
 };
 OBDSnapshot obdSnapshot = {};
+static const uint8_t usbRawMode01Pids[USB_TELEMETRY_RAW_PID_COUNT] = {
+#define OBD_PID(pid, name, description, unit, priority) pid,
+#include "obd_pids.h"
+};
 // The few OBD values other tasks decide on. Copying the full 1.2 KB snapshot
 // every 25 ms in the 3 KB status task risked its stack and kept interrupts
 // off for longer than needed.
@@ -301,6 +311,8 @@ bool vehicleActivitySeen = false;
 RTC_NOINIT_ATTR uint32_t wakeRecord;
 uint8_t bootWakeReason = WAKE_POWER_ON;
 volatile uint32_t lastCollectionTime = 0;
+volatile uint32_t lastJournalCommitTime = 0;
+volatile bool journalCommitSeen = false;
 #if STORAGE == STORAGE_SD
 volatile bool storageCheckComplete = false;
 #endif
@@ -651,11 +663,13 @@ void statusSignals(void* inst)
     // stopped collector gets 15 seconds. Upload acknowledgements cannot clear
     // this alarm. Warnings sound only while fresh speed shows movement.
     const uint32_t capturedAt = lastCollectionTime;
+    const uint32_t journaledAt = lastJournalCommitTime;
+    const bool haveJournalCommit = journalCommitSeen;
     // Read time after the cross-core capture timestamp, including time spent
     // sounding a server warning above. Unsigned subtraction must not see a
     // newer capture as a long recording stall.
     const uint32_t recordingNow = millis();
-    const uint32_t progressAt = capturedAt ? capturedAt : recordingMonitorSince;
+    const uint32_t progressAt = haveJournalCommit ? journaledAt : recordingMonitorSince;
     // A CSV log that has not opened yet (fileid 0) is not a fault; a failed
     // open clears STATE_STORAGE_READY, which the recorder retries.
     const bool storageHealthy = durableQueue.healthy() && (!fileid || logger.healthy());
@@ -667,9 +681,10 @@ void statusSignals(void* inst)
       const bool failed = !storageHealthy || recordingNow - progressAt >= RECORDING_STALL_ALERT_MS;
       if (failed && !recordingFaultActive) {
         recordingFaultActive = true;
-        captureAtFault = capturedAt;
+        captureAtFault = journaledAt;
         lastRecordingAlertAt = 0;
-      } else if (!failed && recordingFaultActive && capturedAt && capturedAt != captureAtFault) {
+      } else if (!failed && recordingFaultActive && haveJournalCommit &&
+                 journaledAt != captureAtFault) {
         recordingFaultActive = false;
         lastRecordingAlertAt = 0;
         Serial.println("[STATUS] Fresh local recording restored; fault alarm stopped");
@@ -961,6 +976,12 @@ void publishOBDSnapshot()
   // Only the OBD owner writes obdData/dtcData. Publish a bounded copy, never
   // hold a spinlock across serial I/O, delays or buffer serialisation.
   OBDSnapshot snapshot;
+  memset(&snapshot, 0, sizeof(snapshot));
+  portENTER_CRITICAL(&sensorMux);
+  memcpy(snapshot.rawMode01, obdSnapshot.rawMode01, sizeof(snapshot.rawMode01));
+  portEXIT_CRITICAL(&sensorMux);
+  for (byte rawIndex = 0; rawIndex < USB_TELEMETRY_RAW_PID_COUNT; ++rawIndex)
+    snapshot.rawMode01[rawIndex].pid = usbRawMode01Pids[rawIndex];
   memcpy(snapshot.readings, obdData, sizeof(obdData));
   memcpy(snapshot.freezeFrame, freezeFrameReadings, sizeof(freezeFrameReadings));
   memcpy(snapshot.diagnostics, dtcData, sizeof(dtcData));
@@ -1168,13 +1189,28 @@ void pollOBD()
     poll.lastAttempt = millis();
     poll.attempted = true;
     float value;
-    const bool read = obd.readPID(item.pid, value);
+    byte rawBytes[4] = {};
+    byte rawLength = 0;
+    const bool read = obd.readPID(item.pid, value, rawBytes, sizeof(rawBytes), rawLength);
     lastOBDReadLatency = millis() - poll.lastAttempt;
     if (lastOBDReadLatency >= OBD_PID_READ_WARN_MS) reportSlowOBDRead(item.pid, "Live", lastOBDReadLatency);
     if (read) {
         item.ts = millis();
         item.value = value;
         poll.failures = 0;
+        if (rawLength) {
+          portENTER_CRITICAL(&sensorMux);
+          for (byte rawIndex = 0; rawIndex < USB_TELEMETRY_RAW_PID_COUNT; ++rawIndex) {
+            if (usbRawMode01Pids[rawIndex] != item.pid) continue;
+            UsbRawMode01Value& raw = obdSnapshot.rawMode01[rawIndex];
+            raw.pid = item.pid;
+            raw.length = rawLength;
+            memcpy(raw.bytes, rawBytes, rawLength);
+            raw.valid = 1;
+            break;
+          }
+          portEXIT_CRITICAL(&sensorMux);
+        }
     } else {
         if (poll.failures < 255) poll.failures++;
         timeoutsOBD++;
@@ -1677,6 +1713,10 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       // Never wake the ECU to check a parked vehicle. The Model B voltage input
       // is a passive ADC read, so it costs the car nothing.
       const float voltage = readVehicleVoltage();
+#if ENABLE_OTA
+      otaParkedPolicy.observeSupplySample(millis(), sys.devType > 12 && voltage > 0.0f,
+                                          voltage);
+#endif
       if (voltage >= 6.0f && voltage <= RESTING_VOLTAGE_MAX) restingSeen = true;
       // Below 6 V is USB or bench power: no car battery to protect. The first
       // reading sets the guard at once, because motion confirms in 3 polls;
@@ -1754,6 +1794,33 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
 /*******************************************************************************
   Collecting and processing data
 *******************************************************************************/
+#if STORAGE == STORAGE_SD
+void accountUnjournaledWaveforms(const CBuffer* buffer);
+
+// Serialization needs one bounded working frame, but completed readings are
+// never queued here: append() verifies the SD bytes before this scratch space
+// is reused for the next capture.
+bool journalSample(CBuffer* buffer)
+{
+  static char* frameBytes = (char*)heap_caps_malloc(SAMPLE_FRAME_SIZE, MALLOC_CAP_SPIRAM);
+  if (!buffer || !frameBytes || !durableQueue.healthy()) return false;
+  CStorageRAM frame;
+  frame.init(frameBytes, SAMPLE_FRAME_SIZE);
+  frame.timestamp(buffer->timestamp);
+  buffer->serialize(frame);
+  if (frame.overflowed() || !frame.length()) return false;
+  // An upload batch can temporarily own the SD lock. Preserve this in-flight
+  // sample and retry only lock contention; actual storage errors remain fatal.
+  bool lockTimedOut;
+  do {
+    lockTimedOut = false;
+    if (durableQueue.append(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)) return true;
+    if (lockTimedOut) delay(1);
+  } while (lockTimedOut && durableQueue.cachedHealthy());
+  return false;
+}
+#endif
+
 void collectSample()
 {
   uint32_t startTime = millis();
@@ -1765,9 +1832,8 @@ void collectSample()
 
 #if STORAGE == STORAGE_SD
   const bool durableAvailable = durableQueue.cachedHealthy();
-  // RAM is only a short sampler/recorder handoff, never an outage spool. If
-  // the durable journal is unhealthy, keep the live USB view current but do
-  // not retain waveform points that cannot be journaled.
+  // If the journal is unhealthy, keep the live USB view current but do not
+  // retain waveform points that cannot be journaled.
   if (!durableAvailable) {
     portENTER_CRITICAL(&sensorMux);
     sensorWaveforms.discardPending();
@@ -1780,11 +1846,6 @@ void collectSample()
   CBuffer* buffer = bufman.getFree();
   if (!buffer) {
     bufman.recordMissedReading();
-    static uint32_t lastWarning = 0;
-    if (!lastWarning || millis() - lastWarning >= 10000UL) {
-      Serial.println("[CRITICAL] No RAM slot or durable storage; new readings cannot be captured");
-      lastWarning = millis();
-    }
     delay(50);
     return;
   }
@@ -1869,6 +1930,9 @@ void collectSample()
   portEXIT_CRITICAL(&sensorMux);
 
   buffer->timestamp = startTime;
+  // Preserve capture time even when a slow or failing SD transaction delays
+  // completion. Never substitute the later upload or commit time.
+  lastCollectionTime = startTime;
 
   if (sys.devType > 12) {
     UsbTelemetryRecord* record = usbTelemetryQueue.reserve();
@@ -1883,28 +1947,37 @@ void collectSample()
       const OBDSnapshot snapshot = obdSnapshot;
       portEXIT_CRITICAL(&sensorMux);
       size_t supportedLength = 0;
+      bool metadataOkay = true;
       record->supported[0] = 0;
       if (snapshot.status) {
         for (byte index = 0; index < sizeof(obdData) / sizeof(obdData[0]); index++) {
           if (!snapshot.supportedByPid[index]) continue;
-          const int added = snprintf(record->supported + supportedLength,
-            sizeof(record->supported) - supportedLength, "%s%02X",
-            supportedLength ? "," : "", obdData[index].pid);
-          if (added < 0 || (size_t)added >= sizeof(record->supported) - supportedLength) break;
-          supportedLength += (size_t)added;
+          if (!appendSupportedMode01Pid(record->supported, sizeof(record->supported),
+                                        supportedLength, obdData[index].pid)) {
+            metadataOkay = false;
+            break;
+          }
         }
       }
       const bool haveVin = strlen(snapshot.vin) == 17;
-      if (haveVin && supportedLength < sizeof(record->supported)) {
+      if (metadataOkay && haveVin && supportedLength < sizeof(record->supported)) {
         const int added = snprintf(record->supported + supportedLength,
           sizeof(record->supported) - supportedLength, ";vin=%s", snapshot.vin);
         if (added > 0 && (size_t)added < sizeof(record->supported) - supportedLength)
           supportedLength += (size_t)added;
+        else metadataOkay = false;
       }
-      freematics::mode09::appendHexMetadata(record->supported, sizeof(record->supported),
-        supportedLength, "cal", snapshot.calibrationId);
-      freematics::mode09::appendHexMetadata(record->supported, sizeof(record->supported),
-        supportedLength, "ecu", snapshot.ecuName);
+      if (metadataOkay) metadataOkay = freematics::mode09::appendHexMetadata(record->supported,
+        sizeof(record->supported), supportedLength, "cal", snapshot.calibrationId);
+      if (metadataOkay) metadataOkay = freematics::mode09::appendHexMetadata(record->supported,
+        sizeof(record->supported), supportedLength, "ecu", snapshot.ecuName);
+      if (metadataOkay) metadataOkay = appendRawMode01Metadata(record->supported,
+        sizeof(record->supported), supportedLength, snapshot.rawMode01,
+        USB_TELEMETRY_RAW_PID_COUNT);
+
+      if (!metadataOkay) {
+        usbTelemetryQueue.publish(record, 0);
+      } else {
 
       // Place the FT1 envelope and serialized sample in one contiguous buffer.
       // HardwareSerial serializes each buffer write against debug output, so a
@@ -1928,27 +2001,63 @@ void collectSample()
         const size_t totalLength = (size_t)headerLength + frameLength;
         if (!wireFrame.overflowed() && totalLength + 1 < sizeof(record->payload)) {
           record->payload[totalLength] = '\n';
-          if (!usbTelemetryQueue.publish(record, (uint16_t)(totalLength + 1))) {
-            Serial.println("[USB] Telemetry record dropped: serialization overflow");
-          }
+          (void)usbTelemetryQueue.publish(record, (uint16_t)(totalLength + 1));
         } else {
           usbTelemetryQueue.publish(record, 0);
         }
       } else {
         usbTelemetryQueue.publish(record, 0);
       }
+      }
     }
   }
 
+#if STORAGE == STORAGE_SD
+  // The sampler itself commits this capture before it can begin another one.
+  // That makes SD the sole source for subsequent upload and prevents a RAM
+  // backlog from masquerading as durable recording. Slow SD writes therefore
+  // delay sampling; the absolute-deadline logic records skipped intervals.
+  const bool journaled = durableAvailable && journalSample(buffer);
+  if (journaled) {
+    lastJournalCommitTime = millis();
+    journalCommitSeen = true;
+    // The journal is authoritative. Make the CSV lifecycle and sample write
+    // atomic with respect to retention maintenance and recovery, but skip this
+    // optional copy if the shared SD lock is busy.
+    if (state.check(STATE_STORAGE_READY)) {
+      SDGuard csvGuard;
+      if (csvGuard) {
+        if (!fileid && powerPhase != PHASE_CONFIRMING) {
+          fileid = logger.begin();
+          if (!fileid) state.clear(STATE_STORAGE_READY);
+        }
+        if (state.check(STATE_STORAGE_READY) && fileid) {
+          logger.timestamp(buffer->timestamp);
+          buffer->serialize(logger);
+          uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
+          if (sizeKB != lastSizeKB && millis() - lastLogFlush >= LOG_FLUSH_INTERVAL_MS) {
+            logger.flush();
+            lastLogFlush = millis();
+            lastSizeKB = sizeKB;
+          }
+        }
+      }
+    }
+  } else {
+    // The live USB frame may have been emitted, but failed SD writes are not
+    // replay candidates. Account its waveform points and expose the gap.
+    accountUnjournaledWaveforms(buffer);
+    bufman.recordMissedReading();
+  }
+  bufman.free(buffer);
+#else
   if (durableAvailable) {
     bufman.publish(buffer);
   } else {
-    // USB has received the live sample, but there is no durable copy. Count
-    // the local recording gap and immediately release the one-frame handoff.
     bufman.recordMissedReading();
     bufman.free(buffer);
   }
-  lastCollectionTime = millis();
+#endif
 
 }
 
@@ -2047,11 +2156,6 @@ void process()
                                       lastOBDResponse, readVehicleVoltage(), backlogBytes,
                                       bufman.unpersistedReadings());
   if (next != powerPhase) {
-    static const char* const names[] = {"confirming", "trip", "wrap-up", "standby"};
-    Serial.print("[POWER] ");
-    Serial.print(names[powerPhase]);
-    Serial.print(" -> ");
-    Serial.println(names[next]);
     if (next == PHASE_STANDBY) {
       state.clear(STATE_WORKING);
       return;
@@ -2082,15 +2186,20 @@ void process()
   const uint32_t elapsed = xTaskGetTickCount() - deadline;
   if (elapsed >= pdMS_TO_TICKS(SAMPLE_INTERVAL_MS)) {
     bufman.recordMissedReading(elapsed / pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
-    static uint32_t lastWarning = 0;
-    if (!lastWarning || millis() - lastWarning >= 10000UL) {
-      Serial.println("[SAMPLING] Deadline missed; inspect sensor age, queue and missed-reading metrics");
-      lastWarning = millis();
-    }
     deadline = xTaskGetTickCount();
   }
   vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
   processBLE(0);
+}
+
+void accountUnjournaledWaveforms(const CBuffer* buffer)
+{
+  if (!buffer) return;
+  if (!buffer->waveformVoltageSamples && !buffer->waveformMotionSamples) return;
+  portENTER_CRITICAL(&sensorMux);
+  sensorWaveforms.noteUnjournaled(buffer->waveformVoltageSamples,
+                                  buffer->waveformMotionSamples);
+  portEXIT_CRITICAL(&sensorMux);
 }
 
 void recordSamples(void*)
@@ -2140,100 +2249,18 @@ void recordSamples(void*)
       lastStatsTime = millis();
     }
 #if STORAGE == STORAGE_SD
-    // CBuffer is only staging until a complete batch is durably journaled.
-    // A failed/unavailable journal pauses commits and uploads; staged samples
-    // remain here for an explicit storage retry, never as upload candidates.
-    static char* frameBlock = (char*)heap_caps_malloc(RECORD_BLOCK_SIZE, MALLOC_CAP_SPIRAM);
-    CBuffer* batch[RECORD_BATCH_MAX];
-    const char* frames[RECORD_BATCH_MAX];
-    uint16_t lengths[RECORD_BATCH_MAX];
-    uint8_t count = 0;
-    uint32_t used = 0;
-    const bool journalOpen = frameBlock && durableQueue.ready() && durableQueue.healthy();
+    // Completed readings are committed synchronously by collectSample(). This
+    // task only recovers storage and maintains the convenience CSV log.
+    const bool journalOpen = durableQueue.ready() && durableQueue.healthy();
     if (!durableQueue.healthy() && !journalPauseReported) {
       Serial.println("[STORAGE] SD journal unavailable; unjournaled readings are being discarded");
       journalPauseReported = true;
     }
-    if (!journalOpen) {
-      // Drain the bounded handoff queue instead of retaining an outage backlog
-      // in PSRAM. These samples have no verified SD copy and must not be sent.
-      CBuffer* buffer = bufman.getOldest(true);
-      if (!buffer) buffer = bufman.getOldest(false);
-      if (buffer) {
-        bufman.recordMissedReading();
-        bufman.free(buffer);
-      } else {
-        delay(5);
-      }
-      continue;
+    if (!journalOpen && !journalPauseReported) {
+      Serial.println("[STORAGE] SD journal unavailable; new samples are counted as missed");
+      journalPauseReported = true;
     }
-    while (count < RECORD_BATCH_MAX) {
-      CBuffer* buffer = bufman.getOldest(false);
-      if (!buffer) break;
-      if (frameBlock) {
-        CStorageRAM frame;
-        frame.init(frameBlock + used, min((uint32_t)SAMPLE_FRAME_SIZE, (uint32_t)(RECORD_BLOCK_SIZE - used)));
-        frame.timestamp(buffer->timestamp);
-        buffer->serialize(frame);
-        if (frame.overflowed()) {
-          // The block is full. This reading goes first in the next batch.
-          if (count) { bufman.restore(buffer); break; }
-          lengths[count] = 0;
-        } else {
-          frames[count] = frameBlock + used;
-          lengths[count] = frame.length();
-          used += frame.length();
-        }
-      } else {
-        lengths[count] = 0;
-      }
-      batch[count++] = buffer;
-      if (!lengths[count - 1]) break;
-    }
-    if (!count) { delay(5); continue; }
-
-    const bool journaled = journalOpen && lengths[count - 1] &&
-      durableQueue.appendBatch(frames, lengths, count);
-    if (!journaled) {
-      // Never turn a journal error into a RAM/CSV-only recording. Report every
-      // affected sample as a gap and release its volatile handoff slot.
-      bufman.recordMissedReading(count);
-      for (uint8_t i = 0; i < count; i++) bufman.free(batch[i]);
-      if (!journalPauseReported) {
-        Serial.println("[STORAGE] SD journal unavailable; unjournaled readings are being discarded");
-        journalPauseReported = true;
-      }
-      continue;
-    }
-
-    if (state.check(STATE_STORAGE_READY) && !fileid && powerPhase != PHASE_CONFIRMING) {
-      // CSV is a convenience copy; the verified binary journal remains the
-      // authoritative record and is committed before the CSV is touched.
-      fileid = logger.begin();
-      if (!fileid) {
-        state.clear(STATE_STORAGE_READY);
-        Serial.println("[STORAGE] CSV trip log unavailable; journal remains authoritative");
-      }
-    }
-    if (state.check(STATE_STORAGE_READY) && fileid) {
-      SDGuard logGuard;
-      if (logGuard) {
-        for (uint8_t i = 0; i < count; i++) {
-          logger.timestamp(batch[i]->timestamp);
-          batch[i]->serialize(logger);
-        }
-        uint16_t sizeKB = (uint16_t)(logger.size() >> 10);
-        if (sizeKB != lastSizeKB && millis() - lastLogFlush >= LOG_FLUSH_INTERVAL_MS) {
-          logger.flush();
-          lastLogFlush = millis();
-          lastSizeKB = sizeKB;
-          Serial.print("[FILE] ");
-          Serial.print(sizeKB);
-          Serial.println("KB");
-        }
-      }
-    }
-    for (uint8_t i = 0; i < count; i++) bufman.free(batch[i]);
+    delay(50);
 #else
     CBuffer* buffer = bufman.getOldest(false);
     if (!buffer) { delay(5); continue; }
@@ -2521,9 +2548,11 @@ bool initCell(bool quick = false, CFreematics::ContinueCheck continueCheck = nul
 // The collector refuses a batch whose timestamps go backwards, so a clock
 // reset always starts a new batch.
 uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,
-                         uint8_t limit, uint16_t* lastLength)
+                         uint8_t limit, uint16_t* lastLength,
+                         bool* includesCurrentBootRecord)
 {
   uint8_t count = 0;
+  if (includesCurrentBootRecord) *includesCurrentBootRecord = false;
   uint32_t previousTick = 0;
   const uint32_t started = millis();
   // Hold the (recursive) SD lock for the whole batch. Each peek() then
@@ -2550,12 +2579,15 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
       break;
     }
     previousTick = tick;
+    const bool currentBootRecord =
+      includesCurrentBootRecord && queue.isCurrentBootPosition(position);
     store.checkpoint();
     if (!store.appendRaw(frame, length)) {
       store.rollback();
       queue.rewind(position);
       break;
     }
+    if (currentBootRecord) *includesCurrentBootRecord = true;
     *lastLength = length;
     count++;
   }
@@ -2814,6 +2846,7 @@ void telemetry(void* inst)
       CBuffer* batch[HTTP_BATCH_MAX_SAMPLES];
       uint8_t batchCount = 0;
       bool replaying = false;
+      bool batchHasCurrentBootRecord = false;
       // Upload timing for the log: time since the last POST finished, and
       // time spent assembling this batch.
       static uint32_t lastPostDone = 0;
@@ -2829,12 +2862,14 @@ void telemetry(void* inst)
       if (replaying) {
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
         batchCount = buildReplayBatch(durableQueue, store, replayFrame, sizeof(replayFrame),
-                                      replayBatchLimit(isolation, batchLimit), &replayFrameLength);
+                                      replayBatchLimit(isolation, batchLimit), &replayFrameLength,
+                                      &batchHasCurrentBootRecord);
 #else
         // UDP has no HTTP batch isolation/ack protocol; send one complete
         // journal frame per datagram, still never a RAM-only sample.
         batchCount = buildReplayBatch(durableQueue, store, replayFrame, sizeof(replayFrame),
-                                      1, &replayFrameLength);
+                                      1, &replayFrameLength,
+                                      &batchHasCurrentBootRecord);
 #endif
       }
 #else
@@ -2933,6 +2968,11 @@ void telemetry(void* inst)
       }
 #endif
       if (sent) {
+#if ENABLE_OTA && STORAGE == STORAGE_SD && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+        // This signal is raised only for an acknowledged batch containing a
+        // record whose SD-journal position was created after this boot.
+        if (batchHasCurrentBootRecord) otaCurrentBootUploadAccepted = true;
+#endif
         // Free the entire batch only after the server accepts it.
 #if STORAGE == STORAGE_SD
         if (!replaying)
@@ -3111,7 +3151,7 @@ void standby()
     if (waitMotion(1000, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                    &sensorReadFailed)) break;
     if (sensorReadFailed || !otaParkedPolicy.quietPeriodComplete(millis())) {
-      Serial.println("[OTA] Parked check cancelled: continuous motion-sensor proof unavailable");
+      Serial.println("[OTA] Parked check cancelled: continuous motion or supply proof unavailable");
       continue;
     }
     // Refresh OBD state after the motion-observation interval; the first
@@ -3144,9 +3184,16 @@ void standby()
       // A single motion-threshold sample resets the one-hour quiet timer even
       // when this short poll cannot accumulate the wake-confirmation count.
       // Do not rely on waitMotion()'s per-call counter to protect an active OTA.
-      if (!otaParkedPolicy.quietPeriodComplete(millis())) {
-        if (otaParkedPolicy.motionProofCurrent(millis())) motionWake = true;
+      const uint32_t parkedCheckAt = millis();
+      if (!otaParkedPolicy.motionQuietPeriodComplete(parkedCheckAt)) {
+        if (otaParkedPolicy.motionProofCurrent(parkedCheckAt)) motionWake = true;
         else sensorFailure = true;
+        otaCancelRequested = true;
+        break;
+      }
+      if (!otaParkedPolicy.supplyQuietPeriodComplete(parkedCheckAt)) {
+        otaSupplyVoltage = readVehicleVoltage();
+        supplyUnsafe = true;
         otaCancelRequested = true;
         break;
       }
@@ -3458,8 +3505,8 @@ void processBLE(int timeout)
   int bufsize = sizeof(buf);
   int n = 0;
   if (echo) n += snprintf(buf + n, bufsize - n, "%s\r", cmd);
-  Serial.print("[BLE] ");
-  Serial.print(cmd);
+  // Commands can contain APN or Wi-Fi credentials. Never echo them to logs.
+  Serial.println("[BLE] command received");
   if (!strcmp(cmd, "UPTIME") || !strcmp(cmd, "TICK")) {
     n += snprintf(buf + n, bufsize - n, "%lu", millis());
   } else if (!strcmp(cmd, "BATT")) {
@@ -3591,6 +3638,50 @@ void processBLE(int timeout)
 #endif
 }
 
+#if ENABLE_OTA
+void verifyOtaFirstUpload(void*)
+{
+  for (;;) {
+#if STORAGE == STORAGE_SD
+    const bool storageHealthy = durableQueue.healthy();
+#else
+    const bool storageHealthy = false;
+#endif
+    const bool motionSensorReady = !ENABLE_MEMS || state.check(STATE_MEMS_READY);
+    const bool endpointReady = telemetryEndpointConfigured();
+    const bool credentialReady = telemetryCredentialPersisted();
+    const OTAFirstUploadPolicy::Decision decision = otaFirstUploadPolicy.observe(
+        millis(), otaCurrentBootUploadAccepted, storageHealthy,
+        motionSensorReady, endpointReady, credentialReady);
+
+    if (decision == OTAFirstUploadPolicy::kRollback) {
+      Serial.println("[OTA] No accepted current-boot upload before validation deadline; rolling back");
+      rollbackPendingOtaImage();
+      ESP.restart();
+      for (;;) delay(1000);
+    }
+    if (decision == OTAFirstUploadPolicy::kConfirm) {
+#if STORAGE == STORAGE_SD
+      const bool storageStillHealthy = durableQueue.healthy();
+#else
+      const bool storageStillHealthy = false;
+#endif
+      if (confirmPendingOtaImage(storageStillHealthy,
+              !ENABLE_MEMS || state.check(STATE_MEMS_READY),
+              telemetryEndpointConfigured(), telemetryCredentialPersisted())) {
+        vTaskDelete(nullptr);
+        return;
+      }
+      Serial.println("[OTA] Could not confirm after accepted current-boot upload; rolling back");
+      rollbackPendingOtaImage();
+      ESP.restart();
+      for (;;) delay(1000);
+    }
+    delay(100);
+  }
+}
+#endif
+
 void setup()
 {
   // The sampler runs in this Arduino loop task. On 30 September a 250 ms slot
@@ -3602,9 +3693,16 @@ void setup()
 
   // Initialize USB serial before NVS so a damaged settings partition can be
   // reported without erasing device credentials or aborting local logging.
-  // The richest supported frame is about 5 KiB; 115200 baud cannot sustain
-  // that at the 250 ms sample cadence, so use the CP210x-supported 460800 rate.
+  // A full FT1 frame must fit in the UART TX ring. HardwareSerial holds its
+  // shared UART mutex while enqueueing a write; without this ring, it holds
+  // the mutex while feeding the FIFO at wire speed and can delay journal or
+  // upload-task diagnostics. No hardware flow control is enabled, so laptop
+  // receive backpressure cannot stop the UART from draining this bounded ring.
+  Serial.setTxBufferSize(USB_TELEMETRY_TX_BUFFER_SIZE);
   Serial.begin(460800);
+  usbTelemetrySerialReady = (bool)Serial;
+  if (!usbTelemetrySerialReady)
+    Serial.println("[USB] UART TX ring unavailable; passive telemetry disabled");
 
   // Initialize NVS
   nvs = 0;
@@ -3768,8 +3866,19 @@ if (!state.check(STATE_MEMS_READY)) do {
     ESP.restart();
     for (;;) delay(1000);
   }
+  if (pendingOtaImageNeedsTelemetry()) {
+    otaFirstUploadPolicy.begin(millis(), true);
+    if (!otaBootValidationTask.create(verifyOtaFirstUpload,
+            "ota-first-upload", 1, 4096)) {
+      Serial.println("[OTA] CRITICAL: first-upload validation task could not start; rolling back");
+      rollbackPendingOtaImage();
+      ESP.restart();
+      for (;;) delay(1000);
+    }
+  }
 #endif
-  if (sys.devType > 12 && !usbTelemetryTask.create(streamUsbTelemetry, "usb-telemetry", 1, 3072)) {
+  if (sys.devType > 12 && usbTelemetrySerialReady &&
+      !usbTelemetryTask.create(streamUsbTelemetry, "usb-telemetry", 1, 3072)) {
     Serial.println("[CRITICAL] USB telemetry task creation failed; recording and uploads continue");
   }
   if (!coprocessorMutex ||

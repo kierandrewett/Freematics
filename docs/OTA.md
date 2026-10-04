@@ -11,9 +11,11 @@ are refused.
 No wall-clock window is used. The 60-minute timer starts only after a valid
 MEMS sample and is earned by continuous successful samples; movement, an
 invalid sample, or a sampling gap over 1.5 seconds restarts or invalidates the
-proof. A failed motion read or a motion-threshold sample during an OTA transfer
-cancels the transfer. Downloading and validating the inactive image never
-changes the boot selection. In standby, the firmware verifies the exact
+proof. The passive Model B input-voltage sample must also remain present and
+within the 12.2–12.9 V resting range throughout the same hour; a missing or
+weak sample, long gap, or elevated voltage restarts that proof. Loss of either
+proof during a download cancels the transfer. Downloading and validating the
+inactive image never changes the boot selection. In standby, the firmware verifies the exact
 inactive partition and image digest, journals and reads back a pending identity
 containing its partition address/type/subtype, size, and digest, repeats the
 fresh motion, OBD speed/RPM, Model B supply, storage, and credential checks,
@@ -23,7 +25,8 @@ If preparation or a final check fails, the candidate is discarded without
 changing the boot selection. Model B supply must remain in
 the conservative resting range (12.2 V through 12.9 V); a missing, weak, or
 elevated reading cancels the transfer because it does not prove the car is
-off. The 12.2 V lower limit is a conservative firmware threshold; validate
+off. This is an inference from continuous motion/electrical evidence, not a
+direct ignition-state sensor. The 12.2 V lower limit is a conservative firmware threshold; validate
 Model B ADC accuracy and modem-load sag on hardware before enabling OTA.
 After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
@@ -63,12 +66,16 @@ captures the immutable release tag from GitHub's `latest` redirect, and then
 downloads both assets from that same tag. It streams the image to the inactive
 slot, checks the digest, and validates the ESP image. Boot selection is a
 separate final standby operation, not part of the download task. On first boot,
-firmware verifies that the recorded partition
-identity matches the running partition and hashes the running image before it
-can accept the image. Acceptance also requires storage, motion-sensor,
-persistent endpoint configuration, and credential initialization; the ESP32 bootloader rolls back a failed or
-power-cut first boot. A reset before boot selection leaves the old slot active;
-an orphaned preparation record is cleared on the next normal boot.
+firmware verifies that the recorded partition identity matches the running
+partition and hashes the running image, but leaves it in `PENDING_VERIFY`. A
+separate supervisor gives it 15 minutes to journal a current-boot sample to SD
+and receive an exact successful HTTPS collector acknowledgement for a batch
+containing that sample. Replaying older backlog, connecting to the server, or
+receiving an unverified HTTP 200 is not enough. Only then—while SD,
+motion-sensor, persistent endpoint, and credential checks still pass—is the
+image confirmed. If no qualifying upload arrives before the deadline, firmware
+requests rollback and reboots. A reset before boot selection leaves the old slot
+active; an orphaned preparation record is cleared on the next normal boot.
 
 Every OTA image embeds `FREEMATICS_RELEASE_VERSION=major.minor.patch`. Before
 staging, the running firmware requires a valid candidate version strictly
@@ -92,7 +99,17 @@ endpoint is valid. OTA requires that marker and the persisted endpoint as well
 as a committed-and-read-back token. The NVS copy is not
 hardware-encrypted by this project; physical flash extraction remains in the
 threat model. The migration image embeds the token and must never be published
-to GitHub. To build a public OTA image, explicitly clear the inherited secret:
+to GitHub. For a public OTA image, explicitly clear the inherited secret:
+
+Private build tokens are written to an owner-only generated header under the
+per-environment `.pio/build` directory, not passed as compiler command-line
+defines. This keeps verbose compiler output from disclosing the token. The
+regular production ELF and firmware image still intentionally contain the
+token and remain private build products; only the verified token-free OTA
+package may be published. BLE command contents are also omitted from serial
+logs because configuration commands can carry credentials.
+
+Build command:
 
 The private bootstrap also records a `private_cfg_flags` manifest describing
 which APN, SIM, and Wi-Fi fields were configured. A tokenless OTA image requires
@@ -109,9 +126,12 @@ FREEMATICS_TOKEN= FREEMATICS_OTA_RELEASE=1 PRODUCTION_BUILD=1 \
 ```
 
 This validates the private production configuration but generates a separate
-allowlisted compile header for the OTA image. Feature, storage, and transport
-mode remain compatible; server host/path, APN, and authentication values are
-omitted from the public image and loaded from NVS. The release build is
+allowlisted compile header for the OTA image. Storage and transport mode remain
+compatible; server host/path, APN, authentication values, and local HTTP access
+are excluded from the public image. Private network identity is loaded from
+NVS. HTTPD remains disabled in release images because this firmware's local AP
+uses built-in default credentials; shipping them would make that service
+publicly accessible. The release build is
 restricted to the OTA-enabled PlatformIO environment, fails if a token is
 present, and emits a non-secret release-mode marker. The local packager
 requires both that marker and the token-absent marker, scans for configured
@@ -144,18 +164,29 @@ the `.pio` build directory: the regular production image intentionally embeds
 the telemetry token, and other build outputs may contain private build data.
 The release-upload boundary is `tools/publish_ota_release.py`. It revalidates
 the exact two-file allowlist, token-free build markers, configured credentials,
-file modes, matching sidecar, and that the existing release tag matches the
-firmware's embedded version immediately before calling `gh`. Before upload it
+file modes, matching sidecar, and that the Git tag resolves to the firmware's
+embedded source commit and version before calling `gh`. Before upload it
 also queries the target release and fails closed if the asset inventory cannot
 be read or is not empty, then revalidates the files immediately before upload.
-This prevents safe files being appended to a release
-that already contains unknown or credential-bearing artifacts. It never uploads
+It snapshots the verified image and checksum into a private temporary directory,
+verifies that snapshot, and resolves the tag to the embedded source commit again
+immediately before upload. This prevents caller-directory changes after
+verification from changing the bytes handed to `gh`, and detects a tag move
+during preflight. It prevents safe files being appended to a release that
+already contains unknown or credential-bearing artifacts. It never uploads
 logs, source archives, or build directories. It requires an existing release
 tag and never clobbers assets. Use it instead of uploading files manually:
 
 ```sh
 python3 tools/publish_ota_release.py v1.0.1 .pio/ota-release-v1.0.1
 ```
+
+For production releases, enable GitHub release immutability for this repository
+and use a draft release: GitHub locks its tag and assets when the draft is
+published. Before publishing the draft, confirm its tag still resolves to the
+embedded source commit. The local publisher checks the tag immediately before
+upload, but GitHub does not offer an atomic compare-and-upload operation through
+`gh release upload`.
 
 The device downloads the firmware and its SHA-256 sidecar from the same GitHub
 release over HTTPS. The checksum detects transfer corruption or a mismatched
@@ -182,6 +213,12 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_parked_policy.cpp -o /tmp/test_ota_parked_policy
 /tmp/test_ota_parked_policy
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_first_upload_policy.cpp -o /tmp/test_ota_first_upload_policy
+/tmp/test_ota_first_upload_policy
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_collector_ack.cpp -o /tmp/test_ota_collector_ack
+/tmp/test_ota_collector_ack
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_sha256_sidecar.cpp -o /tmp/test_ota_sha256_sidecar
 /tmp/test_ota_sha256_sidecar

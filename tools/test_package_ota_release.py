@@ -301,6 +301,23 @@ class PackageOtaReleaseTests(unittest.TestCase):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
+    def test_scans_bare_apn_key_in_private_env(self):
+        apn = "fixture-private-carrier-apn"
+        (self.root / ".env").write_text(f"APN={apn}\n", encoding="utf-8")
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            "#endif\n",
+            encoding="utf-8",
+        )
+        self.firmware.write_bytes(self.payload + apn.encode("ascii"))
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
     def test_scans_credential_fields_even_when_build_loader_ignores_them(self):
         secret = "fixture-apn-password-from-private-config"
         (self.root / "local_config.h").write_text(

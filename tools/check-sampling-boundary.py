@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard the firmware sampling boundary against synchronous sensor/storage I/O."""
+"""Guard the sampling boundary and verify overloads are visible, not fabricated."""
 from pathlib import Path
 import os
 import re
@@ -25,8 +25,22 @@ signatures += ['bool processGPS(CBuffer* buffer)', 'void processMEMS(CBuffer* bu
 if 'void emitOBDSnapshot(CBuffer* buffer)' in source:
     signatures += ['void emitOBDSnapshot(CBuffer* buffer)']
 body = '\n'.join(function(s) for s in signatures)
+sampler_functions = '\n'.join(
+    function(signature)
+    for signature in ('void process()', 'void collectSample()')
+    if signature in source
+)
+assert not re.search(r'\bSerial\.(?:print|println|printf|write)\s*\(', sampler_functions), \
+    'Fixed-cadence sampling must not wait on debug/telemetry serial output'
+tx_ring_setup = source.index('Serial.setTxBufferSize(USB_TELEMETRY_TX_BUFFER_SIZE)')
+serial_begin = source.index('Serial.begin(460800)')
+assert tx_ring_setup < serial_begin, 'USB TX ring must be configured before the UART starts'
+task_create = source.index('usbTelemetryTask.create')
+task_guard = source.rfind('if (sys.devType', 0, task_create)
+assert 'usbTelemetrySerialReady &&' in source[task_guard:task_create], \
+    'USB streaming must stay disabled if its bounded TX ring failed to initialize'
 forbidden = [r'obd\.(?:readPID|init|getVoltage|readDTC)', r'processOBD\(',
-             r'logger\.', r'durableQueue\.append', r'capturePassiveCAN\(',
+             r'durableQueue\.append', r'capturePassiveCAN\(',
              r'sys\.gps(?:GetData|End|Begin)', r'nvs_(?:commit|set)', r'durableQueue\.pendingBytes', r'initGPS\(',
              r'cell\.getLocation', r'STATIONARY_TIME_TABLE', r'dataInterval\s*=\s*dataIntervals']
 failures = [p for p in forbidden if re.search(p, body)]
@@ -41,7 +55,7 @@ assert re.search(r'if \(next == PHASE_STANDBY\) \{\s*state\.clear\(STATE_WORKING
     'Sampler may stop only through nextPowerPhase()'
 assert 'if (powerPhase == PHASE_WRAP_UP)' in process_body, 'Sampler may pause only in wrap-up'
 assert process_body.count('STATE_WORKING') == 1, 'Unexpected extra sampler state change'
-print('PASS: sampler boundary excludes OBD/GNSS acquisition, reconnect, storage and stationary throttling')
+print('PASS: sampler boundary excludes blocking OBD/GNSS acquisition and stationary throttling')
 
 # Run the actual snapshot serializer, queue handoff and absolute scheduler with
 # deterministic host I/O. This checks much more than the source boundary guard.
@@ -105,6 +119,7 @@ code += '\n'.join(line for line in config.splitlines() if line.startswith('#defi
 code += storage_header[storage_header.index('class CStorage {'):storage_header.index('class FileLogger')]
 code += client_header[client_header.index('typedef struct {'):client_header.index('class TeleClient\n')]
 code += '#include "sensorwaveform.h"\n'
+code += '#include "usbtelemetry_metadata.h"\n'
 code += '''
 SensorWaveforms sensorWaveforms;
 bool collectionBlocked=false;
@@ -157,6 +172,7 @@ code += 'float readVehicleVoltage() { return 14.2f; }\n'
 code += 'struct { uint32_t cachedPendingBytes() { return 0; } } durableQueue;\n'
 code += 'uint8_t nextPhase=PHASE_TRIP;\n'
 code += 'uint8_t nextPowerPhase(uint8_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, float, uint32_t, uint16_t) { return nextPhase; }\n'
+code += function('void accountUnjournaledWaveforms(const CBuffer* buffer)') + '\n'
 code += function('void process()') + '\n'
 code += r'''
 int main(int argc, char** argv) {
@@ -248,9 +264,20 @@ int main(int argc, char** argv) {
   auto drain=[&](SensorWaveforms& waves) {
     rich.purge(); waves.emit(&rich); return serialise(rich);
   };
+  const float acceleration[3]={0,0,1}, gyro[3]={0,0,0};
+  for(unsigned i=0;i<3;++i) assert(sensorWaveforms.recordVoltage(10+i*20,14));
+  for(unsigned i=0;i<2;++i) assert(sensorWaveforms.recordMotion(11+i*20,acceleration,gyro));
+  rich.purge(); sensorWaveforms.emit(&rich); // points enter a volatile CBuffer
+  assert(rich.waveformVoltageSamples==3 && rich.waveformMotionSamples==2);
+  // Model DurableQueue::appendBatch failure: the frame is released, and the
+  // next journalable sample must carry loss totals for the emitted points.
+  accountUnjournaledWaveforms(&rich);
+  const auto afterAppendFailure=drain(sensorWaveforms);
+  assert(occurrences(afterAppendFailure,",A0:")==0 && occurrences(afterAppendFailure,",A1:")==0);
+  assert(afterAppendFailure.find("A4:3;2;0;0,")!=std::string::npos);
+  std::cout<<"PASS: failed SD append counts emitted voltage/motion points in the next frame\n";
   assert(occurrences(drain(waveform),",A0:")==0); // consumed exactly once
   SensorWaveforms wrap;
-  const float acceleration[3]={0,0,1}, gyro[3]={0,0,0};
   for(uint32_t stamp: {0xfffffff0u,0u,20u}) {
     assert(wrap.recordVoltage(stamp,14));
     assert(wrap.recordMotion(stamp,acceleration,gyro));

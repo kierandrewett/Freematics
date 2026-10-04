@@ -383,7 +383,7 @@ public:
         header += "\n" + extract_function(client_source, "CBuffer* CBufferManager::getNewest()")
         (build / "queue_scenario.h").write_text(header + "\n")
         # Byte-identical production files; only hardware headers and POSIX calls are substituted.
-        for name in ("telequeue.cpp", "telequeue.h"):
+        for name in ("telequeue.cpp", "telequeue.h", "ota_first_upload_policy.h"):
             shutil.copyfile(ROOT / name, build / name)
         (build / "config.h").write_text("#define STORAGE_SD 1\n#define STORAGE 1\n#define SAMPLE_FRAME_SIZE 8192\n")
         # Counts top-level acquisitions: the ones that can wait behind another task.
@@ -420,7 +420,7 @@ public:
         # The production replay batch builder and acknowledgement policy.
         firmware = (ROOT / "telelogger.ino").read_text()
         wire += '#include "sdaccess.h"\n#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
-        wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength)") + "\n"
+        wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength,\n                         bool* includesCurrentBootRecord)") + "\n"
         wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n#define HTTP_BATCH_MIN_SAMPLES 4\n#define HTTP_BATCH_GROW_STEP 4\n"
         start = firmware.index("struct ReplayIsolation {")
         wire += firmware[start:firmware.index("};", start) + 2] + "\n"
@@ -471,7 +471,8 @@ class MEMS_I2C {};
     sources = [client, ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp",
                ROOT / "lib/FreematicsPlus/FreematicsOBD.h", ROOT / "lib/FreematicsPlus/FreematicsBase.h",
                ROOT / "lib/FreematicsPlus/utility/OBD.h", HERE / "Arduino.h",
-               ROOT / "telequeue.cpp", ROOT / "telequeue.h", ROOT / "telestore.cpp", HERE / "SD.h",
+               ROOT / "telequeue.cpp", ROOT / "telequeue.h", ROOT / "ota_first_upload_policy.h",
+               ROOT / "telestore.cpp", HERE / "SD.h",
                ROOT / "lib/FreematicsPlus/FreematicsMEMS.cpp", ROOT / "lib/FreematicsPlus/FreematicsMEMS.h",
                ROOT / "lib/FreematicsPlus/utility/ICM_42627.h", HERE / "mems_scenarios.cpp",
                HERE / "journal_scenarios.cpp", HERE / "scenarios.cpp", Path(__file__).resolve()]

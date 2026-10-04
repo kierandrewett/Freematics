@@ -2,11 +2,17 @@
 #include <ctime>
 #include <iostream>
 #include <string>
+#include <type_traits>
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
 #include "SD.h"
 #include "telequeue.h"
 #include "wire_scenario.h"
+
+static_assert(!std::is_copy_constructible<DurableQueue>::value,
+              "DurableQueue owns its read-ahead cache and cannot be copied");
+static_assert(!std::is_copy_assignable<DurableQueue>::value,
+              "DurableQueue owns its read-ahead cache and cannot be copy-assigned");
 
 void report(const char* name, bool passed, bool fault, double observed);
 inline time_t cardClock = 0;
@@ -87,7 +93,7 @@ void runJournalScenarios()
     okay = okay && peek(tornRestart).empty() && !tornRestart.healthy() && !append(tornRestart, second);
     report("torn append preserves prefix and stops at damage", okay, false, tornRestart.pendingBytes());
     okay = tornRestart.recover() && append(tornRestart, second) && peek(tornRestart) == second;
-    report("torn tail repair accepts retained RAM reading", okay, true, tornRestart.pendingBytes());
+    report("torn tail repair permits a new journal append", okay, true, tornRestart.pendingBytes());
 
     resetCard();
     DurableQueue corrupt;
@@ -190,7 +196,8 @@ void runJournalScenarios()
         static char scratch[8192];
         uint16_t lastLength = 0;
         const unsigned before = sdTopLocks;
-        const uint8_t built = okay ? buildReplayBatch(lockQueue, wire, scratch, sizeof(scratch), 24, &lastLength) : 0;
+        const uint8_t built = okay ? buildReplayBatch(lockQueue, wire, scratch, sizeof(scratch), 24,
+                                                       &lastLength, nullptr) : 0;
         const unsigned locks = sdTopLocks - before;
         report("upload batch build takes the SD lock once", built == 24 && locks == 1 && sdLockDepth == 0, false, locks);
     }
@@ -334,7 +341,8 @@ int runRebootDrive(bool strictServer)
     unsigned frames = 0, batches = 0;
     for (unsigned attempt = 0; attempt < 200; attempt++) {
         CStorageRAM wire;
-        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame), replayBatchLimit(isolation, 24), &lastLength);
+        const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame),
+                                                replayBatchLimit(isolation, 24), &lastLength, nullptr);
         if (!count) break;
         wire.m_cache[wire.m_cacheBytes] = 0;
         std::cout << "{\"event\":\"upload\",\"packet\":\"" << wire.m_cache << "\"}" << std::endl;
@@ -390,7 +398,7 @@ int runWaveformDrive()
     for (; attempts < 4; attempts++) {
         CStorageRAM wire;
         const uint8_t count = buildReplayBatch(upload, wire, frame, sizeof(frame),
-                                                replayBatchLimit(isolation, 24), &lastLength);
+                                                replayBatchLimit(isolation, 24), &lastLength, nullptr);
         if (!count) break;
         wire.m_cache[wire.m_cacheBytes] = 0;
         std::cout << "{\"event\":\"waveform-upload\",\"packet\":\"" << wire.m_cache << "\"}" << std::endl;

@@ -88,6 +88,27 @@ time range. A `MAX(numeric_value)` is not a latest value. Use the highest
 sequence in the selected range when a panel says `Latest`, and use `MIN`,
 `AVG`, or `MAX` only when the panel names that aggregate.
 
+The raw Model B supply-voltage chart reads repeated `0x0A0` values from
+`sample_field`, not the one-value-per-PID projection. It aligns each uint32
+device acquisition tick to the parent sample's stored display timeline using a
+signed wrap-safe offset; collector receipt time is never used. A null point is
+inserted when adjacent archived voltage observations are more than 40 ms
+apart, making a persisted-observation gap visible without interpolation. The
+threshold is twice the nominal 20 ms capture interval. Such a gap proves only
+that the archived waveform has a wider interval; it does not alone attribute
+the cause to sampling, bounded buffering, SD journalling, or transport. Use the
+raw archive and per-boot waveform loss counters for that distinction. Trips
+without waveform records stay empty rather than being filled from the slower
+PID snapshot.
+
+The adjacent loss-counter chart reads the four cumulative values from `0x0A4`
+at each archived sample's display-timeline time. The dropped-voltage and
+dropped-motion counters combine bounded-buffer overflow with waveform points
+released without a verified durable append; they cannot distinguish those
+causes. Invalid sensor readings are separate counters. Values may reset after
+a device reboot, and a trip with no counter reports is unavailable rather than
+zero loss.
+
 Do not turn absent PIDs into zero. Keep `numeric_value` NULL for non-numeric
 or unavailable fields, retain `text_value` for vectors and codes, and show
 unsupported or stale data as unavailable. Derived fuel rate and economy must

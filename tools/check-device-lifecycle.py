@@ -81,6 +81,7 @@ void xSemaphoreGive(SemaphoreStub*) {}
 bool sensorOK = true;
 bool loginReplies = false;
 bool dataReplies = false, collectReplies = false;
+bool rolloverTest = false;
 bool storageHealthy = true, storageCheckComplete = true;
 bool recoverStorage = false, enterStandby = false;
 uint32_t firstToneAt = 0, recoveryAt = 0;
@@ -96,6 +97,8 @@ struct VehicleSignals { Reading rpm; Reading speed; uint32_t lastResponse; uint8
 struct GPS_DATA { uint32_t ts; float speed,lat,lng; byte sat,hdop; } gpsSnapshot;
 
 uint32_t lastCollectionTime = 0;
+uint32_t lastJournalCommitTime = 0;
+bool journalCommitSeen = false;
 struct Finished {};
 uint32_t millis() { return tick; }
 void onTick();
@@ -123,6 +126,7 @@ int analogRead(int) { return std::lround(voltage * 4095 / 45); }
 float accBias[3]={0,0,1}, accSum[3]={0}; uint8_t accCount=0;
 struct Client { uint32_t lastSyncTime=0, lastDataSyncTime=0; } teleClient;
 void onTick() {
+ if (rolloverTest && tick < 20000) limit=20000;
  if (motionMode==1) moving=tick<10000 || tick>=30000;
  if (motionMode==2) moving=tick<10000 || tick>=120000;
  if (motionMode==3 && tick>=10000) speedKnown=false;
@@ -133,8 +137,8 @@ void onTick() {
  vehicleSignals.speed={PID_SPEED,moving ? 20.f : 0.f,speedKnown ? tick : 0};
  if (loginReplies) teleClient.lastSyncTime=tick;
  if (dataReplies) teleClient.lastDataSyncTime=tick;
- if (collectReplies) lastCollectionTime=tick;
- if (recoverStorage && tick>=12000) {storageHealthy=true; lastCollectionTime=tick;}
+ if (collectReplies) {lastCollectionTime=tick; lastJournalCommitTime=tick; journalCommitSeen=true;}
+ if (recoverStorage && tick>=12000) {storageHealthy=true; lastCollectionTime=tick; lastJournalCommitTime=tick; journalCommitSeen=true;}
  if (enterStandby && tick>=8000) state.flags=STATE_STANDBY;
 }
 void beepTone(unsigned frequency, int duration) {
@@ -327,6 +331,16 @@ int main(int argc, char** argv) {
    std::cout<<scenario<<": restarted="<<restarted<<" at_ms="<<restartAt<<" tones="<<tones<<" "<<(pass?"PASS":"FAIL")<<"\n";
    return !pass;
  }
+ if(scenario=="journal-rollover") {
+   state.flags=STATE_WORKING|STATE_NET_READY|STATE_CELL_CONNECTED;
+   moving=true; tick=UINT32_MAX-500; rolloverTest=true; limit=UINT32_MAX;
+   dataReplies=true; collectReplies=true; onTick();
+   storageHealthy=true; storageCheckComplete=true;
+   try {statusSignals(nullptr);} catch(Finished&) {}
+   bool pass=journalCommitSeen && tones==0;
+   std::cout<<scenario<<": commit_at="<<lastJournalCommitTime<<" tones="<<tones<<" "
+     <<(pass?"PASS":"FAIL")<<"\n"; return !pass;
+ }
  if(scenario=="login-only" || scenario=="standby-quiet") {
    state.flags=scenario=="login-only" ? STATE_WORKING|STATE_NET_READY|STATE_WIFI_CONNECTED : STATE_STANDBY;
    moving=scenario=="login-only"; onTick();
@@ -361,7 +375,7 @@ with tempfile.TemporaryDirectory(prefix="freematics-lifecycle-") as directory:
                      "login-only", "standby-quiet", "phase-false-wake", "phase-real-wake", "phase-red-light",
                      "phase-ignition-off", "phase-ecu-dropout-charging", "phase-wrap-up", "phase-wrap-up-resume",
                      "phase-bench", "phase-no-obd", "phase-clock-rollover", "charging-edge", "batch-adapt",
-                     "sampler-stall", "wrap-up-pause", "low-battery-motion", "low-battery-start", "low-battery-dip", "sd-fault", "recording-stall",
+                     "sampler-stall", "wrap-up-pause", "low-battery-motion", "low-battery-start", "low-battery-dip", "journal-rollover", "sd-fault", "recording-stall",
                      "startup-stall", "recording-recovery", "fault-standby", "healthy-recorder"):
         failures += subprocess.run([str(binary), scenario], check=False).returncode
     # Moving recording failures remain audible without server alerts or POST.
