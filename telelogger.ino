@@ -3049,7 +3049,10 @@ OTAParkedPolicy::Denial finalOtaParkedCheck()
   OTAParkedPolicy::Observation observation = {};
   observation.durableStorageHealthy = false;
 #if STORAGE == STORAGE_SD
-  observation.durableStorageHealthy = durableQueue.healthy();
+  // This check is called by the standby owner, after logger shutdown and while
+  // the telemetry owner is parked. Prove current filesystem write/readback,
+  // rather than trusting the journal's cached mount/append state.
+  observation.durableStorageHealthy = durableQueue.probeStorage();
 #endif
   observation.telemetryEndpointConfigured = telemetryEndpointConfigured();
   observation.telemetryCredentialPersisted = telemetryCredentialPersisted();
@@ -3087,9 +3090,6 @@ void standby()
   xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
 #if ENABLE_OTA
   bool otaStorageReadyAtPark = false;
-#if STORAGE == STORAGE_SD
-  otaStorageReadyAtPark = durableQueue.healthy();
-#endif
 #endif
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
@@ -3134,9 +3134,23 @@ void standby()
                    &sensorReadFailed)) break;
     const uint32_t now = millis();
     if ((int32_t)(now - otaNextCheckTime) < 0) continue;
+    if (!telemetryParked) {
+      otaNextCheckTime = now + 1000UL;
+      continue;
+    }
     otaNextCheckTime = now + OTA_CHECK_INTERVAL_MS;
 
-    if (!otaStorageReadyAtPark || !state.check(STATE_MEMS_READY) || sys.devType <= 12) {
+#if STORAGE == STORAGE_SD
+    // Do not probe while the telemetry owner may still be draining the
+    // journal. Once parked, all other SD users are quiescent.
+    otaStorageReadyAtPark = telemetryParked && durableQueue.probeStorage();
+#endif
+    if (!otaStorageReadyAtPark) {
+      otaNextCheckTime = now + 60000UL;
+      Serial.println("[OTA] Parked check deferred: fresh SD write/flush/readback/cleanup probe failed");
+      continue;
+    }
+    if (!state.check(STATE_MEMS_READY) || sys.devType <= 12) {
       Serial.println("[OTA] Parked check skipped: required storage, motion sensor or Model B unavailable");
       continue;
     }
@@ -3166,6 +3180,7 @@ void standby()
     otaCancelRequested = false;
     otaAttemptDone = false;
     otaCheckRequested = true;
+    uint32_t otaNextStorageProbeAt = millis();
     bool motionWake = false;
     bool sensorFailure = false;
     bool supplyUnsafe = false;
@@ -3198,7 +3213,12 @@ void standby()
         break;
       }
 #if STORAGE == STORAGE_SD
-      if (!durableQueue.healthy()) {
+      const bool probeStorageNow =
+          (int32_t)(parkedCheckAt - otaNextStorageProbeAt) >= 0;
+      if (probeStorageNow) {
+        otaNextStorageProbeAt = parkedCheckAt + 10000UL;
+      }
+      if (probeStorageNow && !durableQueue.probeStorage()) {
         storageUnsafe = true;
         otaCancelRequested = true;
         break;
@@ -3856,7 +3876,9 @@ if (!state.check(STATE_MEMS_READY)) do {
   // tasks. A rollback failure must never fall through into normal operation.
   bool otaStorageReady = false;
 #if STORAGE == STORAGE_SD
-  otaStorageReady = durableQueue.healthy();
+  // No recorder/uploader tasks exist yet, so startup can establish fresh SD
+  // write, flush, readback, and cleanup capability before accepting an image.
+  otaStorageReady = durableQueue.probeStorage();
 #endif
   const bool otaMotionReady = !ENABLE_MEMS || state.check(STATE_MEMS_READY);
   const bool otaEndpointReady = telemetryEndpointConfigured();

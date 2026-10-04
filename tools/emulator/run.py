@@ -399,8 +399,8 @@ public:
             shutil.copyfile(ROOT / name, build / name)
         (build / "config.h").write_text("#define STORAGE_SD 1\n#define STORAGE 1\n#define SAMPLE_FRAME_SIZE 8192\n")
         # Counts top-level acquisitions: the ones that can wait behind another task.
-        (build / "sdaccess.h").write_text("#pragma once\ninline unsigned sdTopLocks = 0;\ninline int sdLockDepth = 0;\n"
-                                          "inline bool lockSD() { if (sdLockDepth++ == 0) sdTopLocks++; return true; }\n"
+        (build / "sdaccess.h").write_text("#pragma once\ninline unsigned sdTopLocks = 0;\ninline int sdLockDepth = 0; inline int sdLockFailures = 0;\n"
+                                          "inline bool lockSD() { if (sdLockFailures) { --sdLockFailures; return false; } if (sdLockDepth++ == 0) sdTopLocks++; return true; }\n"
                                           "inline void unlockSD() { sdLockDepth--; }\n")
         (build / "freertos").mkdir()
         for name in ("FreeRTOS.h", "semphr.h"):
@@ -464,7 +464,7 @@ class MEMS_I2C {};
                    str(HERE / "scenarios.cpp"), str(ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp"),
                    str(HERE / "journal_scenarios.cpp"), str(build / "telequeue.cpp"),
                    str(HERE / "mems_scenarios.cpp"),
-                   "-Wl,--wrap=open,--wrap=close,--wrap=time",
+                   "-Wl,--wrap=open,--wrap=write,--wrap=fsync,--wrap=pread,--wrap=unlink,--wrap=close,--wrap=time",
                    "-o", str(executable)]
         if args.sanitize:
             command[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]

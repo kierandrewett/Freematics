@@ -20,6 +20,9 @@ inline int64_t cardWriteBudget = -1;
 inline int64_t cardReadBudget = -1;
 inline int cardRenameBudget = -1;
 inline bool cardResetAfterRename = false;
+inline bool cardProbeOpenFails = false;
+inline bool cardProbeFlushFails = false;
+inline bool cardProbeRemoveFails = false;
 // Counts File opens, so scenarios can measure SD transactions per reading.
 inline unsigned cardOpens = 0;
 

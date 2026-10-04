@@ -1,8 +1,11 @@
 #include <cerrno>
 #include <ctime>
+#include <fcntl.h>
 #include <iostream>
+#include <map>
 #include <string>
 #include <type_traits>
+#include <unistd.h>
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
 #include "SD.h"
@@ -16,17 +19,81 @@ static_assert(!std::is_copy_assignable<DurableQueue>::value,
 
 void report(const char* name, bool passed, bool fault, double observed);
 inline time_t cardClock = 0;
+struct ProbeDescriptor { std::string path; size_t position; };
+static std::map<int, ProbeDescriptor> probeDescriptors;
+static int nextProbeDescriptor = 501;
 
-// Wrap only the journal's POSIX creation and clock calls, not the production code.
-extern "C" int __wrap_open(const char* path, int, ...)
+// Wrap journal/probe POSIX calls and clock reads, not production queue logic.
+extern "C" int __wrap_open(const char* path, int flags, ...)
 {
+    if (!strncmp(path, "/sd/OTA", 7)) {
+        if (!cardOnline || cardProbeOpenFails) { errno = EIO; return -1; }
+        const char* name = path + 3;
+        if (flags & O_CREAT) {
+            if (SD.exists(name)) { errno = EEXIST; return -1; }
+            cardFiles[name] = std::make_shared<std::vector<uint8_t>>();
+        } else if (!SD.exists(name)) {
+            errno = ENOENT;
+            return -1;
+        }
+        const int descriptor = nextProbeDescriptor++;
+        probeDescriptors[descriptor] = {name, 0};
+        return descriptor;
+    }
     if (!cardOnline || strncmp(path, "/sd/", 4)) { errno = EIO; return -1; }
     const char* name = path + 3;
     if (SD.exists(name)) { errno = EEXIST; return -1; }
     cardFiles[name] = std::make_shared<std::vector<uint8_t>>();
     return 500;
 }
-extern "C" int __wrap_close(int) { return 0; }
+extern "C" ssize_t __wrap_write(int descriptor, const void* data, size_t length)
+{
+    auto found = probeDescriptors.find(descriptor);
+    if (found == probeDescriptors.end()) return -1;
+    auto bytes = cardFiles.at(found->second.path);
+    size_t count = length;
+    if (cardWriteBudget >= 0) {
+        count = std::min(count, static_cast<size_t>(cardWriteBudget));
+        cardWriteBudget -= count;
+    }
+    bytes->resize(std::max(bytes->size(), found->second.position + count));
+    memcpy(bytes->data() + found->second.position, data, count);
+    found->second.position += count;
+    return count;
+}
+extern "C" int __wrap_fsync(int descriptor)
+{
+    if (probeDescriptors.count(descriptor)) return cardProbeFlushFails ? -1 : 0;
+    return -1;
+}
+extern "C" ssize_t __wrap_pread(int descriptor, void* data, size_t length, off_t offset)
+{
+    auto found = probeDescriptors.find(descriptor);
+    if (found == probeDescriptors.end() || offset < 0) return -1;
+    if (cardReadBudget == 0) return 0;
+    auto bytes = cardFiles.at(found->second.path);
+    if (static_cast<size_t>(offset) >= bytes->size()) return 0;
+    size_t count = std::min(length, bytes->size() - static_cast<size_t>(offset));
+    if (cardReadBudget >= 0) {
+        count = std::min(count, static_cast<size_t>(cardReadBudget));
+        cardReadBudget -= count;
+    }
+    memcpy(data, bytes->data() + offset, count);
+    return count;
+}
+extern "C" int __wrap_unlink(const char* path)
+{
+    if (!strncmp(path, "/sd/OTA", 7)) {
+        if (cardProbeRemoveFails || !cardOnline) return -1;
+        return SD.remove(path + 3) ? 0 : -1;
+    }
+    return -1;
+}
+extern "C" int __wrap_close(int descriptor)
+{
+    probeDescriptors.erase(descriptor);
+    return 0;
+}
 extern "C" time_t __wrap_time(time_t* value)
 {
     if (value) *value = cardClock;
@@ -42,6 +109,11 @@ static void resetCard()
     cardReadBudget = -1;
     cardRenameBudget = -1;
     cardResetAfterRename = false;
+    cardProbeOpenFails = false;
+    cardProbeFlushFails = false;
+    cardProbeRemoveFails = false;
+    probeDescriptors.clear();
+    sdLockFailures = 0;
     cardClock = 0;
 }
 
@@ -61,6 +133,60 @@ void runJournalScenarios()
 {
     const std::string first = "0:1000,10C:900,";
     const std::string second = "0:1250,10C:910,";
+    {
+        resetCard();
+        DurableQueue probe;
+        bool okay = probe.begin() && append(probe, first);
+        const auto journalBefore = *cardFiles.at("/QUEUE.BIN");
+        const uint32_t pendingBefore = probe.pendingBytes();
+        const unsigned topLocksBefore = sdTopLocks;
+        const bool probePassed = probe.probeStorage();
+        const unsigned topLocksAfterProbe = sdTopLocks;
+        okay = okay && probePassed && probe.healthy() &&
+            *cardFiles.at("/QUEUE.BIN") == journalBefore &&
+            probe.pendingBytes() == pendingBefore && sdLockDepth == 0 &&
+            topLocksAfterProbe == topLocksBefore + 1;
+        bool scratchRemains = false;
+        for (const auto& entry : cardFiles) scratchRemains |= entry.first.find("/OTA") == 0;
+        report("OTA SD health probe verifies and removes scratch without changing journal", okay && !scratchRemains,
+               false, probe.pendingBytes());
+    }
+    const auto probeFailure = [&](const char* name, bool* injection, int kind) {
+        resetCard();
+        DurableQueue probe;
+        bool okay = probe.begin() && append(probe, first);
+        const auto journalBefore = *cardFiles.at("/QUEUE.BIN");
+        const uint32_t pendingBefore = probe.pendingBytes();
+        if (kind == 1) cardWriteBudget = 0;
+        else if (kind == 2) cardReadBudget = 0;
+        else *injection = true;
+        const bool rejected = !probe.probeStorage() && !probe.healthy();
+        okay = okay && rejected && *cardFiles.at("/QUEUE.BIN") == journalBefore &&
+            probe.pendingBytes() == pendingBefore;
+        if (kind == 1) cardWriteBudget = -1;
+        else if (kind == 2) cardReadBudget = -1;
+        else *injection = false;
+        const bool recoveredByProbe = probe.probeStorage() && probe.healthy();
+        okay = okay && recoveredByProbe &&
+            *cardFiles.at("/QUEUE.BIN") == journalBefore &&
+            probe.pendingBytes() == pendingBefore;
+        report(name, okay, true, probe.pendingBytes());
+    };
+    probeFailure("OTA SD probe fails closed on scratch open failure", &cardProbeOpenFails, 0);
+    probeFailure("OTA SD probe fails closed on short write", nullptr, 1);
+    probeFailure("OTA SD probe fails closed on flush failure", &cardProbeFlushFails, 0);
+    probeFailure("OTA SD probe fails closed on readback failure", nullptr, 2);
+    probeFailure("OTA SD probe fails closed on scratch removal failure", &cardProbeRemoveFails, 0);
+    resetCard();
+    DurableQueue contendedProbe;
+    bool lockProbeOkay = contendedProbe.begin() && append(contendedProbe, first);
+    const auto contendedJournal = *cardFiles.at("/QUEUE.BIN");
+    sdLockFailures = 1;
+    lockProbeOkay = lockProbeOkay && !contendedProbe.probeStorage() && contendedProbe.healthy() &&
+        *cardFiles.at("/QUEUE.BIN") == contendedJournal && sdLockDepth == 0;
+    report("OTA SD probe denies eligibility on shared-lock contention", lockProbeOkay, false,
+           contendedProbe.pendingBytes());
+
     resetCard();
     DurableQueue queue;
     bool okay = queue.begin() && append(queue, first) && append(queue, second);

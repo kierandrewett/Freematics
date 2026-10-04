@@ -85,6 +85,21 @@ csv_sample = sd_commit_path.split("// The journal is authoritative.", 1)[1]
 assert "SDGuard csvGuard;" in csv_sample
 maintain = extract(storage, "void SDLogger::maintain()")
 assert maintain.index("SDGuard guard;") < maintain.index("time_t clock")
+
+# OTA eligibility is based on scratch-file write/fsync/readback/remove under
+# the shared SD mutex, only after normal journal owners are quiescent.
+probe = extract(queue_source, "bool DurableQueue::probeStorage()")
+assert "if (!lock()) return false;" in probe
+assert probe.index("::write(") < probe.index("::fsync(") < probe.index("::pread(") < probe.index("::unlink(")
+assert "m_probeFault = !okay;" in probe
+parked_check = extract(firmware, "OTAParkedPolicy::Denial finalOtaParkedCheck()")
+assert "durableQueue.probeStorage()" in parked_check
+standby = extract(firmware, "void standby()")
+assert standby.index("logger.end();") < standby.index("telemetryParked")
+assert "otaStorageReadyAtPark = telemetryParked && durableQueue.probeStorage();" in standby
+assert "const bool probeStorageNow" in standby and "!durableQueue.probeStorage()" in standby
+setup = extract(firmware, "void setup()")
+assert "otaStorageReady = durableQueue.probeStorage();" in setup
 # The SD retry path powers the bus down and back up. The fake card has no bus.
 journal_sample = journal_sample.replace(
     "if (durableQueue.append(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)) return true;",

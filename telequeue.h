@@ -21,6 +21,9 @@ public:
     bool begin();
     void suspend();
     bool recover();
+    // Probe the mounted SD filesystem with a uniquely created non-journal file.
+    // The probe runs under the shared SD lock and fails closed on every I/O error.
+    bool probeStorage();
     bool damaged() const { return m_corrupt; }
     bool append(const char* frame, uint16_t length, bool* lockTimedOut = nullptr);
     // One open, flush and read-back verify for the whole batch. The recorder
@@ -45,7 +48,7 @@ public:
     uint32_t cachedPendingBytes() const { return m_cachedPending; }
     bool cachedHealthy() const { return m_cachedHealthy; }
     bool ready() const { return m_ready; }
-    bool healthy() const { return m_ready && !m_fault; }
+    bool healthy() const { return m_ready && !m_fault && !m_probeFault; }
 private:
     bool lock();
     void unlock();
@@ -67,6 +70,7 @@ private:
     uint32_t m_bootStart = 0;
     bool m_ready = false;
     bool m_fault = false;
+    bool m_probeFault = false;
     volatile bool m_corrupt = false;
     bool m_nextCursorB = false;
 };

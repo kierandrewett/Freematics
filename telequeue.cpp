@@ -22,6 +22,13 @@ constexpr uint16_t MAX_FRAME = SAMPLE_FRAME_SIZE;
 // complete record and keep the bound below the Arduino File 32-bit limit.
 constexpr uint32_t MAX_JOURNAL = 0xF0000000UL;
 constexpr uint32_t READ_CACHE_SIZE = 32768;
+uint32_t storageProbeSequence = 0;
+constexpr uint8_t STORAGE_PROBE_NAME_ATTEMPTS = 32;
+const uint8_t STORAGE_PROBE_PATTERN[] = {
+    'F', 'T', 'S', 'D', 'H', 'E', 'A', 'L', 'T', 'H', 0xA5, 0x5A,
+    0x31, 0xC7, 0x04, 0xE2, 0x9B, 0x60, 0xD3, 0x18, 0x77, 0x2A,
+    0xF0, 0x4D, 0x83, 0x11, 0xCE, 0x62, 0x39, 0xB4, 0x05, 0xFA
+};
 
 struct RecordHeader {
     uint32_t magic;
@@ -126,7 +133,7 @@ void DurableQueue::unlock()
     // Published under the storage lock. Sampling reads these native-width
     // cached scalars without touching FAT or waiting for an SD operation.
     m_cachedPending = m_size >= m_ack ? m_size - m_ack : 0;
-    m_cachedHealthy = m_ready && !m_fault;
+    m_cachedHealthy = m_ready && !m_fault && !m_probeFault;
     unlockSD();
 }
 
@@ -194,11 +201,69 @@ bool DurableQueue::begin()
     m_nextCursorB = validA && (!validB || a >= b);
     m_ready = true;
     m_fault = m_corrupt;
+    m_probeFault = false;
     unlock();
     if (m_corrupt && !recover()) return false;
     Serial.print("[QUEUE] SD journal ready | pending bytes: ");
     Serial.println(m_cachedPending);
     return true;
+}
+
+bool DurableQueue::probeStorage()
+{
+    if (!lock()) return false;
+    // A previous probe failure is retryable; journal corruption/fault is not.
+    bool okay = m_ready && !m_fault;
+    int descriptor = -1;
+    char path[40] = {};
+    bool created = false;
+
+    for (uint8_t attempt = 0; okay && attempt < STORAGE_PROBE_NAME_ATTEMPTS; ++attempt) {
+        const uint32_t sequence = storageProbeSequence++;
+        snprintf(path, sizeof(path), "/sd/OTA%08lx%02x.TMP",
+                 (unsigned long)millis(), (unsigned)(sequence & 0xFF));
+        descriptor = ::open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (descriptor >= 0) {
+            created = true;
+            break;
+        }
+        if (errno != EEXIST) {
+            okay = false;
+            break;
+        }
+    }
+    if (descriptor < 0) okay = false;
+
+    if (okay && ::write(descriptor, STORAGE_PROBE_PATTERN,
+                        sizeof(STORAGE_PROBE_PATTERN)) != sizeof(STORAGE_PROBE_PATTERN)) {
+        okay = false;
+    }
+    if (okay && ::fsync(descriptor) != 0) okay = false;
+    if (descriptor >= 0) {
+        if (::close(descriptor) != 0) okay = false;
+        descriptor = -1;
+    }
+
+    // Reopen by name after the durable flush so this exercises a fresh file
+    // open/read path instead of merely reading the writer's descriptor.
+    int readDescriptor = -1;
+    if (okay) {
+        readDescriptor = ::open(path, O_RDONLY);
+        if (readDescriptor < 0) okay = false;
+    }
+    uint8_t readback[sizeof(STORAGE_PROBE_PATTERN)] = {};
+    if (okay && (::pread(readDescriptor, readback, sizeof(readback), 0) != sizeof(readback) ||
+                 memcmp(readback, STORAGE_PROBE_PATTERN, sizeof(readback)))) {
+        okay = false;
+    }
+    if (readDescriptor >= 0 && ::close(readDescriptor) != 0) okay = false;
+    if (created && ::unlink(path) != 0) okay = false;
+
+    // A successful test must leave no sidecar behind, and any I/O or cleanup
+    // failure invalidates the cached journal health until a normal recovery.
+    m_probeFault = !okay;
+    unlock();
+    return okay;
 }
 
 bool DurableQueue::recover()

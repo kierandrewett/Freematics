@@ -45,7 +45,21 @@ lock contention is bounded and treated as a failed motion sample, so it cannot
 silently extend a quiet period or be mistaken for fresh motion evidence.
 OTA also requires a successfully persisted-and-read-back telemetry credential
 and a healthy SD journal; failed SD mount alone is not considered storage
-ready, and the journal must still be healthy at first-boot validation.
+ready. In addition, before parked eligibility, periodically during a long
+cellular transfer, and at final pre-activation checks, the standby owner probes
+the mounted card under the shared SD lock. The probe exclusively creates a
+uniquely named scratch file outside the journal, writes a fixed pattern, calls
+`fsync`, reads the bytes back and compares them, then removes the file. It does
+not append to, acknowledge, seek, or rewrite the journal and creates no RAM
+record backlog. SD I/O failures (including cleanup failure) deny OTA and mark
+cached queue health false until a later successful probe or journal
+reinitialization; lock contention denies OTA without changing cached health.
+Probes are deferred until the trip logger has ended
+and the uploader reports its parked state, so they do not race normal journal
+users; lock acquisition remains bounded by the common SD-lock timeout. On first
+boot, pending-image admission also performs a fresh probe before recorder and
+uploader tasks are started, while upload confirmation continues to require an
+actually journaled and accepted current-boot sample.
 The modem task owns the shared coprocessor link during the request. A motion
 wake cancels modem/TLS command waits between 50 ms UART reads and prevents a
 staged image from rebooting. Forced modem power-down still uses the driver's
