@@ -132,6 +132,25 @@
   this bootstrap contains a credential; its build directory is owner-only.
   It has not been published or flashed.
 
+## Follow-up — 2026-10-04 (DTC freshness and OTA candidate)
+
+- Commits `916ce032ac80` and `30b04609984a` bound DTC no-response handling to
+  one timeout, preserve codes received before a failed continuation, and keep
+  a truncated positive header from being represented as a clean no-code scan.
+  Strict emulator and Clang ASan/UBSan runs pass. The integrated scheduler
+  fixture measures a 1,090 ms RPM acquisition gap for a simulated 1,000 ms DTC
+  timeout; this is a host fixture, not a Model B or vehicle measurement.
+- Commit `31ca1177208a` defers active DTC scans unless fresh RPM and speed both
+  report zero, preventing those blocking requests during driving or idle
+  troubleshooting. The scheduler test verifies both deferral while RPM is
+  nonzero and continued scans while stationary.
+- Built an OTA-enabled, tokenless `1.0.6` candidate from source commit
+  `31ca1177208a`. Its Model B image SHA-256 is
+  `4afd2e5dd019f94397f8860f0a9fbd86bd99d525c6798e8ef17b7dbbf8def79f`, and it
+  embeds boot build ID `31ca1177208a`. The credential-aware packager accepted
+  it and the SHA-256 sidecar verifies. It remains local under
+  `.pio/ota-release-31ca117-v1.0.6/`; it has not been published or flashed.
+
 ## Scope and remaining validation
 
 This confirms board identity, local image installation, application boot, and
