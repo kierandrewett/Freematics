@@ -288,6 +288,16 @@
   version/release parsing, HTTP streaming/poweroff helpers, partition layout,
   and 47 package/publish/config unit tests. These are host checks, not evidence
   of cellular transfer or bootloader rollback on hardware.
+- Rebuilt the credential-bearing OTA-capable bootstrap from source commit
+  `594bc0e8c9acb42b2c77441c0a2c07813feb7212`. Its firmware version marker is
+  `1.0.0`, boot build ID is `594bc0e8c9ac`, image size is 714,864 bytes, and
+  SHA-256 is
+  `ebebba8cdb65cdc23faf7cbad3310b37dcd2895200d129a9a7ff65f508c2df9c`.
+  The local configured-value scan confirms private values are present. The
+  firmware and ELF are mode `0600`, remain ignored/local-only, and were not
+  published or flashed. This bootstrap can migrate existing settings to NVS
+  and supports the public OTA `1.0.16` image, but its release tag is still the
+  source's `1.0.0` marker.
 
 ## Scope and remaining validation
 
