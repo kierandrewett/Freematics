@@ -12,7 +12,7 @@ VALID_CONFIG = """
 #define SERVER_PORT 443
 #define SERVER_PROTOCOL PROTOCOL_HTTPS_POST
 #define SERVER_PATH "/api"
-#define CELL_APN "simbase"
+#define CELL_APN "fixture.carrier.invalid"
 #endif
 """
 
@@ -28,8 +28,9 @@ class ProductionConfigTests(unittest.TestCase):
     def test_builtin_fallbacks_are_rejected(self) -> None:
         for fallback in (
             VALID_CONFIG.replace('"freematics.drewett.dev"', '"hub.freematics.com"'),
-            VALID_CONFIG.replace('"simbase"', '""'),
+            VALID_CONFIG.replace('"fixture.carrier.invalid"', '""'),
             VALID_CONFIG.replace('"/api"', '"/hub/api"'),
+            VALID_CONFIG.replace('"fixture.carrier.invalid"', '"your-apn"'),
         ):
             with self.assertRaises(ValueError):
                 validate_production_config(fallback)

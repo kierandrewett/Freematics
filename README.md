@@ -44,7 +44,7 @@ The production configuration prefers the Model B SIM7670 cellular modem. If cell
 Local configuration
 -------------------
 
-Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint and Simbase's `simbase` APN. The default source build now selects microSD storage; an explicit `STORAGE_SPIFFS` override remains available for cardless builds.
+Copy `local_config.h.example` to `local_config.h` and put device-specific Wi-Fi, server, and APN values there. `local_config.h` is ignored by Git so credentials are not committed. The example uses HTTPS POST against a Freematics Hub-compatible `/api` endpoint and Simbase's `[configured carrier APN]` APN. The default source build now selects microSD storage; an explicit `STORAGE_SPIFFS` override remains available for cardless builds.
 
 HTTPS requires the configured bearer token for the Caddy-protected collector. A private/local migration build seeds it into the existing `storage` NVS namespace; subsequent tokenless OTA releases read it there. The token is never stored in the repository, and an existing NVS value is not overwritten. NVS flash encryption is not enabled, so physical flash extraction remains possible. Wi-Fi validates the server with the ISRG Root X1 trust anchor after obtaining valid network time. The Model B SIM7670 path provisions the same CA, enables CA authentication, validates time, and sends SNI for the configured hostname. BLE remains disabled in the production profile to preserve internal ESP32 heap for TLS.
 

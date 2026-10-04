@@ -18,7 +18,7 @@ responses. They cannot verify vehicle facts.
 - Hardware: Freematics ONE+ Model B (`TYPE:14`)
 - Modem: SIMCom SIM7670E-LN
 - SIM provider: Simbase UK
-- APN: `simbase`
+- APN: `[redacted APN]`
 - Network order: cellular first, Wi-Fi fallback
 - Transport: authenticated HTTPS to `freematics.drewett.dev:443`, with CA, hostname and time verification
 - Device ID: `ZKUCALJ0`
@@ -193,7 +193,7 @@ Current source-emitted milestones include:
 [OBD] ECU connected
 VIN:<vehicle VIN>
 CELL:SIM7670E-LN
-APN:simbase
+APN:[redacted APN]
 [CELL] In service
 [HTTP] Server accepted <N> values
 ```
