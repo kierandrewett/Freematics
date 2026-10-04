@@ -127,8 +127,16 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_cell_http_stream.cpp -o /tmp/test_cell_http_stream
 /tmp/test_cell_http_stream
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_cell_poweroff_policy.cpp -o /tmp/test_cell_poweroff_policy
+/tmp/test_cell_poweroff_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 ```
+
+If OTA is cancelled, modem shutdown first probes whether the modem responds,
+then asks it to power down. The power-key fallback is used only if the modem
+responds both before and after a failed shutdown command; an already-off or
+newly unresponsive modem is never toggled, avoiding an accidental wake-up.
 
 The current code has been host-tested and firmware-built, but cellular release
 downloads, cancellation under motion, first-boot validation, and rollback have

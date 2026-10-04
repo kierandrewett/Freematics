@@ -10,6 +10,7 @@ on
 #include <time.h>
 #include "FreematicsBase.h"
 #include "FreematicsNetwork.h"
+#include "cell_poweroff_policy.h"
 #include "esp_sntp.h"
 
 namespace {
@@ -370,9 +371,26 @@ bool CellSIMCOM::begin(CFreematics* device)
 void CellSIMCOM::end()
 {
   if (!shouldContinue()) {
-    // Cancellation must not wait on modem UART replies; force the parked radio
-    // down before returning the shared coprocessor to vehicle acquisition.
-    if (m_device) m_device->xbTogglePower(2510);
+    // The power-key input toggles modem state. Probe first so cancellation
+    // before modem startup cannot wake a radio that is already off.
+    const CFreematics::ContinueCheck continueCheck = m_continueCheck;
+    void* const continueContext = m_continueContext;
+    setContinueCheck(nullptr, nullptr);
+    const freematics::cell::PowerDownResult result =
+        freematics::cell::powerDownAfterCancellation(
+            [this]() { return check(1000); },
+            [this]() {
+              return m_type == CELL_SIM7070
+                  ? sendCommand("AT+CPOWD=1\r", 1000, "NORMAL POWER DOWN")
+                  : sendCommand("AT+CPOF\r", 1000);
+            },
+            [this]() {
+              if (!m_device) return false;
+              m_device->xbTogglePower(2510);
+              return true;
+            });
+    if (result == freematics::cell::kPowerDownCommandAccepted) delay(1500);
+    setContinueCheck(continueCheck, continueContext);
     return;
   }
   setGPS(false);

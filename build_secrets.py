@@ -18,8 +18,8 @@ if os.name == "posix":
     os.chmod(build_dir, 0o700)
 
 
-def protect_build_outputs(source, target, build_env):
-    output_dir = Path(build_env.subst("$BUILD_DIR"))
+def protect_build_outputs(source, target, env):
+    output_dir = Path(env.subst("$BUILD_DIR"))
     if os.name == "posix":
         os.chmod(output_dir, 0o700)
         for name in ("firmware.bin", "firmware.elf", "firmware.map"):
