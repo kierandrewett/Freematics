@@ -68,7 +68,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         token = "a1" * 32
         self.firmware.write_bytes(self.payload + token.encode("ascii"))
         with patch.dict("os.environ", {"FREEMATICS_TOKEN": token}):
-            with self.assertRaisesRegex(ValueError, "contains a configured telemetry credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(token, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -80,8 +80,39 @@ class PackageOtaReleaseTests(unittest.TestCase):
             "package_ota_release.load_build_environment",
             return_value={"FREEMATICS_TOKEN": token},
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured telemetry credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
                 package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_an_image_containing_a_configured_apn_password(self):
+        secret = "fixture-apn-password-do-not-embed"
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch("package_ota_release._parse_defines",
+                   return_value={"APN_PASSWORD": f'"{secret}"'}), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_scans_credential_fields_even_when_build_loader_ignores_them(self):
+        secret = "fixture-apn-password-from-private-config"
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            f'#define APN_PASSWORD "{secret}"\n'
+            "#endif\n",
+            encoding="utf-8",
+        )
+        (self.root / ".env").write_text(
+            f"APN_PASSWORD={secret}\n", encoding="utf-8"
+        )
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
 
     def test_refuses_an_image_without_a_tokenless_build_marker(self):
