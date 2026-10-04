@@ -31,6 +31,7 @@
 #include "sensorwaveform.h"
 #include "telequeue.h"
 #include "usbtelemetry.h"
+#include "mode09_identity.h"
 #include "ota_update.h"
 #include "ota_parked_policy.h"
 #include "sdaccess.h"
@@ -145,6 +146,8 @@ struct OBDSnapshot {
   uint8_t supportedByPid[sizeof(obdData) / sizeof(obdData[0])];
   DTC_POLLING_INFO diagnostics[sizeof(dtcData) / sizeof(dtcData[0])];
   char vin[18];
+  char calibrationId[17];
+  char ecuName[21];
   uint32_t timeouts;
   uint32_t latency;
   uint16_t supported;
@@ -249,6 +252,8 @@ int16_t rssi = 0;
 int16_t rssiLast = 0;
 volatile uint32_t lastRssiMeasurement = 0;
 char vin[18] = {0};
+char calibrationId[17] = {0};
+char ecuName[21] = {0};
 portMUX_TYPE vinMux = portMUX_INITIALIZER_UNLOCKED;
 float batteryVoltage = 0;
 float tripDistanceKm = 0;
@@ -838,6 +843,43 @@ void updateOBDDistance(float speedKph)
   lastOBDDistanceTime = now;
 }
 
+void acquireMode09Identity()
+{
+  char calibration[17] = {};
+  char ecu[21] = {};
+  char response[256] = {};
+  uint8_t bytes[64] = {};
+  uint8_t supportedBytes[64] = {};
+  size_t supportedLength = 0;
+  size_t length = 0;
+
+  if (obd.readReadOnlyService(0x09, 0x00, response, sizeof(response) - 1, 2000) &&
+      freematics::mode09::parseHexResponse(response, 0x00, supportedBytes,
+                                            sizeof(supportedBytes), supportedLength)) {
+    if (freematics::mode09::supports(supportedBytes, supportedLength, 0x04)) {
+      memset(response, 0, sizeof(response));
+      if (obd.readReadOnlyService(0x09, 0x04, response, sizeof(response) - 1, 2000) &&
+          freematics::mode09::parseHexResponse(response, 0x04, bytes, sizeof(bytes), length)) {
+        freematics::mode09::parseTextRecord(bytes, length, 0x04, 16,
+                                             calibration, sizeof(calibration));
+      }
+    }
+    if (freematics::mode09::supports(supportedBytes, supportedLength, 0x0A)) {
+      memset(response, 0, sizeof(response));
+      if (obd.readReadOnlyService(0x09, 0x0A, response, sizeof(response) - 1, 2000) &&
+          freematics::mode09::parseHexResponse(response, 0x0A, bytes, sizeof(bytes), length)) {
+        freematics::mode09::parseTextRecord(bytes, length, 0x0A, 20,
+                                             ecu, sizeof(ecu));
+      }
+    }
+  }
+
+  portENTER_CRITICAL(&vinMux);
+  memcpy(calibrationId, calibration, sizeof(calibrationId));
+  memcpy(ecuName, ecu, sizeof(ecuName));
+  portEXIT_CRITICAL(&vinMux);
+}
+
 void publishOBDSnapshot()
 {
   // Only the OBD owner writes obdData/dtcData. Publish a bounded copy, never
@@ -847,8 +889,12 @@ void publishOBDSnapshot()
   memcpy(snapshot.diagnostics, dtcData, sizeof(dtcData));
   portENTER_CRITICAL(&vinMux);
   memcpy(snapshot.vin, vin, sizeof(snapshot.vin));
+  memcpy(snapshot.calibrationId, calibrationId, sizeof(snapshot.calibrationId));
+  memcpy(snapshot.ecuName, ecuName, sizeof(snapshot.ecuName));
   portEXIT_CRITICAL(&vinMux);
   snapshot.vin[sizeof(snapshot.vin) - 1] = 0;
+  snapshot.calibrationId[sizeof(snapshot.calibrationId) - 1] = 0;
+  snapshot.ecuName[sizeof(snapshot.ecuName) - 1] = 0;
   snapshot.timeouts = timeoutsOBD;
   snapshot.latency = lastOBDReadLatency;
   snapshot.supported = supportedOBDPIDs;
@@ -1723,21 +1769,29 @@ void collectSample()
           supportedLength += (size_t)added;
         }
       }
+      const bool haveVin = strlen(snapshot.vin) == 17;
+      if (haveVin && supportedLength < sizeof(record->supported)) {
+        const int added = snprintf(record->supported + supportedLength,
+          sizeof(record->supported) - supportedLength, ";vin=%s", snapshot.vin);
+        if (added > 0 && (size_t)added < sizeof(record->supported) - supportedLength)
+          supportedLength += (size_t)added;
+      }
+      freematics::mode09::appendHexMetadata(record->supported, sizeof(record->supported),
+        supportedLength, "cal", snapshot.calibrationId);
+      freematics::mode09::appendHexMetadata(record->supported, sizeof(record->supported),
+        supportedLength, "ecu", snapshot.ecuName);
 
       // Place the FT1 envelope and serialized sample in one contiguous buffer.
       // HardwareSerial serializes each buffer write against debug output, so a
       // single call prevents other task logs from corrupting a partial frame.
-      const bool haveVin = strlen(snapshot.vin) == 17;
       const int headerLength = snprintf(record->payload, sizeof(record->payload),
-        "@FT1,%llu,%lu,%u,%llu,%lu,%s%s%s|",
+        "@FT1,%llu,%lu,%u,%llu,%lu,%s|",
         (unsigned long long)record->bootId,
         (unsigned long)record->captureMs,
         (unsigned int)record->utcValid,
         (unsigned long long)record->captureUtcMs,
         (unsigned long)record->dropped,
-        record->supported,
-        haveVin ? ";vin=" : "",
-        haveVin ? snapshot.vin : "");
+        record->supported);
       if (headerLength > 0 && (size_t)headerLength < sizeof(record->payload)) {
         CStorageRAM wireFrame;
         wireFrame.init(record->payload + headerLength, sizeof(record->payload) - (size_t)headerLength);
@@ -2109,6 +2163,7 @@ void acquireOBD(void*)
             vin[sizeof(vin) - 1] = 0;
             portEXIT_CRITICAL(&vinMux);
           }
+          acquireMode09Identity();
           Serial.println("[OBD] ECU connected (background)");
 #if ENABLE_CAN_CAPTURE && STORAGE != STORAGE_NONE
           capturePassiveCAN();

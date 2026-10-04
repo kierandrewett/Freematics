@@ -136,7 +136,10 @@ the telemetry token, and other build outputs may contain private build data.
 The release-upload boundary is `tools/publish_ota_release.py`. It revalidates
 the exact two-file allowlist, token-free build markers, configured credentials,
 file modes, matching sidecar, and that the existing release tag matches the
-firmware's embedded version immediately before calling `gh`; it never uploads
+firmware's embedded version immediately before calling `gh`. Before upload it
+also queries the target release and fails closed if the asset inventory cannot
+be read or is not empty. This prevents safe files being appended to a release
+that already contains unknown or credential-bearing artifacts. It never uploads
 logs, source archives, or build directories. It requires an existing release
 tag and never clobbers assets. Use it instead of uploading files manually:
 

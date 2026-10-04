@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from package_ota_release import ASSET_NAME, SIDECAR_NAME, package_release
 from publish_ota_release import publish
@@ -29,10 +30,18 @@ class PublishOtaReleaseTests(unittest.TestCase):
 
     @patch("publish_ota_release.subprocess.run")
     def test_uploads_only_the_verified_allowlisted_pair(self, run):
-        run.return_value.returncode = 0
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout='{"assets":[]}'),
+            SimpleNamespace(returncode=0, stdout=""),
+        ]
         publish("v1.0.1", self.asset_dir)
         self.assertEqual(
-            run.call_args.args[0],
+            run.call_args_list[0].args[0],
+            ["gh", "release", "view", "v1.0.1", "--json", "assets",
+             "--repo", "kierandrewett/Freematics"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0],
             [
                 "gh", "release", "upload", "v1.0.1",
                 str(self.asset_dir / ASSET_NAME),
@@ -40,8 +49,26 @@ class PublishOtaReleaseTests(unittest.TestCase):
                 "--repo", "kierandrewett/Freematics",
             ],
         )
-        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
-        self.assertIs(run.call_args.kwargs["stdout"], run.call_args.kwargs["stderr"])
+        self.assertIs(run.call_args_list[0].kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(run.call_args_list[0].kwargs["stderr"], subprocess.DEVNULL)
+        self.assertIs(run.call_args_list[1].kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(run.call_args_list[1].kwargs["stdout"], run.call_args_list[1].kwargs["stderr"])
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_refuses_to_append_to_a_release_with_existing_assets(self, run):
+        run.return_value = SimpleNamespace(
+            returncode=0, stdout='{"assets":[{"name":"unexpected.bin"}]}'
+        )
+        with self.assertRaisesRegex(ValueError, "release is not empty"):
+            publish("v1.0.1", self.asset_dir)
+        self.assertEqual(run.call_count, 1)
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_refuses_when_release_asset_inventory_cannot_be_verified(self, run):
+        run.return_value = SimpleNamespace(returncode=1, stdout="")
+        with self.assertRaisesRegex(RuntimeError, "could not verify"):
+            publish("v1.0.1", self.asset_dir)
+        self.assertEqual(run.call_count, 1)
 
     @patch("publish_ota_release.subprocess.run")
     def test_rejects_invalid_tag_before_upload(self, run):

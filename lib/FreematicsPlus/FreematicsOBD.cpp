@@ -575,11 +575,12 @@ bool COBD::getVIN(char* buffer, byte bufsize)
     return false;
 }
 
-bool COBD::readReadOnlyService(byte service, uint16_t identifier, char* buffer, byte bufsize)
+bool COBD::readReadOnlyService(byte service, uint16_t identifier, char* buffer, byte bufsize,
+	unsigned int timeout)
 {
 	if (!link || m_state != OBD_CONNECTED || !buffer || bufsize < 8) return false;
-	if (service != 0x1A && service != 0x22) return false;
-	if (service == 0x1A && identifier > 0xFF) return false;
+	if (service != 0x09 && service != 0x1A && service != 0x22) return false;
+	if (service != 0x22 && identifier > 0xFF) return false;
 
 	char command[16];
 	char expected[16];
@@ -593,7 +594,13 @@ bool COBD::readReadOnlyService(byte service, uint16_t identifier, char* buffer, 
 		snprintf(expected, sizeof(expected), "%02X %02X",
 			(byte)(service + 0x40), (byte)identifier);
 	}
-	if (!link->sendCommand(command, buffer, bufsize, OBD_TIMEOUT_LONG)) return false;
+	if (!link->sendCommand(command, buffer, bufsize, timeout)) return false;
+	if (service == 0x09) {
+		char compact[8];
+		snprintf(compact, sizeof(compact), "%02X%02X",
+			(byte)(service + 0x40), (byte)identifier);
+		return strstr(buffer, expected) != 0 || strstr(buffer, compact) != 0;
+	}
 	return strstr(buffer, expected) != 0;
 }
 
