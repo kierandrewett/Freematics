@@ -59,6 +59,38 @@ void testRejectsTruncation()
       shortPath, sizeof(shortPath)));
 }
 
+void testExtractsAnImmutableReleaseTagFromLatestRedirect()
+{
+  const char* location =
+      "/kierandrewett/Freematics/releases/download/v1.2.3/"
+      "freematics-model-b.bin.sha256sum?download=1";
+  char tag[65] = {};
+  assert(freematics::ota::parseReleaseTagFromDownloadPath(
+      location, "freematics-model-b.bin.sha256sum", tag, sizeof(tag)));
+  assert(strcmp(tag, "v1.2.3") == 0);
+}
+
+void testRejectsUnexpectedReleaseRedirectPaths()
+{
+  const char* paths[] = {
+      "/owner/Freematics/releases/download/v1.2.3/freematics-model-b.bin",
+      "/kierandrewett/Freematics/releases/download/latest/freematics-model-b.bin",
+      "/kierandrewett/Freematics/releases/download/v1.2.3/other.bin",
+      "/kierandrewett/Freematics/releases/download/v1.2.3!/freematics-model-b.bin",
+      "/kierandrewett/Freematics/releases/download/v1.2.3/../other.bin",
+      "/kierandrewett/Freematics/releases/download/v1.2.3/freematics-model-b.bin#fragment",
+  };
+  for (const char* path : paths) {
+    char tag[65] = {};
+    assert(!freematics::ota::parseReleaseTagFromDownloadPath(
+        path, "freematics-model-b.bin", tag, sizeof(tag)));
+  }
+  char smallTag[4] = {};
+  assert(!freematics::ota::parseReleaseTagFromDownloadPath(
+      "/kierandrewett/Freematics/releases/download/v1.2.3/freematics-model-b.bin",
+      "freematics-model-b.bin", smallTag, sizeof(smallTag)));
+}
+
 } // namespace
 
 int main()
@@ -66,5 +98,7 @@ int main()
   testAllowsOnlyKnownHttpsHosts();
   testRejectsUnsafeAuthoritiesAndPaths();
   testRejectsTruncation();
+  testExtractsAnImmutableReleaseTagFromLatestRedirect();
+  testRejectsUnexpectedReleaseRedirectPaths();
   return 0;
 }

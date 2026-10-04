@@ -57,9 +57,11 @@ The latest GitHub release is expected to contain these exact asset names:
 
 The sidecar uses standard `sha256sum` format. The updater downloads both over
 HTTPS, follows only a short redirect chain to allowlisted GitHub release hosts,
-streams the image to the inactive slot, checks the digest, and validates the ESP
-image. Boot selection is a separate final standby operation, not part of the
-download task. On first boot, firmware verifies that the recorded partition
+captures the immutable release tag from GitHub's `latest` redirect, and then
+downloads both assets from that same tag. It streams the image to the inactive
+slot, checks the digest, and validates the ESP image. Boot selection is a
+separate final standby operation, not part of the download task. On first boot,
+firmware verifies that the recorded partition
 identity matches the running partition and hashes the running image before it
 can accept the image. Acceptance also requires storage, motion-sensor,
 persistent endpoint configuration, and credential initialization; the ESP32 bootloader rolls back a failed or

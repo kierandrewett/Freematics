@@ -71,6 +71,7 @@ struct AssetWriter {
   CellHTTPStreamResponse response;
   char host[128];
   char path[2048];
+  char releaseTag[65];
   uint8_t redirects;
 };
 
@@ -78,8 +79,12 @@ bool getAsset(AssetWriter& asset, const char* filename, uint32_t maxLength,
               CellHTTPBodyWriter writer, void* writerContext)
 {
   strcpy(asset.host, kReleaseHost);
-  const int length = snprintf(asset.path, sizeof(asset.path),
-      "/kierandrewett/Freematics/releases/latest/download/%s", filename);
+  const int length = asset.releaseTag[0]
+      ? snprintf(asset.path, sizeof(asset.path),
+          "/kierandrewett/Freematics/releases/download/%s/%s",
+          asset.releaseTag, filename)
+      : snprintf(asset.path, sizeof(asset.path),
+          "/kierandrewett/Freematics/releases/latest/download/%s", filename);
   if (length <= 0 || (size_t)length >= sizeof(asset.path)) return false;
   asset.redirects = 0;
 
@@ -90,7 +95,7 @@ bool getAsset(AssetWriter& asset, const char* filename, uint32_t maxLength,
             continueRequested, (void*)asset.cancelRequested)) return false;
     if (asset.response.status == 200) {
       asset.cell.close();
-      return true;
+      return asset.releaseTag[0] != 0;
     }
     if (asset.response.status != 301 && asset.response.status != 302 &&
         asset.response.status != 303 && asset.response.status != 307 &&
@@ -110,6 +115,18 @@ bool getAsset(AssetWriter& asset, const char* filename, uint32_t maxLength,
       Serial.println("[OTA] Refusing untrusted release redirect");
       asset.cell.close();
       return false;
+    }
+    if (!strcmp(nextHost, kReleaseHost)) {
+      char redirectedTag[sizeof(asset.releaseTag)] = {};
+      if (freematics::ota::parseReleaseTagFromDownloadPath(
+              nextPath, filename, redirectedTag, sizeof(redirectedTag))) {
+        if (asset.releaseTag[0] && strcmp(asset.releaseTag, redirectedTag)) {
+          Serial.println("[OTA] Release redirect changed tags during asset download");
+          asset.cell.close();
+          return false;
+        }
+        strcpy(asset.releaseTag, redirectedTag);
+      }
     }
     asset.cell.close();
     strcpy(asset.host, nextHost);
@@ -404,7 +421,7 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
   if (cancelled(cancelRequested)) return OTA_ATTEMPT_CANCELLED;
 
   SidecarBuffer sidecar = {};
-  AssetWriter asset = {cell, cancelRequested, {}, {}, {}, 0};
+  AssetWriter asset = {cell, cancelRequested, {}, {}, {}, {}, 0};
   if (!getAsset(asset, kSidecarName, kSidecarMaximum, writeSidecar, &sidecar)) {
     return cancelled(cancelRequested) ? OTA_ATTEMPT_CANCELLED : OTA_ATTEMPT_FAILED;
   }
