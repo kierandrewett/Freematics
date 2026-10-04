@@ -112,9 +112,9 @@
   live-car verification is claimed.
 - Added a clearly separated `esp32dev-ota-production` bootstrap target because
   the ordinary production target keeps OTA disabled. Its private image built
-  from source commit `d75eebabc815`, has SHA-256
-  `a534cc7e28407441596dcef6530a4e69fccf63c0787e94293c83ea8a1c29becd`, and
-  embeds boot build ID `d75eebabc815`. The credential-presence check passed
+  from source commit `27a83c3dad40`, has SHA-256
+  `e454f3e13af63eb780693576ecf70dcb7855dfc87ac060667719def173564eb9`, and
+  embeds boot build ID `27a83c3dad40`. The credential-presence check passed
   without displaying the configured value; the ignored build directory is
   owner-only. This bootstrap image has not been published or flashed.
 
