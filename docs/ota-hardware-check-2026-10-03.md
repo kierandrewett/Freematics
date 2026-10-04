@@ -166,6 +166,10 @@
   been published or flashed. Parser behavior is host-verified only; cellular
   download, car-off eligibility, cancellation, first boot, and rollback still
   require the device and a safe vehicle test setup.
+- A fresh read-only laptop USB inventory still shows only a QinHeng CH340
+  serial bridge at `/dev/ttyUSB0`, without a board-specific USB identity. That
+  is insufficient to identify the Model B confidently; no serial session or
+  flash was attempted, and vehicle connection/live telemetry remain unverified.
 
 ## Scope and remaining validation
 
