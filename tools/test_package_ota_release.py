@@ -135,6 +135,72 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
 
+    def test_refuses_a_credential_literal_followed_by_a_cpp_comment(self):
+        secret = "fixture-apn-password-with-comment"
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            f'#define APN_PASSWORD "{secret}" // production APN password\n'
+            "#endif\n",
+            encoding="utf-8",
+        )
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_a_credential_split_across_adjacent_c_strings(self):
+        secret = "fixture-apn-password-concatenated"
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            '#define APN_PASSWORD "fixture-apn-" "password-concatenated"\n'
+            "#endif\n",
+            encoding="utf-8",
+        )
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_an_unresolved_credential_macro(self):
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            "#define APN_PASSWORD EXTERNAL_APN_PASSWORD\n"
+            "#endif\n",
+            encoding="utf-8",
+        )
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "cannot verify a configured credential"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_refuses_a_raw_c_string_credential_literal(self):
+        (self.root / "local_config.h").write_text(
+            "#ifndef LOCAL_CONFIG_H_INCLUDED\n"
+            "#define LOCAL_CONFIG_H_INCLUDED\n"
+            '#define APN_PASSWORD R"(fixture-apn-password-raw)"\n'
+            "#endif\n",
+            encoding="utf-8",
+        )
+        with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "prefixed credential strings"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
     def test_refuses_an_image_without_a_tokenless_build_marker(self):
         self.firmware.write_bytes(b"firmware without credential status")
         with self.assertRaisesRegex(ValueError, "token-free OTA/version marker"):

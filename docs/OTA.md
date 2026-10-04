@@ -80,11 +80,13 @@ if a token is present, and emits a non-secret release-mode marker. The local
 packager requires both that marker and the token-absent marker, scans for
 configured token/username/password/secret values from the ignored `.env`, process
 environment, and credential-named `local_config.h` settings, and repeats the
-checks on the staged copy. It never overwrites an existing asset pair and does
-not upload anything. Server and APN routing settings remain in the firmware;
-they are not treated as authentication credentials. These checks guard
-against accidental publication, not deliberately falsified binaries or
-markers.
+checks on the staged copy. Credential literals in `local_config.h` are joined
+across adjacent C strings and comments are excluded; unsupported escaped or
+prefixed credential literals, or credential macros that cannot be resolved,
+fail packaging. It never overwrites an existing asset pair and does not upload
+anything. Server and APN routing settings remain in the firmware; they are not
+treated as authentication credentials. These checks guard against accidental
+publication, not deliberately falsified binaries or markers.
 
 Only publish the two files created by `tools/package_ota_release.py`. Never
 attach the regular `esp32dev` production image, ELF/map files, build logs, or

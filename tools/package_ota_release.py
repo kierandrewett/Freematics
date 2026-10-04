@@ -37,11 +37,11 @@ _PROJECT_USERNAME_KEY_RE = re.compile(
 )
 
 
-def _image_contains_value(image_path: Path, value: str) -> bool:
+def _image_contains_value(image_path: Path, value: str | bytes) -> bool:
     """Check for an ASCII value without ever displaying it."""
     if not value:
         return False
-    needle = value.encode("ascii")
+    needle = value if isinstance(value, bytes) else value.encode("utf-8")
     overlap = b""
     with image_path.open("rb") as image:
         while chunk := image.read(1024 * 1024):
@@ -50,6 +50,42 @@ def _image_contains_value(image_path: Path, value: str) -> bool:
                 return True
             overlap = searchable[-(len(needle) - 1):]
     return False
+
+
+def _decode_c_string_sequence(raw_value: str) -> bytes | None:
+    """Join adjacent ordinary C string literals and ignore a trailing // comment."""
+    value = raw_value.strip()
+    if value.startswith(("L\"", "u\"", "U\"", 'R"', 'u8R"', 'uR"', 'UR"', 'LR"')):
+        raise ValueError("prefixed credential strings are unsupported; refusing to package")
+    if value.startswith('u8"'):
+        value = value[2:]
+    if not value.startswith('"'):
+        return None
+
+    output = bytearray()
+    index = 0
+    literal_count = 0
+    while index < len(value):
+        while index < len(value) and value[index].isspace():
+            index += 1
+        if index == len(value) or value.startswith("//", index):
+            return bytes(output) if literal_count else None
+        if value[index] != '"':
+            raise ValueError("unsupported credential definition suffix; refusing to package")
+        literal_count += 1
+        index += 1
+        end = value.find('"', index)
+        if end < 0:
+            raise ValueError("unterminated credential string; refusing to package")
+        literal = value[index:end]
+        # The production config parser rejects backslashes. Keep that invariant
+        # here too rather than guessing how a compiler interprets an escape.
+        if "\\" in literal:
+            raise ValueError("escaped credential strings are unsupported; refusing to package")
+        output.extend(literal.encode("utf-8"))
+        index = end
+        index += 1
+    return bytes(output) if literal_count else None
 
 
 def _verify_tokenless_build(image_path: Path) -> None:
@@ -84,17 +120,17 @@ def _verify_tokenless_build(image_path: Path) -> None:
         raise ValueError("firmware is missing a required token-free OTA/version marker; refusing to package")
 
 
-def _configured_credentials() -> set[str]:
+def _configured_credentials() -> set[bytes]:
     """Read configured credentials without displaying them to the caller."""
     env_path = REPOSITORY_ROOT / ".env"
     settings = load_build_environment(env_path, {})
     credentials = {
-        value for key, value in settings.items()
+        value.encode("utf-8") for key, value in settings.items()
         if _CREDENTIAL_KEY_RE.search(key) and value
     }
     for key, value in os.environ.items():
         if value and (_SECRET_KEY_RE.search(key) or _PROJECT_USERNAME_KEY_RE.fullmatch(key)):
-            credentials.add(value)
+            credentials.add(value.encode("utf-8"))
     if env_path.exists():
         for number, line in enumerate(env_path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
@@ -109,19 +145,23 @@ def _configured_credentials() -> set[str]:
                     raise ValueError(f".env:{number}: unmatched credential quotes")
                 value = value[1:-1]
             if value:
-                credentials.add(value)
+                credentials.add(value.encode("utf-8"))
 
     config_path = REPOSITORY_ROOT / "local_config.h"
     defines = _parse_defines(config_path.read_text(encoding="utf-8"))
     for key, raw_value in defines.items():
         if not _CREDENTIAL_KEY_RE.search(key):
             continue
-        # Credential values are plain quoted literals in local_config.h.
-        # Ignore NULL and macro references; only literals can be embedded.
-        if len(raw_value) >= 2 and raw_value[0] == '"' and raw_value[-1] == '"':
-            value = raw_value[1:-1]
-            if value:
-                credentials.add(value)
+        normalized = raw_value.strip()
+        if normalized == "NULL" or re.fullmatch(r"NULL\s*//.*", normalized):
+            continue
+        value = _decode_c_string_sequence(raw_value)
+        if value is None:
+            raise ValueError(
+                "cannot verify a configured credential in local_config.h; refusing to package"
+            )
+        if value:
+            credentials.add(value)
     return credentials
 
 
