@@ -26,6 +26,9 @@ elevated reading cancels the transfer because it does not prove the car is
 off. After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
 fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
+Any fresh nonzero speed or RPM observation also invalidates the accumulated
+quiet proof; a new full hour of valid stillness evidence is required before a
+later attempt.
 OBD is refreshed after the final motion-observation interval immediately
 before cellular setup, then checked again before reboot. The modem owns the
 shared coprocessor link during the download, so OBD is not polled concurrently;

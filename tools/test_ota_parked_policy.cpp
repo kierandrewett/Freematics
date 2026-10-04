@@ -114,9 +114,13 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   state = parked(checkAt);
   state.speedKph.value = 1.0f;
   assert(policy.observe(checkAt, state) == Policy::kSpeedNotZero);
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
   state = parked(checkAt);
   state.rpm.value = 1.0f;
   assert(policy.observe(checkAt, state) == Policy::kRpmNotZero);
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
   state = parked(checkAt);
   state.modelBSupplyVolts.value = 13.2f;
   assert(policy.observe(checkAt, state) == Policy::kSupplyNotResting);
@@ -145,9 +149,41 @@ static void testParkedSignalsAreRecheckedAfterDownload() {
   state.rpm.value = 850.0f;
   assert(policy.observe(completedAt, state) == Policy::kRpmNotZero);
 
-  state = parked(completedAt);
+  const uint32_t supplyCheckAt = completedAt + Policy::kRequiredQuietMs;
+  policy.beginBoot(completedAt);
+  quietSamples(policy, completedAt, supplyCheckAt);
+  policy.observeMotionSample(supplyCheckAt, true, false);
+  state = parked(supplyCheckAt);
   state.modelBSupplyVolts.value = 14.1f;
-  assert(policy.observe(completedAt, state) == Policy::kSupplyNotResting);
+  assert(policy.observe(supplyCheckAt, state) == Policy::kSupplyNotResting);
+}
+
+static void testObservedEngineOrVehicleActivityRestartsQuietPeriod() {
+  const uint32_t start = 30000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+
+  Policy::Observation state = parked(checkAt);
+  state.speedKph.value = 1.0f;
+  assert(policy.observe(checkAt, state) == Policy::kSpeedNotZero);
+  assert(!policy.motionProofCurrent(checkAt));
+  assert(policy.quietDurationMs(checkAt) == 0);
+
+  const uint32_t restartedAt = checkAt + 1000;
+  quietSamples(policy, restartedAt, restartedAt + Policy::kRequiredQuietMs - 1);
+  state = parked(restartedAt + Policy::kRequiredQuietMs - 1);
+  assert(policy.observe(restartedAt + Policy::kRequiredQuietMs - 1, state) ==
+         Policy::kQuietPeriod);
+  policy.observeMotionSample(restartedAt + Policy::kRequiredQuietMs, true, false);
+
+  const uint32_t rpmAt = restartedAt + Policy::kRequiredQuietMs;
+  state = parked(rpmAt);
+  state.rpm.value = 750.0f;
+  assert(policy.observe(rpmAt, state) == Policy::kRpmNotZero);
+  assert(!policy.motionProofCurrent(rpmAt));
+  assert(policy.quietDurationMs(rpmAt) == 0);
 }
 
 static void testMotionDuringDownloadInvalidatesTheQuietProof() {
@@ -183,6 +219,7 @@ int main() {
   testActivityAndRebootResetTimer();
   testVehicleSignalsAndReadinessRemainFailClosed();
   testParkedSignalsAreRecheckedAfterDownload();
+  testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();
   testWrapSafeContinuousQuietTimer();
   puts("OTA parked eligibility: all tests passed");

@@ -114,9 +114,9 @@ class OTAParkedPolicy {
     if (!observation.telemetryCredentialPersisted) return kCredentialUnavailable;
 
     if (!fresh(observation.speedKph, nowMs)) return kSpeedUnavailable;
-    if (observation.speedKph.value != 0.0f) return kSpeedNotZero;
+    if (observation.speedKph.value != 0.0f) return reset(nowMs, kSpeedNotZero);
     if (!fresh(observation.rpm, nowMs)) return kRpmUnavailable;
-    if (observation.rpm.value != 0.0f) return kRpmNotZero;
+    if (observation.rpm.value != 0.0f) return reset(nowMs, kRpmNotZero);
     if (!fresh(observation.modelBSupplyVolts, nowMs)) return kSupplyUnavailable;
     if (observation.modelBSupplyVolts.value > kMaximumRestingVoltage) return kSupplyNotResting;
     if (!vehicleSupplyPlausible(observation.modelBSupplyVolts.value)) return kSupplyUnavailable;
