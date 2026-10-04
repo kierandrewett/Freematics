@@ -3205,6 +3205,7 @@ void showSysInfo()
 {
   Serial.println();
   Serial.println("[BOOT] Freematics TeleLogger starting");
+  Serial.println("FREEMATICS_SOURCE_COMMIT=" FREEMATICS_SOURCE_COMMIT);
   Serial.print("[BOOT] Build: ");
   Serial.println(FREEMATICS_BUILD_ID);
 #if FREEMATICS_TOKEN_EMBEDDED

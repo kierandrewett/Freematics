@@ -121,7 +121,8 @@ matching `local_config.h` settings, and repeats the checks on the staged copy.
 OTA builds also require a clean Git worktree and embed the full source commit
 in the firmware. Packaging and the final publisher check that this marker
 matches the current checkout, preventing a stale or dirty-build image from
-being published under a newer source revision.
+being published under a newer source revision. The same marker is printed at
+boot alongside the shorter build ID for field verification.
 For configured values at least eight bytes long, it also checks common Base64,
 hex, URL-escaped, and UTF-16 encodings. Credential literals in
 `local_config.h` are joined across adjacent C strings and comments are
