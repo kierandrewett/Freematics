@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -181,7 +182,9 @@ def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
             raise ValueError(
                 "firmware contains a configured credential; refusing to package"
             )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "posix" and output_dir.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        raise ValueError("release output directory must be owner-only (0700)")
 
     image_path = output_dir / ASSET_NAME
     sidecar_path = output_dir / SIDECAR_NAME

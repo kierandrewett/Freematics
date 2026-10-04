@@ -2,7 +2,9 @@
 """Host tests for the local OTA release packager."""
 
 import hashlib
+import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -34,9 +36,21 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.assertEqual(image.read_bytes(), self.payload)
         expected = f"{hashlib.sha256(self.payload).hexdigest()}  {ASSET_NAME}\n"
         self.assertEqual(sidecar.read_text(encoding="ascii"), expected)
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(image.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(sidecar.stat().st_mode), 0o600)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission policy")
+    def test_refuses_a_shared_output_directory(self):
+        self.output.mkdir(mode=0o755)
+        self.output.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, "must be owner-only"):
+            package_release(self.firmware, self.output)
+        self.assertFalse((self.output / ASSET_NAME).exists())
 
     def test_refuses_to_overwrite_existing_asset(self):
-        self.output.mkdir()
+        self.output.mkdir(mode=0o700)
         image = self.output / ASSET_NAME
         image.write_bytes(b"keep-existing")
         with self.assertRaises(FileExistsError):
@@ -45,7 +59,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.assertFalse((self.output / SIDECAR_NAME).exists())
 
     def test_refuses_existing_sidecar_without_creating_firmware(self):
-        self.output.mkdir()
+        self.output.mkdir(mode=0o700)
         sidecar = self.output / SIDECAR_NAME
         sidecar.write_text("keep-existing\n", encoding="ascii")
         with self.assertRaises(FileExistsError):
@@ -54,7 +68,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.assertFalse((self.output / ASSET_NAME).exists())
 
     def test_existing_assets_are_never_replaced(self):
-        self.output.mkdir()
+        self.output.mkdir(mode=0o700)
         image = self.output / ASSET_NAME
         sidecar = self.output / SIDECAR_NAME
         image.write_bytes(b"old-image")

@@ -93,7 +93,9 @@ attach the regular `esp32dev` production image, ELF/map files, build logs, or
 the `.pio` build directory: the regular production image intentionally embeds
 the telemetry token, and other build outputs may contain private build data.
 The packager is the release boundary; `.gitignore` alone does not protect
-manual uploads.
+manual uploads. On POSIX it also refuses a release directory unless it is
+owner-only (`0700`); generated firmware and checksum files are owner-only
+(`0600`).
 
 On POSIX build hosts, PlatformIO's per-environment build directory is set to
 mode `0700` before compilation, and the final firmware binary/ELF/map are set
