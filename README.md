@@ -244,6 +244,12 @@ reads values without executing shell commands.
 
 With the intended server and APN in `local_config.h`, build and flash:
 
+The dashboard, PlatformIO serial monitor, and `tools/measure_usb_stream.py`
+must not read the same serial port at the same time. Close the dashboard before
+using the monitor or measurement tool; close those tools before reconnecting
+the dashboard. Competing readers split the byte stream and can look like
+corrupt telemetry.
+
 ```sh
 pio run -e esp32dev
 sha256sum .pio/build/esp32dev/firmware.bin

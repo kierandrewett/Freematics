@@ -166,6 +166,11 @@ are not vehicle evidence.
 Use a verified checkout of this repository. Do not clone the default branch
 and treat its build as the production image:
 
+Only one process may read the Model B serial port at a time. Disconnect the
+dashboard before starting `pio device monitor` or `tools/measure_usb_stream.py`;
+stop the monitor/measurement process before reconnecting the dashboard. Two
+readers divide records between them and make the stream appear corrupt.
+
 ```bash
 cd /path/to/freematics
 git status --short --branch
