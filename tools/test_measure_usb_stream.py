@@ -9,6 +9,7 @@ from measure_usb_stream import (
     capture_is_newer,
     identify_freematics_usb,
     observe_successful_pid_updates,
+    sd_core_error_categories,
     summarize,
     timeout_counter_delta,
 )
@@ -76,6 +77,23 @@ class FreematicsObdTimingTests(unittest.TestCase):
         self.assertFalse(capture_is_newer(100, 100))
         self.assertFalse(capture_is_newer(100, 99))
         self.assertTrue(capture_is_newer(0xFFFFFFF0, 12))
+
+    def test_sd_core_errors_are_reduced_to_safe_categories(self):
+        self.assertEqual(
+            sd_core_error_categories(
+                b"E (123) sdSelectCard(): Select Failed after 500 ms ready wait"
+            ),
+            ("card_select_timeout",),
+        )
+        self.assertEqual(
+            sd_core_error_categories(
+                b"E (124) f_mount failed: physical drive cannot work"
+            ),
+            ("fatfs_mount_failure", "physical_drive_not_ready"),
+        )
+        self.assertEqual(
+            sd_core_error_categories(b"[QUEUE] SD journal ready"), ()
+        )
 
 
 if __name__ == "__main__":

@@ -134,6 +134,26 @@ def capture_is_newer(previous: int | None, current: int) -> bool:
     return 0 < delta < 0x80000000
 
 
+def sd_core_error_categories(line: bytes) -> tuple[str, ...]:
+    """Return fixed, sanitized SD-driver error categories; never retain raw logs."""
+    lowered = line.lower()
+    categories = []
+    if b"sdselectcard" in lowered and b"select failed" in lowered:
+        categories.append("card_select_timeout")
+    if b"sdwait" in lowered and (b"fail" in lowered or b"failed" in lowered):
+        categories.append("card_ready_wait_failure")
+    if b"f_mount failed" in lowered:
+        categories.append("fatfs_mount_failure")
+    if b"physical drive cannot work" in lowered:
+        categories.append("physical_drive_not_ready")
+    if any(marker in lowered for marker in (
+        b"go_idle_state failed", b"send_if_cond failed", b"app_op_cond failed",
+        b"send_op_cond failed", b"set_blocklen failed", b"crc_on_off failed",
+    )):
+        categories.append("card_initialization_command_failure")
+    return tuple(categories)
+
+
 def summarize(
     port: str,
     duration: float,
@@ -182,6 +202,7 @@ def summarize(
         last_device_metrics: dict[int, int] = {}
         first_device_metrics: dict[int, int] = {}
         log_tags: dict[str, int] = defaultdict(int)
+        sd_core_errors: dict[str, int] = defaultdict(int)
         storage_error_lines = 0
 
         while time.monotonic() < deadline:
@@ -218,6 +239,8 @@ def summarize(
                         ):
                             if lowered.startswith(prefix):
                                 log_tags[label] += 1
+                        for category in sd_core_error_categories(lowered):
+                            sd_core_errors[category] += 1
                         if any(word in lowered for word in (b"sd journal unavailable", b"append failed", b"write failed", b"readback failed", b"storage fault", b"rejected")):
                             storage_error_lines += 1
                     continue
@@ -351,6 +374,7 @@ def summarize(
             },
             "device_usb_drops_during_capture": totals["device_usb_drops"],
             "sanitized_device_log_tag_counts": dict(sorted(log_tags.items())),
+            "sanitized_sd_core_error_counts": dict(sorted(sd_core_errors.items())),
             "recognized_storage_error_log_lines": storage_error_lines,
             "device_metrics_min_max": {
                 f"0x{pid:02X}": [min(values), max(values)]
