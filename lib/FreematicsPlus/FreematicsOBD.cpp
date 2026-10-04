@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include "FreematicsBase.h"
 #include "FreematicsOBD.h"
+#include "utility/OBDPidScaling.h"
 
 int dumpLine(char* buffer, int len)
 {
@@ -336,9 +337,11 @@ float COBD::normalizeData(byte pid, char* data)
 	case PID_TIME_WITH_MIL: // minute
 	case PID_TIME_SINCE_CODES_CLEARED: // minute
 	case PID_RUNTIME: // second
-	case PID_FUEL_RAIL_PRESSURE: // kPa
 	case PID_ENGINE_REF_TORQUE: // Nm
 		result = getLargeValue(data);
+		break;
+	case PID_FUEL_RAIL_PRESSURE: // 10 kPa per bit
+		result = freematics::obd::absoluteFuelRailPressureKpa(getLargeValue(data));
 		break;
 	case PID_FUEL_RAIL_PRESSURE_RELATIVE:
 		result = (int16_t)getLargeValue(data) / 4.0f;
