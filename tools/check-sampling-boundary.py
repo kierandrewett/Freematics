@@ -209,9 +209,18 @@ int main(int argc, char** argv) {
   }
   waveform.emit(&rich);
   char frame[SAMPLE_FRAME_SIZE]; CStorageRAM store;store.init(frame,sizeof(frame));
-  store.timestamp(tick);rich.serialize(store);
+  store.timestamp(tick);rich.serialize(store);store.tailer();
   assert(!store.overflowed());
   std::string encoded(frame,store.length());
+  const size_t checksumMarker=encoded.find('*');
+  assert(checksumMarker!=std::string::npos);
+  for(size_t begin=0;begin<checksumMarker;) {
+    size_t end=encoded.find(',',begin);
+    if(end==std::string::npos || end>checksumMarker) end=checksumMarker;
+    assert(encoded.find(':',begin)<end); // every production-serialized item is PID:value
+    if(end==checksumMarker) break;
+    begin=end+1;
+  }
   assert(encoded.find("40C:3999999999,")!=std::string::npos); // stale RPM remains explicit
   auto occurrences=[](const std::string& text,const std::string& needle) {
     unsigned count=0; size_t position=0;
