@@ -177,6 +177,29 @@
   app-level first-boot validation path is linked in the OTA build; real boot
   acceptance and automatic rollback remain hardware-unverified.
 
+## Follow-up — 2026-10-04 (cancellation safety and private artifacts)
+
+- Commit `90cfc10c2cfa` fixes OTA cancellation shutdown: cancellation probes
+  the modem, requests its AT power-down, and only uses the toggling power key
+  after the modem has responded both before and after a failed request. Host
+  policy tests cover already-off, accepted shutdown, failed shutdown, and a
+  lost response; strict compilation and Clang ASan/UBSan pass. The same commit
+  fixes the SCons post-build callback signature so production image permissions
+  are actually applied.
+- Commit `40c4c1ee7614` hardens the release packager to refuse POSIX output
+  directories accessible to group/others and documents its `0700` directory /
+  `0600` asset policy. All 19 packager tests pass, including the shared-folder
+  rejection case. Normal, OTA-production, and OTA-test PlatformIO builds pass;
+  their build directories are `0700` and final firmware/ELF files `0600`.
+- Built a local-only tokenless OTA `1.0.8` candidate from source commit
+  `40c4c1ee7614`, boot build ID `40c4c1ee7614`. The Model B image SHA-256 is
+  `d9c3ceff1295670f5fda06fd0822bb978667b41ad90b3e6eca22a21ba26dd9ce`; the
+  credential-aware packager accepted it and its sidecar verifies. Its output
+  directory is `0700`, both files are `0600`, and the candidate remains under
+  `.pio/ota-release-40c4c1e-v1.0.8/`; it has not been published or flashed.
+  Device-side cellular download, cancellation, first boot, and rollback remain
+  unverified.
+
 ## Scope and remaining validation
 
 This confirms board identity, local image installation, application boot, and
