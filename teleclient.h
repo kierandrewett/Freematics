@@ -5,6 +5,13 @@
 bool initializeTelemetryCredential();
 bool telemetryCredentialPersisted();
 
+// Resolve the configured upload endpoint from NVS, seeding it from this
+// private build once. Tokenless OTA builds require the persisted values.
+bool initializeTelemetryEndpoint(bool dependentConfigReady);
+bool telemetryEndpointConfigured();
+const char* telemetryServerHost();
+const char* telemetryServerPath();
+
 #define EVENT_LOGIN 1
 #define EVENT_LOGOUT 2
 #define EVENT_SYNC 3

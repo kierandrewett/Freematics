@@ -30,12 +30,12 @@ RELEASE_VERSION_MARKER = b"FREEMATICS_RELEASE_VERSION="
 _PRIVATE_VALUE_KEY_RE = re.compile(
     r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|"
     r"USERNAME|USER|LOGIN|SIM[_-]?CARD[_-]?PIN|SIM[_-]?PIN|PIN|SSID|"
-    r"SERVER[_-]?(?:HOST|PATH)|CELL[_-]?APN)",
+    r"SERVER[_-]?HOST|CELL[_-]?APN)",
     re.IGNORECASE,
 )
 _PRIVATE_ENV_KEY_RE = re.compile(
     r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|"
-    r"PIN|SSID|SERVER[_-]?(?:HOST|PATH)|CELL[_-]?APN)",
+    r"PIN|SSID|SERVER[_-]?HOST|CELL[_-]?APN)",
     re.IGNORECASE,
 )
 _PROJECT_USERNAME_KEY_RE = re.compile(
@@ -58,6 +58,16 @@ def _image_contains_value(image_path: Path, value: str | bytes) -> bool:
             overlap_length = len(needle) - 1
             overlap = searchable[-overlap_length:] if overlap_length else b""
     return False
+
+
+def _image_contains_c_string(image_path: Path, value: bytes) -> bool:
+    """Match a complete NUL-delimited C string, not an incidental substring."""
+    if not value:
+        return False
+    with image_path.open("rb") as image:
+        if image.read(len(value) + 1) == value + b"\0":
+            return True
+    return _image_contains_value(image_path, b"\0" + value + b"\0")
 
 
 def _credential_signatures(value: str | bytes) -> set[bytes]:
@@ -195,6 +205,49 @@ def _configured_credentials() -> set[bytes]:
     return credentials
 
 
+def _configured_server_paths() -> set[bytes]:
+    """Read private routing paths for exact-string artifact checks."""
+    paths: set[bytes] = set()
+    for key, value in os.environ.items():
+        if key == "SERVER_PATH" and value:
+            paths.update(_credential_signatures(value))
+
+    env_path = REPOSITORY_ROOT / ".env"
+    if env_path.exists():
+        for number, line in enumerate(env_path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = re.fullmatch(r"(?:export\s+)?SERVER_PATH\s*=\s*(.*)", stripped)
+            if not match:
+                continue
+            value = match.group(1)
+            if value.startswith(("'", '"')):
+                if len(value) < 2 or value[-1] != value[0]:
+                    raise ValueError(f".env:{number}: unmatched private server-path quotes")
+                value = value[1:-1]
+            if value:
+                paths.update(_credential_signatures(value))
+
+    config_path = REPOSITORY_ROOT / "local_config.h"
+    defines = _parse_defines(config_path.read_text(encoding="utf-8"))
+    if "SERVER_PATH" in defines:
+        value = _decode_c_string_sequence(defines["SERVER_PATH"])
+        if value is None:
+            raise ValueError("cannot verify configured private server path; refusing to package")
+        if value:
+            paths.update(_credential_signatures(value))
+    return paths
+
+
+def _image_contains_configured_private_value(image_path: Path) -> bool:
+    if any(_image_contains_value(image_path, value)
+           for value in _configured_credentials()):
+        return True
+    return any(_image_contains_c_string(image_path, value)
+               for value in _configured_server_paths())
+
+
 def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
     """Copy firmware and create a sha256sum-compatible sidecar.
 
@@ -206,11 +259,10 @@ def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
     if not firmware.is_file():
         raise ValueError(f"firmware image is not a regular file: {firmware}")
     _verify_tokenless_build(firmware)
-    for credential in _configured_credentials():
-        if _image_contains_value(firmware, credential):
-            raise ValueError(
-                "firmware contains a configured private value; refusing to package"
-            )
+    if _image_contains_configured_private_value(firmware):
+        raise ValueError(
+            "firmware contains a configured private value; refusing to package"
+        )
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == "posix" and output_dir.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise ValueError("release output directory must be owner-only (0700)")
@@ -248,11 +300,10 @@ def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
                     digest.update(chunk)
             os.fsync(tmp_image.fileno())
             _verify_tokenless_build(staged_image)
-            for credential in _configured_credentials():
-                if _image_contains_value(staged_image, credential):
-                    raise ValueError(
-                        "firmware contains a configured private value; refusing to package"
-                    )
+            if _image_contains_configured_private_value(staged_image):
+                raise ValueError(
+                    "firmware contains a configured private value; refusing to package"
+                )
 
         sidecar_bytes = f"{digest.hexdigest()}  {ASSET_NAME}\n".encode("ascii")
         with tempfile.NamedTemporaryFile(prefix=".freematics-ota-", dir=output_dir, delete=False) as tmp_sidecar:
@@ -307,9 +358,8 @@ def verify_release_directory(output_dir: Path) -> tuple[Path, Path]:
         raise ValueError("release assets must be owner-only (0600)")
 
     _verify_tokenless_build(image_path)
-    for credential in _configured_credentials():
-        if _image_contains_value(image_path, credential):
-            raise ValueError("firmware contains a configured private value; refusing to publish")
+    if _image_contains_configured_private_value(image_path):
+        raise ValueError("firmware contains a configured private value; refusing to publish")
 
     sidecar = sidecar_path.read_bytes()
     expected = re.fullmatch(

@@ -59,7 +59,7 @@ image. Boot selection is a separate final standby operation, not part of the
 download task. On first boot, firmware verifies that the recorded partition
 identity matches the running partition and hashes the running image before it
 can accept the image. Acceptance also requires storage, motion-sensor,
-and credential initialization; the ESP32 bootloader rolls back a failed or
+persistent endpoint configuration, and credential initialization; the ESP32 bootloader rolls back a failed or
 power-cut first boot. A reset before boot selection leaves the old slot active;
 an orphaned preparation record is cleared on the next normal boot.
 
@@ -77,12 +77,12 @@ the release asset and sidecar are both replaced by an attacker. HTTPS protects
 the transport and validates GitHub's certificate, but does not protect a
 compromised repository/release account.
 
-The first private/local firmware boot seeds the configured telemetry token to
-the existing `storage` NVS namespace without overwriting a token already
-there. OTA remains disabled unless the credential was committed and read back
-successfully; it also requires a healthy SD journal both before staging and
-before first-boot confirmation. Later tokenless OTA images use the stored
-value. The NVS copy is not
+The first private/local firmware boot seeds the configured telemetry token,
+server host/path, APN, and configured Wi-Fi/SIM credentials into the existing
+`storage` NVS namespace without overwriting values already there. A versioned
+configuration marker is written only after these settings are loaded and the
+endpoint is valid. OTA requires that marker and the persisted endpoint as well
+as a committed-and-read-back token. The NVS copy is not
 hardware-encrypted by this project; physical flash extraction remains in the
 threat model. The migration image embeds the token and must never be published
 to GitHub. To build a public OTA image, explicitly clear the inherited secret:
@@ -92,23 +92,26 @@ FREEMATICS_TOKEN= FREEMATICS_OTA_RELEASE=1 PRODUCTION_BUILD=1 \
   FREEMATICS_RELEASE=1.0.1 pio run -e esp32dev-ota-test
 ```
 
-This still validates the private production server/APN configuration. The
-release build is restricted to the OTA-enabled PlatformIO environment, fails
-if a token is present, and emits a non-secret release-mode marker. The local
-packager requires both that marker and the token-absent marker, scans for
-configured tokens, passwords, usernames, SIM PINs, and Wi-Fi SSIDs from the
-ignored `.env`, process environment, and matching `local_config.h` settings,
-and repeats the checks on the staged copy. For configured values at least eight
-bytes long, it also checks common Base64, hex, URL-escaped, and UTF-16 encodings.
-Credential literals in
+This validates the private production configuration but generates a separate
+allowlisted compile header for the OTA image. Feature, storage, and transport
+mode remain compatible; server host/path, APN, and authentication values are
+omitted from the public image and loaded from NVS. The release build is
+restricted to the OTA-enabled PlatformIO environment, fails if a token is
+present, and emits a non-secret release-mode marker. The local packager
+requires both that marker and the token-absent marker, scans for configured
+tokens, passwords, usernames, SIM PINs, Wi-Fi SSIDs, APNs, server hosts, and
+exact server-path strings from the ignored `.env`, process environment, and
+matching `local_config.h` settings, and repeats the checks on the staged copy.
+For configured values at least eight bytes long, it also checks common Base64,
+hex, URL-escaped, and UTF-16 encodings. Credential literals in
 `local_config.h` are joined across adjacent C strings and comments are
-excluded; unsupported escaped or prefixed credential literals, or credential
-macros that cannot be resolved, fail packaging. Its output directory must be
+excluded; unsupported escaped or prefixed private literals, or private macros
+that cannot be resolved, fail packaging. Its output directory must be
 empty before packaging, so an "upload everything in this folder" operation
 cannot silently include logs, configs, or unrelated build outputs. It never
-overwrites an existing asset pair and does not upload anything. Server and APN
-routing settings remain in the firmware; they are not treated as authentication
-credentials. These checks
+overwrites an existing asset pair and does not upload anything. The publisher
+also rejects binaries containing exact configured server-path strings, without
+mistaking an incidental substring in unrelated firmware text. These checks
 guard against accidental publication, not deliberately falsified binaries or
 markers.
 

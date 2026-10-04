@@ -27,6 +27,7 @@
 #endif
 #include "telestore.h"
 #include "teleclient.h"
+#include "telemetry_endpoint_policy.h"
 #include "sensorwaveform.h"
 #include "telequeue.h"
 #include "usbtelemetry.h"
@@ -185,15 +186,47 @@ int deviceTemp = 0;
 
 // config data
 char apn[32];
+char apnUsername[64];
+char apnPassword[64];
+char simCardPin[16];
 #if ENABLE_WIFI
-char wifiSSID[32] = WIFI_SSID;
-char wifiPassword[32] = WIFI_PASSWORD;
+char wifiSSID[32] = {};
+char wifiPassword[64] = {};
 #endif
 nvs_handle_t nvs;
 
 bool persistConfigString(const char* key, const char* value)
 {
   return nvs_set_str(nvs, key, value ? value : "") == ESP_OK && nvs_commit(nvs) == ESP_OK;
+}
+
+bool loadOrSeedConfigString(const char* key, char* destination,
+                            size_t capacity, const char* buildValue)
+{
+  if (!key || !destination || !capacity || capacity > 64) return false;
+  char stored[64] = {};
+  size_t length = sizeof(stored);
+  const esp_err_t result = nvs_get_str(nvs, key, stored, &length);
+  const bool storedFound = result == ESP_OK;
+  if (!storedFound && result != ESP_ERR_NVS_NOT_FOUND) return false;
+  const char* value = buildValue ? buildValue : "";
+#if !FREEMATICS_OTA_RELEASE_BUILD
+  const bool allowBuildSeed = true;
+#else
+  const bool allowBuildSeed = !value[0];
+#endif
+  const freematics::endpoint::ValueSource source =
+      freematics::endpoint::resolveStoredOrSeed(storedFound ? stored : nullptr,
+          storedFound, value, allowBuildSeed, destination, capacity);
+  if (source == freematics::endpoint::kInvalidValue) return false;
+#if !FREEMATICS_OTA_RELEASE_BUILD
+  if (source == freematics::endpoint::kBuildSeedValue && value[0] &&
+      !persistConfigString(key, destination)) {
+    destination[0] = 0;
+    return false;
+  }
+#endif
+  return true;
 }
 
 // live data
@@ -2231,7 +2264,7 @@ bool initCell(bool quick = false, CFreematics::ContinueCheck continueCheck = nul
 #endif
   Serial.print("CELL:");
   Serial.println(teleClient.cell.deviceName());
-  if (!teleClient.cell.checkSIM(SIM_CARD_PIN)) {
+  if (!teleClient.cell.checkSIM(simCardPin)) {
     Serial.println("NO SIM CARD");
     if (!continueCheck || continueCheck(continueContext)) teleClient.cell.end();
     return false;
@@ -2240,10 +2273,9 @@ bool initCell(bool quick = false, CFreematics::ContinueCheck continueCheck = nul
   Serial.println(teleClient.cell.IMEI);
   Serial.println("[CELL] Searching...");
   if (*apn) {
-    Serial.print("APN:");
-    Serial.println(apn);
+    Serial.println("[CELL] Private APN configured");
   }
-  if (teleClient.cell.setup(apn, APN_USERNAME, APN_PASSWORD)) {
+  if (teleClient.cell.setup(apn, apnUsername, apnPassword)) {
     netop = teleClient.cell.getOperatorName();
     if (netop.length()) {
       Serial.print("Operator:");
@@ -2787,6 +2819,7 @@ OTAParkedPolicy::Denial finalOtaParkedCheck()
 #if STORAGE == STORAGE_SD
   observation.durableStorageHealthy = durableQueue.healthy();
 #endif
+  observation.telemetryEndpointConfigured = telemetryEndpointConfigured();
   observation.telemetryCredentialPersisted = telemetryCredentialPersisted();
   if (!state.check(STATE_MEMS_READY) || !otaParkedPolicy.motionProofCurrent(millis())) {
     return OTAParkedPolicy::kMotionUnavailable;
@@ -2905,6 +2938,7 @@ void standby()
     bool sensorFailure = false;
     bool supplyUnsafe = false;
     bool storageUnsafe = false;
+    bool endpointUnavailable = false;
     bool credentialUnavailable = false;
     float otaSupplyVoltage = 0;
     while (state.check(STATE_STANDBY) && !otaAttemptDone) {
@@ -2931,6 +2965,11 @@ void standby()
         break;
       }
 #endif
+      if (!telemetryEndpointConfigured()) {
+        endpointUnavailable = true;
+        otaCancelRequested = true;
+        break;
+      }
       if (!telemetryCredentialPersisted()) {
         credentialUnavailable = true;
         otaCancelRequested = true;
@@ -2948,7 +2987,8 @@ void standby()
         break;
       }
     }
-    if (motionWake || sensorFailure || supplyUnsafe || storageUnsafe || credentialUnavailable) {
+    if (motionWake || sensorFailure || supplyUnsafe || storageUnsafe ||
+        endpointUnavailable || credentialUnavailable) {
       // Let the modem owner observe cancellation and close its socket before
       // releasing the shared coprocessor link to OBD acquisition.
       otaCancelRequested = true;
@@ -2956,6 +2996,7 @@ void standby()
       if (otaAttemptResult == OTA_ATTEMPT_READY) discardVerifiedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
       if (storageUnsafe) Serial.println("[OTA] Attempt cancelled: durable storage became unhealthy");
+      if (endpointUnavailable) Serial.println("[OTA] Attempt cancelled: persistent upload endpoint is unavailable");
       if (credentialUnavailable) Serial.println("[OTA] Attempt cancelled: telemetry credential is no longer persisted");
       if (supplyUnsafe) {
         noteOtaResetEvent(millis(), false);
@@ -2963,7 +3004,7 @@ void standby()
         Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or above the resting threshold");
       }
       if (motionWake || sensorFailure || supplyUnsafe) break;
-      // Storage/credential failures invalidate OTA eligibility, not the parked
+      // Storage/configuration failures invalidate OTA eligibility, not the parked
       // state. Continue monitoring while parked; the next attempt must pass
       // the full safety gate again.
       continue;
@@ -2973,7 +3014,8 @@ void standby()
         // The transfer task never selects a boot slot. Revalidate vehicle
         // state here, in the standby owner, before hashing/journaling the
         // exact candidate and again immediately before boot selection.
-        bool unsafeToReboot = !telemetryCredentialPersisted();
+        bool unsafeToReboot = !telemetryEndpointConfigured() ||
+                              !telemetryCredentialPersisted();
 #if STORAGE == STORAGE_SD
         unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
 #endif
@@ -2988,7 +3030,7 @@ void standby()
           discardVerifiedOtaUpdate();
           otaAttemptResult = OTA_ATTEMPT_CANCELLED;
           otaAttemptDone = false;
-          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded: durable storage or credential unavailable");
+          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded: durable storage, endpoint or credential unavailable");
           else if (motionWake || sensorReadFailed) Serial.println("[OTA] Candidate discarded: continuous motion-sensor proof unavailable");
           else Serial.printf("[OTA] Candidate discarded: parked safety gate changed (%u)\n",
                              (unsigned)finalDenial);
@@ -3006,7 +3048,8 @@ void standby()
         sensorReadFailed = false;
         const bool motionDuringPrepare = waitMotion(1000, STANDBY_MOTION_THRESHOLD,
             STANDBY_MOTION_CONFIRM_SAMPLES, &sensorReadFailed);
-        unsafeToReboot = !telemetryCredentialPersisted();
+        unsafeToReboot = !telemetryEndpointConfigured() ||
+                         !telemetryCredentialPersisted();
 #if STORAGE == STORAGE_SD
         unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
 #endif
@@ -3018,7 +3061,7 @@ void standby()
           discardVerifiedOtaUpdate();
           otaAttemptResult = OTA_ATTEMPT_CANCELLED;
           otaAttemptDone = false;
-          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded before activation: storage or credential unavailable");
+          if (unsafeToReboot) Serial.println("[OTA] Candidate discarded before activation: storage, endpoint or credential unavailable");
           else if (motionDuringPrepare || sensorReadFailed) Serial.println("[OTA] Candidate discarded before activation: motion or sensor fault");
           else Serial.printf("[OTA] Candidate discarded before activation: parked safety gate changed (%u)\n",
                              (unsigned)activationDenial);
@@ -3147,22 +3190,28 @@ void showSysInfo()
 #endif
 }
 
-void loadConfig()
+bool loadConfig()
 {
-  size_t len;
-  len = sizeof(apn);
-  apn[0] = 0;
-  nvs_get_str(nvs, "CELL_APN", apn, &len);
-  if (!apn[0]) {
-    strcpy(apn, CELL_APN);
+  bool configReady = loadOrSeedConfigString(
+      "CELL_APN", apn, sizeof(apn), CELL_APN);
+  if (!apn[0] && CELL_APN[0] && strlen(CELL_APN) < sizeof(apn)) {
+    memcpy(apn, CELL_APN, sizeof(CELL_APN));
+    configReady = persistConfigString("CELL_APN", apn) && configReady;
   }
+  configReady = loadOrSeedConfigString("APN_USERNAME", apnUsername,
+      sizeof(apnUsername), APN_USERNAME ? APN_USERNAME : "") && configReady;
+  configReady = loadOrSeedConfigString("APN_PASSWORD", apnPassword,
+      sizeof(apnPassword), APN_PASSWORD ? APN_PASSWORD : "") && configReady;
+  configReady = loadOrSeedConfigString("SIM_CARD_PIN", simCardPin,
+      sizeof(simCardPin), SIM_CARD_PIN) && configReady;
 
 #if ENABLE_WIFI
-  len = sizeof(wifiSSID);
-  nvs_get_str(nvs, "WIFI_SSID", wifiSSID, &len);
-  len = sizeof(wifiPassword);
-  nvs_get_str(nvs, "WIFI_PWD", wifiPassword, &len);
+  configReady = loadOrSeedConfigString("WIFI_SSID", wifiSSID,
+      sizeof(wifiSSID), WIFI_SSID) && configReady;
+  configReady = loadOrSeedConfigString("WIFI_PWD", wifiPassword,
+      sizeof(wifiPassword), WIFI_PASSWORD) && configReady;
 #endif
+  return configReady;
 }
 
 void processBLE(int timeout)
@@ -3331,9 +3380,10 @@ void setup()
     err = nvs_flash_init();
   }
   ESP_ERROR_CHECK( err );
+  bool deviceConfigReady = false;
   err = nvs_open("storage", NVS_READWRITE, &nvs);
   if (err == ESP_OK) {
-    loadConfig();
+    deviceConfigReady = loadConfig();
   }
 
 #if ENABLE_OLED
@@ -3344,6 +3394,7 @@ void setup()
   // The richest supported frame is about 5 KiB. 115200 baud cannot sustain
   // that at the 250 ms sample cadence; use the CP210x-supported 460800 rate.
   Serial.begin(460800);
+  initializeTelemetryEndpoint(deviceConfigReady);
   initializeTelemetryCredential();
   usbBootId = ((uint64_t)esp_random() << 32) | esp_random();
   otaParkedPolicy.beginBoot(millis());
@@ -3475,8 +3526,10 @@ if (!state.check(STATE_MEMS_READY)) do {
   otaStorageReady = durableQueue.healthy();
 #endif
   const bool otaMotionReady = !ENABLE_MEMS || state.check(STATE_MEMS_READY);
+  const bool otaEndpointReady = telemetryEndpointConfigured();
   const bool otaCredentialReady = telemetryCredentialPersisted();
-  if (!validatePendingOtaImage(otaStorageReady, otaMotionReady, otaCredentialReady)) {
+  if (!validatePendingOtaImage(otaStorageReady, otaMotionReady,
+          otaEndpointReady, otaCredentialReady)) {
     ESP.restart();
     for (;;) delay(1000);
   }

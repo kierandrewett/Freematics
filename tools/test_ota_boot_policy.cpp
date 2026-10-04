@@ -34,10 +34,11 @@ struct FakeOperations {
 freematics::ota::BootResult validate(FakeOperations& operations,
                                      bool storage = true,
                                      bool motion = true,
+                                     bool endpoint = true,
                                      bool credential = true,
                                      bool identity = true) {
   return freematics::ota::validateAndAcceptPendingImage(
-      storage, motion, credential, identity, operations);
+      storage, motion, endpoint, credential, identity, operations);
 }
 
 void testAcceptsOnlyAfterServicesAndBootloaderConfirmation() {
@@ -57,11 +58,15 @@ void testMissingCoreValidationRollsBackBeforeConfirmation() {
   assert((motion.calls == std::vector<std::string>{"rollback-validation"}));
 
   FakeOperations credential;
-  assert(validate(credential, true, true, false) == freematics::ota::kBootRolledBack);
+  assert(validate(credential, true, true, true, false) == freematics::ota::kBootRolledBack);
   assert((credential.calls == std::vector<std::string>{"rollback-validation"}));
 
+  FakeOperations endpoint;
+  assert(validate(endpoint, true, true, false) == freematics::ota::kBootRolledBack);
+  assert((endpoint.calls == std::vector<std::string>{"rollback-validation"}));
+
   FakeOperations identity;
-  assert(validate(identity, true, true, true, false) == freematics::ota::kBootRolledBack);
+  assert(validate(identity, true, true, true, true, false) == freematics::ota::kBootRolledBack);
   assert((identity.calls == std::vector<std::string>{"rollback-validation"}));
 }
 

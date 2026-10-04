@@ -559,6 +559,7 @@ void discardVerifiedOtaUpdate()
 }
 
 bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
+                             bool telemetryEndpointReady,
                              bool telemetryCredentialReady)
 {
 #if ENABLE_OTA && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
@@ -591,7 +592,8 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
     PendingOtaIdentity pending = {};
     uint8_t actualDigest[kSha256Bytes];
     bool identityValid = false;
-    if (storageReady && motionSensorReady && telemetryCredentialReady) {
+    if (storageReady && motionSensorReady && telemetryEndpointReady &&
+        telemetryCredentialReady) {
       identityValid = readPendingIdentity(&pending) &&
           identityMatchesPartition(pending, running) &&
           hashPartitionImage(running, pending.imageSize, actualDigest) &&
@@ -602,7 +604,8 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
     PendingBootOperations operations = {pending};
     const freematics::ota::BootResult result =
         freematics::ota::validateAndAcceptPendingImage(
-            storageReady, motionSensorReady, telemetryCredentialReady,
+            storageReady, motionSensorReady, telemetryEndpointReady,
+            telemetryCredentialReady,
             identityValid, operations);
     if (result == freematics::ota::kBootRolledBack) return false;
     if (result == freematics::ota::kBootRollbackFailed) {
@@ -624,11 +627,13 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
 #elif ENABLE_OTA
   (void)storageReady;
   (void)motionSensorReady;
+  (void)telemetryEndpointReady;
   (void)telemetryCredentialReady;
   Serial.println("[OTA] Bootloader rollback support is not enabled");
 #else
   (void)storageReady;
   (void)motionSensorReady;
+  (void)telemetryEndpointReady;
   (void)telemetryCredentialReady;
 #endif
   return true;

@@ -23,10 +23,11 @@ enum BootResult {
 template <typename Operations>
 BootResult validateAndAcceptPendingImage(bool storageReady,
                                          bool motionSensorReady,
+                                         bool endpointReady,
                                          bool credentialReady,
                                          bool imageIdentityValid,
                                          Operations& operations) {
-  if (!storageReady || !motionSensorReady || !credentialReady ||
+  if (!storageReady || !motionSensorReady || !endpointReady || !credentialReady ||
       !imageIdentityValid) {
     return operations.rollback(kBootCoreValidationFailed)
         ? kBootRolledBack : kBootRollbackFailed;

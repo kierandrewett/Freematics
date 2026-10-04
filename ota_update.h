@@ -20,4 +20,5 @@ void discardVerifiedOtaUpdate();
 // Call after core services have initialized. Arduino's default rollback hook
 // validates too early for this firmware, so ota_update.cpp defers confirmation.
 bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
+                             bool telemetryEndpointReady,
                              bool telemetryCredentialReady);

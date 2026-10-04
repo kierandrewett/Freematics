@@ -12,7 +12,7 @@ static Policy::Signal signal(float value, uint32_t sampledAt, uint32_t maxAge = 
 
 static Policy::Observation parked(uint32_t sampledAt) {
   Policy::Observation result = {
-      false, false, true, true,
+      false, false, true, true, true,
       signal(0.0f, sampledAt), signal(0.0f, sampledAt), signal(12.5f, sampledAt),
   };
   return result;
@@ -108,6 +108,9 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   state = parked(checkAt);
   state.telemetryCredentialPersisted = false;
   assert(policy.observe(checkAt, state) == Policy::kCredentialUnavailable);
+  state = parked(checkAt);
+  state.telemetryEndpointConfigured = false;
+  assert(policy.observe(checkAt, state) == Policy::kEndpointUnavailable);
   state = parked(checkAt);
   state.speedKph.value = 1.0f;
   assert(policy.observe(checkAt, state) == Policy::kSpeedNotZero);

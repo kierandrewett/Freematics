@@ -46,6 +46,9 @@
 #ifndef FREEMATICS_TOKEN_EMBEDDED
 #define FREEMATICS_TOKEN_EMBEDDED 0
 #endif
+#ifndef FREEMATICS_OTA_RELEASE_BUILD
+#define FREEMATICS_OTA_RELEASE_BUILD 0
+#endif
 
 /**************************************
 * Configuration Definitions
@@ -62,7 +65,11 @@
 #define PROTOCOL_HTTPS_GET 2
 #define PROTOCOL_HTTPS_POST 3
 
-#if defined(__has_include)
+#if FREEMATICS_OTA_RELEASE_BUILD
+// Public OTA images receive only a generated allowlist of non-private build
+// features. Device-specific network settings are loaded from NVS.
+#include "ota_release_config.h"
+#elif defined(__has_include)
 #if __has_include("local_config.h")
 #include "local_config.h"
 #endif
@@ -73,9 +80,6 @@
 // for validation builds.
 #ifndef ENABLE_OTA
 #define ENABLE_OTA 0
-#endif
-#ifndef FREEMATICS_OTA_RELEASE_BUILD
-#define FREEMATICS_OTA_RELEASE_BUILD 0
 #endif
 
 /**************************************
@@ -132,7 +136,13 @@
 
 #ifndef SERVER_HOST
 // Freematics Hub server settings
+#if FREEMATICS_OTA_RELEASE_BUILD
+#define SERVER_HOST ""
+#else
 #define SERVER_HOST "hub.freematics.com"
+#endif
+#endif
+#ifndef SERVER_PROTOCOL
 #define SERVER_PROTOCOL PROTOCOL_UDP
 #endif
 
@@ -149,7 +159,11 @@
 
 // HTTPS settings
 #ifndef SERVER_PATH
+#if FREEMATICS_OTA_RELEASE_BUILD
+#define SERVER_PATH ""
+#else
 #define SERVER_PATH "/hub/api"
+#endif
 #endif
 
 #ifndef SERVER_TOKEN

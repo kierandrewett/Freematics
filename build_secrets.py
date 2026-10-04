@@ -3,18 +3,21 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
-from production_config import load_build_environment, validate_production_config
-
 Import("env")
+
+project_dir = Path(env.subst("$PROJECT_DIR"))
+sys.path.insert(0, str(project_dir / "tools"))
+from production_config import load_build_environment, validate_production_config
+from ota_release_config import generate_header
 
 build_dir = Path(env.subst("$BUILD_DIR"))
 build_dir.mkdir(parents=True, exist_ok=True)
 if os.name == "posix":
-    # Production images contain the collector token; even tokenless builds can
-    # contain private APN settings. Keep all per-environment build products
-    # inaccessible to other local users from the start of compilation.
+    # Production images may contain device credentials. Keep per-environment
+    # build products inaccessible to other local users from compilation start.
     os.umask(0o077)
     for private_dir in (build_dir.parent.parent, build_dir.parent):
         private_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +85,11 @@ elif ota_release:
         validate_production_config(config_text)
     except ValueError as exc:
         raise RuntimeError(f"invalid production configuration: {exc}") from exc
+    public_config = build_dir / "ota_release_config.h"
+    public_config.write_text(generate_header(config_text), encoding="utf-8")
+    if os.name == "posix":
+        os.chmod(public_config, 0o600)
+    env.Append(CPPPATH=[str(build_dir.resolve())])
 env.Append(CPPDEFINES=[("SERVER_TOKEN", env.StringifyMacro(token))])
 env.Append(CPPDEFINES=[("FREEMATICS_TOKEN_EMBEDDED", "1" if token else "0")])
 env.Append(CPPDEFINES=[("FREEMATICS_OTA_RELEASE_BUILD", "1" if ota_release else "0")])

@@ -20,6 +20,7 @@
 #include "teleclient.h"
 #include "config.h"
 #include "telemetry_token.h"
+#include "telemetry_endpoint_policy.h"
 #include <nvs.h>
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
 #include "teledeflate.h"
@@ -33,9 +34,40 @@ extern char isoTime[];
 
 namespace {
 const char kTelemetryTokenNvsKey[] = "upload_token";
+const char kPrivateConfigVersionKey[] = "private_cfg_v1";
 char telemetryToken[freematics::security::kTelemetryTokenLength + 1] = {};
 bool telemetryTokenResolved = false;
 bool telemetryTokenPersisted = false;
+char telemetryHost[254] = {};
+char telemetryPath[256] = {};
+bool telemetryEndpointResolved = false;
+bool telemetryEndpointReady = false;
+
+bool loadOrSeedEndpointValue(nvs_handle_t handle, const char* key,
+                             char* destination, size_t capacity,
+                             const char* buildValue, bool allowSeed,
+                             bool isHost)
+{
+  char stored[256] = {};
+  if (capacity > sizeof(stored)) return false;
+  size_t length = sizeof(stored);
+  const esp_err_t read = nvs_get_str(handle, key, stored, &length);
+  const bool storedFound = read == ESP_OK;
+  if (!storedFound && read != ESP_ERR_NVS_NOT_FOUND) {
+    destination[0] = 0;
+    return false;
+  }
+  const freematics::endpoint::ValueSource source =
+      freematics::endpoint::resolveValue(storedFound ? stored : nullptr,
+          storedFound, buildValue, allowSeed, isHost, destination, capacity);
+  if (source == freematics::endpoint::kInvalidValue ||
+      (source == freematics::endpoint::kBuildSeedValue &&
+       nvs_set_str(handle, key, destination) != ESP_OK)) {
+    destination[0] = 0;
+    return false;
+  }
+  return true;
+}
 
 bool resolveAndLoadTelemetryToken()
 {
@@ -104,6 +136,66 @@ bool initializeTelemetryCredential()
 bool telemetryCredentialPersisted()
 {
   return telemetryTokenPersisted;
+}
+
+bool initializeTelemetryEndpoint(bool dependentConfigReady)
+{
+  if (telemetryEndpointResolved) return telemetryEndpointReady;
+
+  telemetryHost[0] = 0;
+  telemetryPath[0] = 0;
+  nvs_handle_t handle;
+  if (nvs_open("storage", NVS_READWRITE, &handle) != ESP_OK) {
+    Serial.println("[NET] Could not open endpoint configuration storage");
+    telemetryEndpointResolved = true;
+    return false;
+  }
+#if FREEMATICS_OTA_RELEASE_BUILD
+  const bool allowSeed = false;
+#else
+  const bool allowSeed = true;
+#endif
+  const bool hostReady = loadOrSeedEndpointValue(handle, "SERVER_HOST",
+      telemetryHost, sizeof(telemetryHost), SERVER_HOST, allowSeed, true);
+  const bool pathReady = loadOrSeedEndpointValue(handle, "SERVER_PATH",
+      telemetryPath, sizeof(telemetryPath), SERVER_PATH, allowSeed, false);
+  uint8_t configVersion = 0;
+  const esp_err_t versionRead = nvs_get_u8(handle, kPrivateConfigVersionKey,
+                                           &configVersion);
+  const bool canSeedMarker = allowSeed && versionRead == ESP_ERR_NVS_NOT_FOUND;
+  const freematics::endpoint::ConfigMarkerAction markerAction =
+      freematics::endpoint::resolveConfigMarker(versionRead == ESP_OK,
+          configVersion, canSeedMarker,
+          dependentConfigReady && hostReady && pathReady);
+  bool versionReady = markerAction != freematics::endpoint::kRequirePrivateMigration;
+  if (markerAction == freematics::endpoint::kSeedPrivateMigrationMarker) {
+    versionReady = nvs_set_u8(handle, kPrivateConfigVersionKey, 1) == ESP_OK;
+  }
+  const esp_err_t commit = hostReady && pathReady && versionReady
+      ? nvs_commit(handle) : ESP_FAIL;
+  nvs_close(handle);
+
+  telemetryEndpointReady = hostReady && pathReady && versionReady && commit == ESP_OK;
+  telemetryEndpointResolved = true;
+  Serial.println(telemetryEndpointReady ?
+      "[NET] Persistent upload endpoint ready" :
+      "[NET] Upload endpoint missing or invalid; refusing network upload");
+  return telemetryEndpointReady;
+}
+
+bool telemetryEndpointConfigured()
+{
+  return telemetryEndpointResolved && telemetryEndpointReady;
+}
+
+const char* telemetryServerHost()
+{
+  return telemetryEndpointConfigured() ? telemetryHost : "";
+}
+
+const char* telemetryServerPath()
+{
+  return telemetryEndpointConfigured() ? telemetryPath : "";
 }
 
 CBuffer::CBuffer(uint8_t* mem)
@@ -396,6 +488,7 @@ bool TeleClientUDP::verifyChecksum(char* data)
 
 bool TeleClientUDP::notify(byte event, const char* payload)
 {
+  if (!telemetryEndpointConfigured()) return false;
   char buf[48];
   char cache[128];
   CStorageRAM netbuf;
@@ -490,12 +583,13 @@ bool TeleClientUDP::notify(byte event, const char* payload)
 
 bool TeleClientUDP::connect(bool quick)
 {
+  if (!telemetryEndpointConfigured()) return false;
   byte event = login ? EVENT_RECONNECT : EVENT_LOGIN;
   bool success = false;
 #if ENABLE_WIFI
   if (wifi.connected())
   {
-    if (quick) return wifi.open(SERVER_HOST, SERVER_PORT);
+    if (quick) return wifi.open(telemetryServerHost(), SERVER_PORT);
   }
   else
 #endif
@@ -510,15 +604,13 @@ bool TeleClientUDP::connect(bool quick)
 
   // connect to telematics server
   for (byte attempts = 0; attempts < 3; attempts++) {
-    Serial.print(event == EVENT_LOGIN ? "LOGIN(" : "RECONNECT(");
-    Serial.print(SERVER_HOST);
-    Serial.print(':');
-    Serial.print(SERVER_PORT);
-    Serial.println(")...");
+    Serial.println(event == EVENT_LOGIN ?
+        "[NET] Opening telemetry session..." :
+        "[NET] Reconnecting telemetry session...");
 #if ENABLE_WIFI
     if (wifi.connected())
     {
-      if (!wifi.open(SERVER_HOST, SERVER_PORT)) {
+      if (!wifi.open(telemetryServerHost(), SERVER_PORT)) {
         Serial.println("[WIFI] Unable to connect");
         delay(1000);
         continue;
@@ -527,7 +619,7 @@ bool TeleClientUDP::connect(bool quick)
     else
 #endif
     {
-      if (!cell.open(SERVER_HOST, SERVER_PORT)) {
+      if (!cell.open(telemetryServerHost(), SERVER_PORT)) {
         if (!cell.check()) break;
         Serial.println("[NET] Unable to connect");
         delay(3000);
@@ -562,17 +654,18 @@ bool TeleClientUDP::connect(bool quick)
 
 bool TeleClientUDP::ping()
 {
+  if (!telemetryEndpointConfigured()) return false;
   bool success = false;
   for (byte n = 0; n < 3 && !success; n++) {
 #if ENABLE_WIFI
     if (wifi.connected())
     {
-      success = wifi.open(SERVER_HOST, SERVER_PORT);
+      success = wifi.open(telemetryServerHost(), SERVER_PORT);
     }
     else
 #endif
     {
-      success = cell.open(SERVER_HOST, SERVER_PORT);
+      success = cell.open(telemetryServerHost(), SERVER_PORT);
     }
     if (success) {
       if ((success = notify(EVENT_PING))) break;
@@ -595,6 +688,7 @@ bool TeleClientUDP::ping()
 
 bool TeleClientUDP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
+  if (!telemetryEndpointConfigured()) return false;
 #if ENABLE_WIFI
   // transmit data via wifi
   if (wifi.connected()) {
@@ -688,8 +782,9 @@ void TeleClientUDP::shutdown()
 
 bool TeleClientHTTP::notify(byte event, const char* payload)
 {
+  if (!telemetryEndpointConfigured()) return false;
   char path[256];
-  snprintf(path, sizeof(path), "%s/notify/%s?EV=%u&SSI=%d&TS=%lu&VIN=%s", SERVER_PATH, devid,
+  snprintf(path, sizeof(path), "%s/notify/%s?EV=%u&SSI=%d&TS=%lu&VIN=%s", telemetryServerPath(), devid,
     (unsigned int)event, (int)rssi, (unsigned long)millis(), vin);
   if (event == EVENT_LOGOUT) login = false;
 #if ENABLE_WIFI
@@ -712,7 +807,7 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
   }
 #endif
   {
-    if (!cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, 0, 0)) {
+    if (!cell.send(METHOD_POST, telemetryServerHost(), SERVER_PORT, path, 0, 0)) {
       Serial.println("[HTTP] Notification send failed via cellular");
       return false;
     }
@@ -731,6 +826,7 @@ bool TeleClientHTTP::notify(byte event, const char* payload)
 
 bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
 {
+  if (!telemetryEndpointConfigured()) return false;
 #if HTTP_COMPRESS_UPLOADS && SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
   // teledeflate.cpp is compiled into the app, so it runs with the PSRAM
   // workaround this revision 1 chip needs (the ROM deflate does not).
@@ -774,10 +870,10 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_GET
   if (gd && gd->ts) {
     len = snprintf(path, sizeof(path), "%s/push?id=%s&timestamp=%s&lat=%f&lon=%f&altitude=%d&speed=%f&heading=%d",
-      SERVER_PATH, devid, isoTime,
+      telemetryServerPath(), devid, isoTime,
       gd->lat, gd->lng, (int)gd->alt, gd->speed, (int)gd->heading);
   } else {
-    len = snprintf(path, sizeof(path), "%s/push?id=%s", SERVER_PATH, devid);
+    len = snprintf(path, sizeof(path), "%s/push?id=%s", telemetryServerPath(), devid);
   }
   if (len < 0 || (size_t)len >= sizeof(path)) {
     Serial.println("[HTTP] GET path too long");
@@ -792,10 +888,10 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
 #endif
   {
     Serial.println("[HTTP] GET via cellular");
-    success = cell.send(METHOD_GET, SERVER_HOST, SERVER_PORT, path);
+    success = cell.send(METHOD_GET, telemetryServerHost(), SERVER_PORT, path);
   }
 #else
-  len = snprintf(path, sizeof(path), packed ? "%s/post/%s?z=1" : "%s/post/%s", SERVER_PATH, devid);
+  len = snprintf(path, sizeof(path), packed ? "%s/post/%s?z=1" : "%s/post/%s", telemetryServerPath(), devid);
   // The field count check below always uses the uncompressed batch.
   const char* body = packed ? packed : packetBuffer;
   const unsigned int bodySize = packed ? packedSize : packetSize;
@@ -810,7 +906,7 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
   {
     Serial.print("[HTTP] POST via cellular: ");
     Serial.println(path);
-    success = cell.send(METHOD_POST, SERVER_HOST, SERVER_PORT, path, body, bodySize);
+    success = cell.send(METHOD_POST, telemetryServerHost(), SERVER_PORT, path, body, bodySize);
   }
   len += bodySize;
 #endif
@@ -894,6 +990,7 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
 
 bool TeleClientHTTP::connect(bool quick)
 {
+  if (!telemetryEndpointConfigured()) return false;
   if (!resolveAndLoadTelemetryToken()) {
     // The collector is deliberately protected at both Caddy boundaries.
     // Refuse to cycle the modem when this production credential is absent.
@@ -931,7 +1028,7 @@ bool TeleClientHTTP::connect(bool quick)
 
 #if ENABLE_WIFI
   if (wifi.connected()) {
-    success = wifi.open(SERVER_HOST, SERVER_PORT);
+    success = wifi.open(telemetryServerHost(), SERVER_PORT);
     m_useWifi = success;
     if (!success) Serial.println("[NET] Wi-Fi HTTPS failed; trying cellular");
   }
@@ -939,7 +1036,7 @@ bool TeleClientHTTP::connect(bool quick)
   if (!success) {
     m_useWifi = false;
     for (byte attempts = 0; !success && attempts < 3; attempts++) {
-      success = cell.open(SERVER_HOST, SERVER_PORT);
+      success = cell.open(telemetryServerHost(), SERVER_PORT);
       if (!success) {
         if (!cell.check()) break;
         cell.close();
@@ -953,11 +1050,7 @@ bool TeleClientHTTP::connect(bool quick)
   }
   if (quick) return true;
   if (!login) {
-    Serial.print("LOGIN(");
-    Serial.print(SERVER_HOST);
-    Serial.print(':');
-    Serial.print(SERVER_PORT);
-    Serial.println(")...");
+    Serial.println("[NET] Opening telemetry session...");
     // log in or reconnect to Freematics Hub
     if (notify(EVENT_LOGIN)) {
       lastSyncTime = millis();
@@ -972,6 +1065,7 @@ bool TeleClientHTTP::connect(bool quick)
 
 bool TeleClientHTTP::ping()
 {
+  if (!telemetryEndpointConfigured()) return false;
   // Standby pings must not create a new telemetry session or archive file.
   // Open the authenticated socket, send the lightweight EVENT_PING marker,
   // then let the standby task close the modem again.

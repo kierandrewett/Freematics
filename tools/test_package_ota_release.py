@@ -14,6 +14,7 @@ from package_ota_release import (
     ASSET_NAME,
     SIDECAR_NAME,
     _credential_signatures,
+    _image_contains_c_string,
     _image_contains_value,
     package_release,
     verify_release_directory,
@@ -59,6 +60,12 @@ class PackageOtaReleaseTests(unittest.TestCase):
             self.assertTrue(_image_contains_value(self.firmware, b"z1"))
             self.assertTrue(_image_contains_value(self.firmware, b"a"))
             self.assertFalse(_image_contains_value(self.firmware, b"q"))
+
+    def test_private_path_scanner_requires_a_complete_c_string(self):
+        self.firmware.write_bytes(b"unrelated-prefix/private-path-suffix\x00")
+        self.assertFalse(_image_contains_c_string(self.firmware, b"/private-path"))
+        self.firmware.write_bytes(b"/private-path\x00")
+        self.assertTrue(_image_contains_c_string(self.firmware, b"/private-path"))
 
     def test_verifier_rejects_modified_firmware(self):
         image, _ = package_release(self.firmware, self.output)
@@ -276,7 +283,11 @@ class PackageOtaReleaseTests(unittest.TestCase):
                 (self.root / "local_config.h").write_text(
                     "\n".join(config_lines) + "\n", encoding="utf-8"
                 )
-                self.firmware.write_bytes(self.payload + value.encode("ascii"))
+                separator = b"\x00" if key == "SERVER_PATH" else b""
+                self.firmware.write_bytes(
+                    self.payload + separator + value.encode("ascii")
+                    + (b"\x00" if key == "SERVER_PATH" else b"")
+                )
                 with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
                     "package_ota_release.load_build_environment", return_value={}
                 ):

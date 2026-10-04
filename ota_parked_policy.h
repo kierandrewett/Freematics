@@ -37,6 +37,7 @@ class OTAParkedPolicy {
     bool confirmedMotionWake;
     bool activity;
     bool durableStorageHealthy;
+    bool telemetryEndpointConfigured;
     bool telemetryCredentialPersisted;
     Signal speedKph;
     Signal rpm;
@@ -49,6 +50,7 @@ class OTAParkedPolicy {
     kMotionWake,
     kActivity,
     kStorageUnavailable,
+    kEndpointUnavailable,
     kCredentialUnavailable,
     kMotionUnavailable,
     kSpeedUnavailable,
@@ -108,6 +110,7 @@ class OTAParkedPolicy {
     if (elapsed(nowMs) < kRequiredQuietMs) return kQuietPeriod;
 
     if (!observation.durableStorageHealthy) return kStorageUnavailable;
+    if (!observation.telemetryEndpointConfigured) return kEndpointUnavailable;
     if (!observation.telemetryCredentialPersisted) return kCredentialUnavailable;
 
     if (!fresh(observation.speedKph, nowMs)) return kSpeedUnavailable;
