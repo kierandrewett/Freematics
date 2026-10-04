@@ -110,6 +110,13 @@
 - The connected USB inventory still shows the CH340 generic adapter, not a
   Model B. The production image remains unflashed; no boot-log build ID or
   live-car verification is claimed.
+- Added a clearly separated `esp32dev-ota-production` bootstrap target because
+  the ordinary production target keeps OTA disabled. Its private image built
+  from source commit `d75eebabc815`, has SHA-256
+  `a534cc7e28407441596dcef6530a4e69fccf63c0787e94293c83ea8a1c29becd`, and
+  embeds boot build ID `d75eebabc815`. The credential-presence check passed
+  without displaying the configured value; the ignored build directory is
+  owner-only. This bootstrap image has not been published or flashed.
 
 ## Scope and remaining validation
 

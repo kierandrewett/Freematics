@@ -121,6 +121,16 @@ python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 The current code has been host-tested and firmware-built, but cellular release
 downloads, cancellation under motion, first-boot validation, and rollback have
 not yet been exercised on the device. `ENABLE_OTA` defaults to 0 in the normal
-`esp32dev` production environment; `esp32dev-ota-test` is a compile-only target
-that enables the path for validation. Do not flash or publish that test image
-until the car-off gate, cancellation, and rollback have passed hardware tests.
+`esp32dev` production environment. For an initial USB bootstrap, build the
+private OTA-capable production image with:
+
+```sh
+PRODUCTION_BUILD=1 pio run -e esp32dev-ota-production
+```
+
+That image embeds the configured telemetry credential and must never be
+published. The separate `esp32dev-ota-test` environment is compile-only; do not
+flash or publish it. OTA updates themselves use only the tokenless package
+created by `tools/package_ota_release.py`. Do not deploy the bootstrap or OTA
+candidate until the car-off gate, cancellation, and rollback have passed
+hardware tests.
