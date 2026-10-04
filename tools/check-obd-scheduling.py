@@ -16,6 +16,8 @@ Failure cases defined before the scheduler change:
 * Unsigned clock rollover must preserve due-time ordering.
 * The diagnostic scan path must remain separate and make no more than one
   scan call per poll invocation.
+* A diagnostic no-response timeout must appear in the measured live-PID
+  completion gap; cached reads must not be counted as acquisition completions.
 * Reconnect must reset scheduling state and permit every supported PID to be
   selected again.
 
@@ -38,6 +40,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "telelogger.ino"
 CONFIG = ROOT / "config.h"
+OBD_HEADER = ROOT / "lib/FreematicsPlus/FreematicsOBD.h"
 
 
 def function(text: str, signature: str) -> str:
@@ -52,8 +55,9 @@ def function(text: str, signature: str) -> str:
     return text[start:end]
 
 
-def source_hashes(source: str, config: str) -> dict[str, str]:
+def source_hashes(source: str, config: str, obd_header: str) -> dict[str, str]:
     contents = {"telelogger.ino": source, "config.h": config,
+                "lib/FreematicsPlus/FreematicsOBD.h": obd_header,
                 "tools/check-obd-scheduling.py": Path(__file__).read_text()}
     return {name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()}
 
@@ -89,6 +93,7 @@ static constexpr uint32_t OBD_FAST_INTERVAL_MS = @OBD_FAST_INTERVAL_MS@;
 static constexpr uint32_t OBD_AUX_INTERVAL_MS = 250;
 static constexpr uint32_t OBD_PID_INTERVAL_MS = @OBD_PID_INTERVAL_MS@;
 static constexpr uint32_t OBD_FAILED_RETRY_MS = @OBD_FAILED_RETRY_MS@;
+static constexpr uint32_t OBD_DTC_TIMEOUT_MS = @OBD_DTC_TIMEOUT_MS@;
 static constexpr byte OBD_FAST_PIDS_PER_CYCLE = 3;
 static constexpr byte OBD_AUX_PIDS_PER_CYCLE = 1;
 static constexpr uint32_t OBD_PID_READ_WARN_MS = 200;
@@ -148,10 +153,11 @@ unsigned publishes = 0;
 unsigned diagnosticCalls = 0;
 unsigned diagnosticThisCall = 0;
 unsigned diagnosticMaxPerCall = 0;
+uint32_t diagnosticResponseMs = 0;
 void reportSlowOBDRead(byte, const char*, uint32_t) { slowReports++; }
 void reportOBDReadFailure(byte, const char*) { failures++; }
 void publishOBDSnapshot() { publishes++; }
-void scanDiagnostics() { diagnosticCalls++; diagnosticThisCall++; diagnosticMaxPerCall = std::max(diagnosticMaxPerCall, diagnosticThisCall); dtcData[dtcScanIndex].lastScan = millis(); dtcScanIndex = (dtcScanIndex + 1) % DTC_COUNT; }
+void scanDiagnostics() { diagnosticCalls++; diagnosticThisCall++; diagnosticMaxPerCall = std::max(diagnosticMaxPerCall, diagnosticThisCall); tick += diagnosticResponseMs; dtcData[dtcScanIndex].lastScan = millis(); dtcScanIndex = (dtcScanIndex + 1) % DTC_COUNT; }
 
 ''' + helpers + poll + r'''
 
@@ -167,7 +173,7 @@ static void seed(uint32_t start = 0) {
   obd.supported[PID_RPM] = obd.supported[PID_SPEED] = true;
   obd.responseMs[PID_RPM] = obd.responseMs[PID_SPEED] = 10;
   dtcScanIndex = 0; fastOBDFailureCycles = 0; timeoutsOBD = 0; failures = 0;
-  publishes = 0; diagnosticCalls = 0; diagnosticThisCall = 0; diagnosticMaxPerCall = 0; state.clears = 0;
+  publishes = 0; diagnosticCalls = 0; diagnosticThisCall = 0; diagnosticMaxPerCall = 0; diagnosticResponseMs = 0; state.clears = 0;
   // Prevent DTC traffic during throughput cases.  The diagnostic case enables it.
   for (auto& item : dtcData) item.lastScan = 1;
   resetOBDSchedule();
@@ -258,6 +264,13 @@ int main() {
   std::cout << "dtc_preserved=" << oneDtc << " calls=" << diagnosticCalls << "\n";
   pass &= oneDtc;
 
+  seed(); diagnosticResponseMs = OBD_DTC_TIMEOUT_MS; dtcData[0].lastScan = 0; callFor(6000);
+  const uint32_t dtcTimeoutRpmGap = maxCompletionGap(PID_RPM);
+  bool dtcCostVisible = dtcTimeoutRpmGap >= diagnosticResponseMs;
+  std::cout << "dtc_timeout_ms=" << diagnosticResponseMs << " dtc_timeout_rpm_gap_ms=" << dtcTimeoutRpmGap
+            << " cost_visible=" << dtcCostVisible << "\n";
+  pass &= dtcCostVisible;
+
   seed(); callFor(60000); resetScheduleUnderTest(); started = tick; for (auto& item : obdData) item.ts = 0; obd.completions.clear(); callFor(60000);
   bool reconnect = completionGapsAtMost(1000);
   std::cout << "reconnect=" << reconnect << "\n";
@@ -272,7 +285,9 @@ int main() {
 }
 ''').replace("@OBD_FAST_INTERVAL_MS@", str(defines["OBD_FAST_INTERVAL_MS"])).replace(
         "@OBD_PID_INTERVAL_MS@", str(defines["OBD_PID_INTERVAL_MS"])
-    ).replace("@OBD_FAILED_RETRY_MS@", str(defines["OBD_FAILED_RETRY_MS"]))
+    ).replace("@OBD_FAILED_RETRY_MS@", str(defines["OBD_FAILED_RETRY_MS"])).replace(
+        "@OBD_DTC_TIMEOUT_MS@", str(defines["OBD_DTC_TIMEOUT_MS"])
+    )
 
 
 def run(report: Path | None, source_ref: str | None = None) -> int:
@@ -280,6 +295,8 @@ def run(report: Path | None, source_ref: str | None = None) -> int:
         ["git", "show", f"{source_ref}:telelogger.ino"], cwd=ROOT, text=True)
     config = CONFIG.read_text() if source_ref is None else subprocess.check_output(
         ["git", "show", f"{source_ref}:config.h"], cwd=ROOT, text=True)
+    obd_header = OBD_HEADER.read_text() if source_ref is None else subprocess.check_output(
+        ["git", "show", f"{source_ref}:lib/FreematicsPlus/FreematicsOBD.h"], cwd=ROOT, text=True)
     names = ("OBD_FAST_INTERVAL_MS", "OBD_PID_INTERVAL_MS", "OBD_FAILED_RETRY_MS")
     defines = {}
     for name in names:
@@ -290,6 +307,10 @@ def run(report: Path | None, source_ref: str | None = None) -> int:
         if not match:
             raise SystemExit(f"FAIL: config.h does not define {name} as an unsigned millisecond value")
         defines[name] = int(match.group(1))
+    dtc_timeout = re.search(r"^#define OBD_DTC_TIMEOUT (\d+)\b", obd_header, re.MULTILINE)
+    if not dtc_timeout:
+        raise SystemExit("FAIL: FreematicsOBD.h does not define OBD_DTC_TIMEOUT")
+    defines["OBD_DTC_TIMEOUT_MS"] = int(dtc_timeout.group(1))
     poll = function(source, "void pollOBD()")
     reset = function(source, "void resetOBDSchedule()") if "void resetOBDSchedule()\n{" in source else None
     selector = function(source, "int selectOBDPID(uint32_t now)") if "int selectOBDPID(uint32_t now)\n{" in source else None
@@ -306,10 +327,10 @@ def run(report: Path | None, source_ref: str | None = None) -> int:
         result = {
             "command": " ".join([sys.executable, *sys.argv]),
             "source_ref": source_ref,
-            "sources": source_hashes(source, config),
-            "coverage": "Extracted production pollOBD with fake ECU. It checks scheduler policy only. Initial acquisition is reported separately from successive reading gaps. DTC scans are stubbed with zero cost; their real pauses are excluded. It does not measure Model B, bridge, FreeRTOS or Corsa throughput.",
+            "sources": source_hashes(source, config, obd_header),
+            "coverage": "Extracted production pollOBD with fake ECU. Initial acquisition is reported separately from successive reading gaps. DTC scheduler calls use an injected delay equal to production OBD_DTC_TIMEOUT; separate production-code emulator scenarios verify no-response timeout and partial-result handling. It does not measure Model B, bridge, FreeRTOS or Corsa throughput.",
             "scheduler_helpers_extracted": {"resetOBDSchedule": reset is not None, "selectOBDPID": selector is not None},
-            "configured_intervals_ms": defines,
+            "configured_timing_ms": defines,
             "compile": {"returncode": compile_result.returncode, "stderr": compile_result.stderr},
             "run": None if execution is None else {"returncode": execution.returncode, "stdout": execution.stdout, "stderr": execution.stderr},
         }
