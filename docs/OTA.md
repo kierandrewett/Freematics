@@ -76,7 +76,7 @@ This still validates the private production server/APN configuration. The
 release build is restricted to the OTA-enabled PlatformIO environment, fails
 if a token is present, and emits a non-secret release-mode marker. The local
 packager requires both that marker and the token-absent marker, scans for
-configured token/password/secret values from the ignored `.env`, process
+configured token/username/password/secret values from the ignored `.env`, process
 environment, and credential-named `local_config.h` settings, and repeats the
 checks on the staged copy. It never overwrites an existing asset pair and does
 not upload anything. Server and APN routing settings remain in the firmware;

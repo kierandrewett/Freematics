@@ -24,7 +24,15 @@ TOKEN_ABSENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
 OTA_RELEASE_MARKER = "FREEMATICS_OTA_RELEASE_BUILD=1"
 RELEASE_VERSION_MARKER = b"FREEMATICS_RELEASE_VERSION="
 _CREDENTIAL_KEY_RE = re.compile(
+    r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|USERNAME|LOGIN)",
+    re.IGNORECASE,
+)
+_SECRET_KEY_RE = re.compile(
     r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY)",
+    re.IGNORECASE,
+)
+_PROJECT_USERNAME_KEY_RE = re.compile(
+    r"^(?:FREEMATICS|APN|WIFI|SERVER)_(?:.*_)?(?:USERNAME|LOGIN)$",
     re.IGNORECASE,
 )
 
@@ -79,11 +87,14 @@ def _verify_tokenless_build(image_path: Path) -> None:
 def _configured_credentials() -> set[str]:
     """Read configured credentials without displaying them to the caller."""
     env_path = REPOSITORY_ROOT / ".env"
-    settings = load_build_environment(env_path, os.environ)
+    settings = load_build_environment(env_path, {})
     credentials = {
         value for key, value in settings.items()
         if _CREDENTIAL_KEY_RE.search(key) and value
     }
+    for key, value in os.environ.items():
+        if value and (_SECRET_KEY_RE.search(key) or _PROJECT_USERNAME_KEY_RE.fullmatch(key)):
+            credentials.add(value)
     if env_path.exists():
         for number, line in enumerate(env_path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()

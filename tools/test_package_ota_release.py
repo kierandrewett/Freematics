@@ -96,6 +96,26 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
 
+    def test_refuses_an_image_containing_a_configured_login_username(self):
+        secret = "fixture-apn-username-do-not-embed"
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch("package_ota_release._parse_defines",
+                   return_value={"APN_USERNAME": f'"{secret}"'}), patch(
+            "package_ota_release.load_build_environment", return_value={}
+        ):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+                package_release(self.firmware, self.output)
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_scans_project_username_environment_without_scanning_os_user(self):
+        secret = "fixture-apn-user-from-environment"
+        self.firmware.write_bytes(self.payload + secret.encode("ascii"))
+        with patch.dict("os.environ", {"APN_USERNAME": secret}):
+            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+                package_release(self.firmware, self.output)
+        self.assertFalse(self.output.exists())
+
     def test_scans_credential_fields_even_when_build_loader_ignores_them(self):
         secret = "fixture-apn-password-from-private-config"
         (self.root / "local_config.h").write_text(
