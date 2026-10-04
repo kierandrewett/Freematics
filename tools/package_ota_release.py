@@ -27,13 +27,15 @@ TOKEN_PRESENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_EMBEDDED=1"
 TOKEN_ABSENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
 OTA_RELEASE_MARKER = "FREEMATICS_OTA_RELEASE_BUILD=1"
 RELEASE_VERSION_MARKER = b"FREEMATICS_RELEASE_VERSION="
-_CREDENTIAL_KEY_RE = re.compile(
+_PRIVATE_VALUE_KEY_RE = re.compile(
     r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|"
-    r"USERNAME|USER|LOGIN|SIM[_-]?CARD[_-]?PIN|SIM[_-]?PIN|PIN|SSID)",
+    r"USERNAME|USER|LOGIN|SIM[_-]?CARD[_-]?PIN|SIM[_-]?PIN|PIN|SSID|"
+    r"SERVER[_-]?(?:HOST|PATH)|CELL[_-]?APN)",
     re.IGNORECASE,
 )
-_SECRET_KEY_RE = re.compile(
-    r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|PIN|SSID)",
+_PRIVATE_ENV_KEY_RE = re.compile(
+    r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|"
+    r"PIN|SSID|SERVER[_-]?(?:HOST|PATH)|CELL[_-]?APN)",
     re.IGNORECASE,
 )
 _PROJECT_USERNAME_KEY_RE = re.compile(
@@ -154,10 +156,10 @@ def _configured_credentials() -> set[bytes]:
     settings = load_build_environment(env_path, {})
     credentials: set[bytes] = set()
     for key, value in settings.items():
-        if _CREDENTIAL_KEY_RE.search(key) and value:
+        if _PRIVATE_VALUE_KEY_RE.search(key) and value:
             credentials.update(_credential_signatures(value))
     for key, value in os.environ.items():
-        if value and (_SECRET_KEY_RE.search(key) or _PROJECT_USERNAME_KEY_RE.fullmatch(key)):
+        if value and (_PRIVATE_ENV_KEY_RE.search(key) or _PROJECT_USERNAME_KEY_RE.fullmatch(key)):
             credentials.update(_credential_signatures(value))
     if env_path.exists():
         for number, line in enumerate(env_path.read_text(encoding="utf-8").splitlines(), 1):
@@ -165,7 +167,7 @@ def _configured_credentials() -> set[bytes]:
             if not stripped or stripped.startswith("#"):
                 continue
             match = re.fullmatch(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)", stripped)
-            if not match or not _CREDENTIAL_KEY_RE.search(match.group(1)):
+            if not match or not _PRIVATE_VALUE_KEY_RE.search(match.group(1)):
                 continue
             value = match.group(2)
             if value.startswith(("'", '"')):
@@ -178,7 +180,7 @@ def _configured_credentials() -> set[bytes]:
     config_path = REPOSITORY_ROOT / "local_config.h"
     defines = _parse_defines(config_path.read_text(encoding="utf-8"))
     for key, raw_value in defines.items():
-        if not _CREDENTIAL_KEY_RE.search(key):
+        if not _PRIVATE_VALUE_KEY_RE.search(key):
             continue
         normalized = raw_value.strip()
         if normalized == "NULL" or re.fullmatch(r"NULL\s*//.*", normalized):
@@ -186,7 +188,7 @@ def _configured_credentials() -> set[bytes]:
         value = _decode_c_string_sequence(raw_value)
         if value is None:
             raise ValueError(
-                "cannot verify a configured credential in local_config.h; refusing to package"
+                "cannot verify a configured private value in local_config.h; refusing to package"
             )
         if value:
             credentials.update(_credential_signatures(value))
@@ -207,7 +209,7 @@ def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
     for credential in _configured_credentials():
         if _image_contains_value(firmware, credential):
             raise ValueError(
-                "firmware contains a configured credential; refusing to package"
+                "firmware contains a configured private value; refusing to package"
             )
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name == "posix" and output_dir.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
@@ -249,7 +251,7 @@ def package_release(firmware: Path, output_dir: Path) -> tuple[Path, Path]:
             for credential in _configured_credentials():
                 if _image_contains_value(staged_image, credential):
                     raise ValueError(
-                        "firmware contains a configured credential; refusing to package"
+                        "firmware contains a configured private value; refusing to package"
                     )
 
         sidecar_bytes = f"{digest.hexdigest()}  {ASSET_NAME}\n".encode("ascii")
@@ -307,7 +309,7 @@ def verify_release_directory(output_dir: Path) -> tuple[Path, Path]:
     _verify_tokenless_build(image_path)
     for credential in _configured_credentials():
         if _image_contains_value(image_path, credential):
-            raise ValueError("firmware contains a configured credential; refusing to publish")
+            raise ValueError("firmware contains a configured private value; refusing to publish")
 
     sidecar = sidecar_path.read_bytes()
     expected = re.fullmatch(

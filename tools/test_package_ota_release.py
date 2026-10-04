@@ -78,7 +78,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         secret = b"private-fixture-credential"
         image.write_bytes(self.payload + secret)
         with patch("package_ota_release._configured_credentials", return_value={secret}):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
                 verify_release_directory(self.output)
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission policy")
@@ -132,7 +132,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         token = "a1" * 32
         self.firmware.write_bytes(self.payload + token.encode("ascii"))
         with patch.dict("os.environ", {"FREEMATICS_TOKEN": token}):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(token, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -144,7 +144,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
             "package_ota_release.load_build_environment",
             return_value={"FREEMATICS_TOKEN": token},
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
@@ -155,7 +155,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
                    return_value={"APN_PASSWORD": f'"{secret}"'}), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -167,7 +167,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
                    return_value={"APN_USERNAME": f'"{secret}"'}), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -176,7 +176,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         secret = "fixture-apn-user-from-environment"
         self.firmware.write_bytes(self.payload + secret.encode("ascii"))
         with patch.dict("os.environ", {"APN_USERNAME": secret}):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
@@ -187,7 +187,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
                    return_value={"SIM_CARD_PIN": f'"{pin}"'}), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(pin, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -199,7 +199,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
                    return_value={"WIFI_SSID": f'"{ssid}"'}), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
@@ -218,7 +218,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
                     return_value=_credential_signatures(secret),
                 ):
                     with self.assertRaisesRegex(
-                        ValueError, "contains a configured credential"
+                        ValueError, "contains a configured private value"
                     ):
                         package_release(self.firmware, self.output)
                 self.assertFalse(self.output.exists())
@@ -236,7 +236,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential"):
+            with self.assertRaisesRegex(ValueError, "contains a configured private value"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
@@ -254,10 +254,38 @@ class PackageOtaReleaseTests(unittest.TestCase):
         )
         self.firmware.write_bytes(self.payload + secret.encode("ascii"))
         with patch("package_ota_release.REPOSITORY_ROOT", self.root):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
+
+    def test_refuses_private_server_and_apn_settings_from_local_config(self):
+        settings = {
+            "SERVER_HOST": "private-server-fixture.invalid",
+            "SERVER_PATH": "/private-upload-fixture",
+            "CELL_APN": "private-apn-fixture",
+        }
+        for key, value in settings.items():
+            with self.subTest(key=key):
+                config_lines = [
+                    "#ifndef LOCAL_CONFIG_H_INCLUDED",
+                    "#define LOCAL_CONFIG_H_INCLUDED",
+                    f'#define {key} "{value}"',
+                    "#endif",
+                ]
+                (self.root / "local_config.h").write_text(
+                    "\n".join(config_lines) + "\n", encoding="utf-8"
+                )
+                self.firmware.write_bytes(self.payload + value.encode("ascii"))
+                with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
+                    "package_ota_release.load_build_environment", return_value={}
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "contains a configured private value"
+                    ) as raised:
+                        package_release(self.firmware, self.output)
+                self.assertNotIn(value, str(raised.exception))
+                self.assertFalse(self.output.exists())
 
     def test_refuses_a_credential_literal_followed_by_a_cpp_comment(self):
         secret = "fixture-apn-password-with-comment"
@@ -272,7 +300,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -290,7 +318,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "contains a configured credential") as raised:
+            with self.assertRaisesRegex(ValueError, "contains a configured private value") as raised:
                 package_release(self.firmware, self.output)
         self.assertNotIn(secret, str(raised.exception))
         self.assertFalse(self.output.exists())
@@ -306,7 +334,7 @@ class PackageOtaReleaseTests(unittest.TestCase):
         with patch("package_ota_release.REPOSITORY_ROOT", self.root), patch(
             "package_ota_release.load_build_environment", return_value={}
         ):
-            with self.assertRaisesRegex(ValueError, "cannot verify a configured credential"):
+            with self.assertRaisesRegex(ValueError, "cannot verify a configured private value"):
                 package_release(self.firmware, self.output)
         self.assertFalse(self.output.exists())
 
