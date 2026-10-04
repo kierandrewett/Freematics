@@ -71,6 +71,16 @@ int main()
   assert(resolveStoredOrSeed("", true, "fallback", true, optionalConfig,
       sizeof(optionalConfig)) == kStoredValue);
   assert(optionalConfig[0] == 0);
+  assert(resolveStoredOrSeed(nullptr, false, "", true, optionalConfig,
+      sizeof(optionalConfig), true, true) == kInvalidValue);
+  assert(resolveStoredOrSeed("", true, "", true, optionalConfig,
+      sizeof(optionalConfig), true, true) == kInvalidValue);
+  assert(resolveStoredOrSeed("persisted-apn", true, "", false,
+      optionalConfig, sizeof(optionalConfig), true, true) == kStoredValue);
+  assert(strcmp(optionalConfig, "persisted-apn") == 0);
+  assert(resolveStoredOrSeed("", true, "", false, optionalConfig,
+      sizeof(optionalConfig), true, false) == kStoredValue);
+  assert(optionalConfig[0] == 0);
 
   assert(resolveConfigMarker(false, 0, true, true) == kSeedPrivateMigrationMarker);
   assert(resolveConfigMarker(false, 0, false, true) == kRequirePrivateMigration);

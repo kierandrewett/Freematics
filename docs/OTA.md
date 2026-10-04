@@ -87,6 +87,15 @@ hardware-encrypted by this project; physical flash extraction remains in the
 threat model. The migration image embeds the token and must never be published
 to GitHub. To build a public OTA image, explicitly clear the inherited secret:
 
+The private bootstrap also records a `private_cfg_flags` manifest describing
+which APN, SIM, and Wi-Fi fields were configured. A tokenless OTA image requires
+every flagged field to exist and be non-empty in NVS before it can accept an
+update; it cannot mistake a blank build-time fallback for migrated settings.
+If NVS initialization reports a format/full-partition error, firmware preserves
+the partition rather than erasing credentials, disables network/OTA operation,
+and continues local acquisition where possible. Recovering such an NVS
+partition currently requires a separately planned service procedure.
+
 ```sh
 FREEMATICS_TOKEN= FREEMATICS_OTA_RELEASE=1 PRODUCTION_BUILD=1 \
   FREEMATICS_RELEASE=1.0.1 pio run -e esp32dev-ota-test

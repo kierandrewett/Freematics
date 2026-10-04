@@ -103,7 +103,9 @@ inline ValueSource resolveStoredOrSeed(const char* storedValue,
                                        const char* buildValue,
                                        bool allowBuildSeed,
                                        char* destination,
-                                       size_t capacity)
+                                       size_t capacity,
+                                       bool requireStoredValue = false,
+                                       bool requireNonEmpty = false)
 {
   if (!destination || !capacity) return kInvalidValue;
   destination[0] = 0;
@@ -111,6 +113,11 @@ inline ValueSource resolveStoredOrSeed(const char* storedValue,
   if (!storedValueFound && !allowBuildSeed) return kInvalidValue;
   const char* candidate = storedValueFound ? storedValue : buildValue;
   if (!copyString(destination, capacity, candidate)) return kInvalidValue;
+  if ((requireStoredValue && !storedValueFound) ||
+      (requireNonEmpty && !destination[0])) {
+    destination[0] = 0;
+    return kInvalidValue;
+  }
   return storedValueFound ? kStoredValue : kBuildSeedValue;
 }
 

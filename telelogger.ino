@@ -200,8 +200,20 @@ bool persistConfigString(const char* key, const char* value)
   return nvs_set_str(nvs, key, value ? value : "") == ESP_OK && nvs_commit(nvs) == ESP_OK;
 }
 
+enum PrivateConfigFlag {
+  CONFIG_REQUIRES_APN = 1 << 0,
+  CONFIG_REQUIRES_APN_USERNAME = 1 << 1,
+  CONFIG_REQUIRES_APN_PASSWORD = 1 << 2,
+  CONFIG_REQUIRES_SIM_PIN = 1 << 3,
+  CONFIG_REQUIRES_WIFI_SSID = 1 << 4,
+  CONFIG_REQUIRES_WIFI_PASSWORD = 1 << 5,
+  CONFIG_KNOWN_FLAGS = (1 << 6) - 1,
+};
+
 bool loadOrSeedConfigString(const char* key, char* destination,
-                            size_t capacity, const char* buildValue)
+                            size_t capacity, const char* buildValue,
+                            bool requireStoredValue = false,
+                            bool requireNonEmpty = false)
 {
   if (!key || !destination || !capacity || capacity > 64) return false;
   char stored[64] = {};
@@ -217,7 +229,8 @@ bool loadOrSeedConfigString(const char* key, char* destination,
 #endif
   const freematics::endpoint::ValueSource source =
       freematics::endpoint::resolveStoredOrSeed(storedFound ? stored : nullptr,
-          storedFound, value, allowBuildSeed, destination, capacity);
+          storedFound, value, allowBuildSeed, destination, capacity,
+          requireStoredValue, requireNonEmpty);
   if (source == freematics::endpoint::kInvalidValue) return false;
 #if !FREEMATICS_OTA_RELEASE_BUILD
   if (source == freematics::endpoint::kBuildSeedValue && value[0] &&
@@ -2509,8 +2522,7 @@ void telemetry(void* inst)
 
 #if ENABLE_WIFI
     if (wifiSSID[0] && (!PREFER_CELLULAR || wifiFallback) && !state.check(STATE_WIFI_CONNECTED)) {
-      Serial.print("[WIFI] Joining SSID:");
-      Serial.println(wifiSSID);
+      Serial.println("[WIFI] Joining configured network");
       teleClient.wifi.begin(wifiSSID, wifiPassword);
       teleClient.wifi.setup();
     }
@@ -3192,24 +3204,60 @@ void showSysInfo()
 
 bool loadConfig()
 {
+#if FREEMATICS_OTA_RELEASE_BUILD
+  uint8_t requiredConfigFlags = 0;
+  if (nvs_get_u8(nvs, "private_cfg_flags", &requiredConfigFlags) != ESP_OK ||
+      (requiredConfigFlags & ~CONFIG_KNOWN_FLAGS)) {
+    return false;
+  }
+#else
+  const uint8_t requiredConfigFlags = 0;
+#endif
   bool configReady = loadOrSeedConfigString(
-      "CELL_APN", apn, sizeof(apn), CELL_APN);
+      "CELL_APN", apn, sizeof(apn), CELL_APN,
+      requiredConfigFlags & CONFIG_REQUIRES_APN,
+      requiredConfigFlags & CONFIG_REQUIRES_APN);
   if (!apn[0] && CELL_APN[0] && strlen(CELL_APN) < sizeof(apn)) {
     memcpy(apn, CELL_APN, sizeof(CELL_APN));
     configReady = persistConfigString("CELL_APN", apn) && configReady;
   }
   configReady = loadOrSeedConfigString("APN_USERNAME", apnUsername,
-      sizeof(apnUsername), APN_USERNAME ? APN_USERNAME : "") && configReady;
+      sizeof(apnUsername), APN_USERNAME ? APN_USERNAME : "",
+      requiredConfigFlags & CONFIG_REQUIRES_APN_USERNAME,
+      requiredConfigFlags & CONFIG_REQUIRES_APN_USERNAME) && configReady;
   configReady = loadOrSeedConfigString("APN_PASSWORD", apnPassword,
-      sizeof(apnPassword), APN_PASSWORD ? APN_PASSWORD : "") && configReady;
+      sizeof(apnPassword), APN_PASSWORD ? APN_PASSWORD : "",
+      requiredConfigFlags & CONFIG_REQUIRES_APN_PASSWORD,
+      requiredConfigFlags & CONFIG_REQUIRES_APN_PASSWORD) && configReady;
   configReady = loadOrSeedConfigString("SIM_CARD_PIN", simCardPin,
-      sizeof(simCardPin), SIM_CARD_PIN) && configReady;
+      sizeof(simCardPin), SIM_CARD_PIN,
+      requiredConfigFlags & CONFIG_REQUIRES_SIM_PIN,
+      requiredConfigFlags & CONFIG_REQUIRES_SIM_PIN) && configReady;
 
 #if ENABLE_WIFI
   configReady = loadOrSeedConfigString("WIFI_SSID", wifiSSID,
-      sizeof(wifiSSID), WIFI_SSID) && configReady;
+      sizeof(wifiSSID), WIFI_SSID,
+      requiredConfigFlags & CONFIG_REQUIRES_WIFI_SSID,
+      requiredConfigFlags & CONFIG_REQUIRES_WIFI_SSID) && configReady;
   configReady = loadOrSeedConfigString("WIFI_PWD", wifiPassword,
-      sizeof(wifiPassword), WIFI_PASSWORD) && configReady;
+      sizeof(wifiPassword), WIFI_PASSWORD,
+      requiredConfigFlags & CONFIG_REQUIRES_WIFI_PASSWORD,
+      requiredConfigFlags & CONFIG_REQUIRES_WIFI_PASSWORD) && configReady;
+#endif
+#if !FREEMATICS_OTA_RELEASE_BUILD
+  uint8_t configFlags = 0;
+  if (apn[0]) configFlags |= CONFIG_REQUIRES_APN;
+  if (apnUsername[0]) configFlags |= CONFIG_REQUIRES_APN_USERNAME;
+  if (apnPassword[0]) configFlags |= CONFIG_REQUIRES_APN_PASSWORD;
+  if (simCardPin[0]) configFlags |= CONFIG_REQUIRES_SIM_PIN;
+#if ENABLE_WIFI
+  if (wifiSSID[0]) configFlags |= CONFIG_REQUIRES_WIFI_SSID;
+  if (wifiPassword[0]) configFlags |= CONFIG_REQUIRES_WIFI_PASSWORD;
+#endif
+  if (nvs_set_u8(nvs, "private_cfg_flags", configFlags) != ESP_OK ||
+      nvs_commit(nvs) != ESP_OK) {
+    configReady = false;
+  }
 #endif
   return configReady;
 }
@@ -3371,29 +3419,34 @@ void setup()
   vTaskPrioritySet(nullptr, SAMPLER_TASK_PRIORITY);
   delay(500);
 
+  // Initialize USB serial before NVS so a damaged settings partition can be
+  // reported without erasing device credentials or aborting local logging.
+  // The richest supported frame is about 5 KiB; 115200 baud cannot sustain
+  // that at the 250 ms sample cadence, so use the CP210x-supported 460800 rate.
+  Serial.begin(460800);
+
   // Initialize NVS
+  nvs = 0;
   esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    // NVS partition was truncated and needs to be erased
-    // Retry nvs_flash_init
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    err = nvs_flash_init();
-  }
-  ESP_ERROR_CHECK( err );
   bool deviceConfigReady = false;
-  err = nvs_open("storage", NVS_READWRITE, &nvs);
   if (err == ESP_OK) {
-    deviceConfigReady = loadConfig();
+    err = nvs_open("storage", NVS_READWRITE, &nvs);
+    if (err == ESP_OK) {
+      deviceConfigReady = loadConfig();
+    } else {
+      nvs = 0;
+      Serial.printf("[NVS] Could not open settings namespace (%d); continuing without settings\n",
+                    (int)err);
+    }
+  } else {
+    Serial.printf("[NVS] Initialization failed (%d); preserving flash and continuing without settings\n",
+                  (int)err);
   }
 
 #if ENABLE_OLED
   oled.begin();
   oled.setFontSize(FONT_SIZE_SMALL);
 #endif
-  // initialize USB serial
-  // The richest supported frame is about 5 KiB. 115200 baud cannot sustain
-  // that at the 250 ms sample cadence; use the CP210x-supported 460800 rate.
-  Serial.begin(460800);
   initializeTelemetryEndpoint(deviceConfigReady);
   initializeTelemetryCredential();
   usbBootId = ((uint64_t)esp_random() << 32) | esp_random();
@@ -3407,7 +3460,8 @@ void setup()
 #endif
 
   uint32_t savedUTC = 0;
-  if (nvs_get_u32(nvs, "last_utc", &savedUTC) == ESP_OK && savedUTC >= 1704067200UL) {
+  if (nvs && nvs_get_u32(nvs, "last_utc", &savedUTC) == ESP_OK &&
+      savedUTC >= 1704067200UL) {
     struct timeval tv = {(time_t)savedUTC, 0};
     settimeofday(&tv, nullptr);
     Serial.println("[TIME] Restored last known UTC; cellular/GNSS can correct it");
