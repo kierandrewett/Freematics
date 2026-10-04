@@ -198,6 +198,56 @@ def _current_source_commit() -> str:
     return result.stdout.strip()
 
 
+def _source_commit_matches_checkout(image_commit: str) -> bool:
+    """Require the image source to match, with only docs-only commits afterward."""
+    try:
+        current = _current_source_commit()
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", image_commit, current],
+            cwd=REPOSITORY_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if ancestor.returncode:
+            return False
+        paths = [".", ":!docs/**"]
+        for args in (
+            ["git", "diff", "--quiet", f"{image_commit}..{current}", "--", *paths],
+            ["git", "diff", "--quiet", "--", *paths],
+            ["git", "diff", "--cached", "--quiet", "--", *paths],
+        ):
+            result = subprocess.run(
+                args,
+                cwd=REPOSITORY_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if result.returncode:
+                return False
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=REPOSITORY_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if untracked.returncode:
+            return False
+        if any(
+            path and not path.startswith(b"docs/")
+            for path in untracked.stdout.split(b"\0")
+        ):
+            return False
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _verify_tokenless_build(image_path: Path) -> str:
     embedded = _image_contains_value(image_path, TOKEN_PRESENT_MARKER)
     absent = _image_contains_value(image_path, TOKEN_ABSENT_MARKER)
@@ -208,8 +258,8 @@ def _verify_tokenless_build(image_path: Path) -> str:
     image_commit = firmware_source_commit(image_path)
     if image_commit is None:
         raise ValueError("firmware is missing a valid source commit marker; refusing to package")
-    if image_commit != _current_source_commit():
-        raise ValueError("firmware source commit does not match the current checkout; refusing to package")
+    if not _source_commit_matches_checkout(image_commit):
+        raise ValueError("firmware source does not match the current checkout; refusing to package")
     return version
 
 

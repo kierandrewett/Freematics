@@ -119,10 +119,12 @@ tokens, passwords, usernames, SIM PINs, Wi-Fi SSIDs, APNs, server hosts, and
 exact server-path strings from the ignored `.env`, process environment, and
 matching `local_config.h` settings, and repeats the checks on the staged copy.
 OTA builds also require a clean Git worktree and embed the full source commit
-in the firmware. Packaging and the final publisher check that this marker
-matches the current checkout, preventing a stale or dirty-build image from
-being published under a newer source revision. The same marker is printed at
-boot alongside the shorter build ID for field verification.
+in the firmware. Packaging and the final publisher require that commit to be
+an ancestor of the checkout and reject any subsequent non-documentation source,
+staged, or untracked changes. Documentation-only commits are permitted after
+the image build. This prevents a stale or dirty-build image from being
+published under changed firmware inputs. The same marker is printed at boot
+alongside the shorter build ID for field verification.
 For configured values at least eight bytes long, it also checks common Base64,
 hex, URL-escaped, and UTF-16 encodings. Credential literals in
 `local_config.h` are joined across adjacent C strings and comments are
@@ -145,7 +147,8 @@ the exact two-file allowlist, token-free build markers, configured credentials,
 file modes, matching sidecar, and that the existing release tag matches the
 firmware's embedded version immediately before calling `gh`. Before upload it
 also queries the target release and fails closed if the asset inventory cannot
-be read or is not empty. This prevents safe files being appended to a release
+be read or is not empty, then revalidates the files immediately before upload.
+This prevents safe files being appended to a release
 that already contains unknown or credential-bearing artifacts. It never uploads
 logs, source archives, or build directories. It requires an existing release
 tag and never clobbers assets. Use it instead of uploading files manually:

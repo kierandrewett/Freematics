@@ -250,16 +250,36 @@
   publishable. The USB bridge still does not identify the attached board as a
   verified Model B.
 
+## Follow-up — 2026-10-04 (source-bound OTA images)
+
+- Commit `ab5b511a8d259a7bee5bf59fac9f0d265718d823` makes OTA builds fail on
+  a dirty source tree, embeds the full source commit in the OTA image, and
+  requires the package and publisher to match it against the checked-out Git
+  revision. Commit `4e5ce182d9c7b2f91cbf1dee3750d53f1b48bd92` prints that full
+  commit marker at boot. The dirty-build refusal, commit mismatch/missing
+  marker, package, publisher, and credential tests pass.
+- Built a tokenless OTA `1.0.16` candidate from clean source commit
+  `4e5ce182d9c7b2f91cbf1dee3750d53f1b48bd92`. The binary contains that full
+  commit marker and boot build ID `4e5ce182d9c7`, is 714,544 bytes, and has
+  SHA-256 `3f7bdabe0158ef565b95f8f869fc815e624e94ba065d8a73006fece87df64140`.
+  Package/source/credential verification and sidecar checks pass. It remains
+  at `.pio/ota-release-candidate-4e5ce18-v1.0.16/` (directory `0700`, assets
+  `0600`), not published or flashed.
+- Rebuilt the private OTA-capable production bootstrap from the same source
+  commit. Its boot ID is `4e5ce182d9c7`, image size is 714,864 bytes, and
+  SHA-256 is `ade7258987df733da2b76a46fa133efea3c7f7a7ef18ebb7ce0444d1b38a7397`.
+  The credential scan confirms private values are present; the file is mode
+  `0600` and remains local, not flashed or publishable.
+
 ## Scope and remaining validation
 
-This confirms board identity, local image installation, application boot, and
-live USB continuity while the SD path is down. The later mount failures mean
-the SD journal is not currently verified healthy; do not rely on local
-recording until a full power-cycle check restores it. The vehicle is
-disconnected indoors, so fresh zero-speed/RPM and vehicle-supply checks cannot
-be made; the 60-minute parked gate, cellular release download, motion
-cancellation, pending-image acceptance, and automatic rollback remain
-untested on hardware. Private migration/production images embed the telemetry
-credential and must never be published. The separate tokenless OTA candidate
-is package-checked but remains local until the hardware safety and rollback
-checks pass.
+The October 3 flash/serial entries are historical evidence and do not identify
+the currently attached USB device. Later SD mount failures mean journalling is
+not currently verified healthy; do not rely on local recording until a full
+power-cycle check restores it. The vehicle is disconnected indoors, so fresh
+zero-speed/RPM and vehicle-supply checks cannot be made; the 60-minute parked
+gate, cellular release download, motion cancellation, pending-image acceptance,
+and automatic rollback remain untested on hardware. Private migration and
+production images embed credentials and must never be published. The new
+source-bound tokenless OTA candidate is package-checked but remains local until
+the hardware safety and rollback checks pass.

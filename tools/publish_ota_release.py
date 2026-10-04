@@ -47,6 +47,11 @@ def publish(tag: str, asset_dir: Path) -> None:
         raise ValueError(
             "target GitHub release is not empty; refusing to append unverified assets"
         )
+    # Re-read and verify the allowlisted bytes immediately before handing paths
+    # to gh, so a changed/replaced asset cannot inherit an earlier approval.
+    verified_image, verified_sidecar = verify_release_directory(asset_dir)
+    if verified_image != image or verified_sidecar != sidecar:
+        raise ValueError("release assets changed during publication; refusing upload")
     result = subprocess.run(
         ["gh", "release", "upload", tag, str(image), str(sidecar), "--repo", REPOSITORY],
         stdin=subprocess.DEVNULL,

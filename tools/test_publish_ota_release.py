@@ -12,6 +12,7 @@ from package_ota_release import (
     SIDECAR_NAME,
     _current_source_commit,
     package_release,
+    verify_release_directory,
 )
 from publish_ota_release import publish
 
@@ -34,10 +35,15 @@ class PublishOtaReleaseTests(unittest.TestCase):
             return_value=source_commit.decode("ascii"),
         )
         self.source_commit_check.start()
+        self.checkout_guard = patch(
+            "package_ota_release._source_commit_matches_checkout", return_value=True
+        )
+        self.checkout_guard.start()
         self.asset_dir = self.root / "assets"
         package_release(self.firmware, self.asset_dir)
 
     def tearDown(self):
+        self.checkout_guard.stop()
         self.source_commit_check.stop()
         self.temp.cleanup()
 
@@ -101,6 +107,18 @@ class PublishOtaReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly the approved"):
             publish("v1.0.1", self.asset_dir)
         run.assert_not_called()
+
+    @patch("publish_ota_release.verify_release_directory")
+    @patch("publish_ota_release.subprocess.run")
+    def test_rejects_asset_replacement_between_release_check_and_upload(self, run, verify):
+        verify.side_effect = [
+            verify_release_directory(self.asset_dir),
+            (self.asset_dir / "replaced.bin", self.asset_dir / "replaced.sha256sum"),
+        ]
+        run.return_value = SimpleNamespace(returncode=0, stdout='{"assets":[]}')
+        with self.assertRaisesRegex(ValueError, "changed during publication"):
+            publish("v1.0.1", self.asset_dir)
+        self.assertEqual(run.call_count, 1)
 
 
 if __name__ == "__main__":

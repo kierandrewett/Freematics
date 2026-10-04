@@ -48,8 +48,13 @@ class PackageOtaReleaseTests(unittest.TestCase):
             return_value=self.source_commit,
         )
         self.source_commit_check.start()
+        self.checkout_guard = patch(
+            "package_ota_release._source_commit_matches_checkout", return_value=True
+        )
+        self.checkout_guard.start()
 
     def tearDown(self):
+        self.checkout_guard.stop()
         self.source_commit_check.stop()
         self.temp.cleanup()
 
@@ -72,6 +77,11 @@ class PackageOtaReleaseTests(unittest.TestCase):
     def test_source_commit_marker_matches_current_checkout(self):
         self.assertEqual(firmware_source_commit(self.firmware), self.source_commit)
 
+    def test_refuses_image_when_source_tree_has_non_documentation_changes(self):
+        with patch("package_ota_release._source_commit_matches_checkout", return_value=False):
+            with self.assertRaisesRegex(ValueError, "source does not match"):
+                package_release(self.firmware, self.output)
+
     def test_source_commit_marker_can_cross_binary_scan_chunks(self):
         with patch("package_ota_release.IMAGE_SCAN_CHUNK_BYTES", 17):
             self.assertEqual(firmware_source_commit(self.firmware), self.source_commit)
@@ -86,7 +96,8 @@ class PackageOtaReleaseTests(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(ValueError, "does not match the current checkout"):
-            package_release(self.firmware, self.output)
+            with patch("package_ota_release._source_commit_matches_checkout", return_value=False):
+                package_release(self.firmware, self.output)
 
     def test_refuses_image_without_source_commit_marker(self):
         self.firmware.write_bytes(
