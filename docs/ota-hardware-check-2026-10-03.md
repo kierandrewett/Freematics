@@ -58,6 +58,23 @@
   handoff stayed empty. The vehicle/ECU was disconnected, so this verifies
   live transport and fail-closed recording only—not vehicle PID values.
 
+## Follow-up — 2026-10-04
+
+- Built a fresh tokenless OTA `1.0.3` image from signed source commit
+  `1a6bb6f59e1699edabddc9698a7a50cbc3945da7` after adding first-boot flash
+  read-back verification. Its SHA-256 is
+  `28fba7c884ed98d7d427d1f57056208424432b14c9c541f81ee027657fe87ac6`; the
+  matching `.sha256sum` sidecar verifies, and the credential-aware packager
+  accepts it. The artifact remains local under
+  `.pio/ota-release-1a6bb6f-v1.0.3/`; it has not been published or flashed.
+- Built a separate private OTA-enabled `1.0.0` USB bootstrap from the same
+  commit using the ignored production configuration. It contains the telemetry
+  credential needed to seed NVS on first boot and must never be published; it
+  remains local at `.pio/build/esp32dev-ota-test/firmware.bin` and has not been
+  flashed. The configured ESP32 bootloader enables application rollback, and
+  the selected partition table provides two OTA application slots. This is
+  build-configuration evidence only, not a current hardware readback.
+
 ## Scope and remaining validation
 
 This confirms board identity, local image installation, application boot, and
