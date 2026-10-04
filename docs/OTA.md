@@ -19,6 +19,9 @@ charging-voltage reading cancels the transfer. After six hours the standby
 loop can attempt a check, but only after the full 60-minute quiet period and
 fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
 Missing, stale, unsupported, or invalid readings fail closed.
+Standby motion reads share a mutex with the background sensor-acquisition task;
+lock contention is bounded and treated as a failed motion sample, so it cannot
+silently extend a quiet period or be mistaken for fresh motion evidence.
 OTA also requires a successfully persisted-and-read-back telemetry credential
 and a healthy SD journal; failed SD mount alone is not considered storage
 ready, and the journal must still be healthy at first-boot validation.

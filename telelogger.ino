@@ -1320,7 +1320,9 @@ void initialize()
 
 #if ENABLE_MEMS
   if (state.check(STATE_MEMS_READY)) {
+    xSemaphoreTake(memsMutex, portMAX_DELAY);
     mems->setLowPower(false);
+    xSemaphoreGive(memsMutex);
     calibrateMEMS();
   }
 #endif
@@ -1427,7 +1429,11 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
       float acc[3];
       bool motionSensorReady = false;
 #if ENABLE_MEMS
-      motionSensorReady = mems && state.check(STATE_MEMS_READY) && mems->read(acc);
+      if (mems && memsMutex && state.check(STATE_MEMS_READY) &&
+          xSemaphoreTake(memsMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        motionSensorReady = mems->read(acc);
+        xSemaphoreGive(memsMutex);
+      }
       if (motionSensorReady) {
       if (accCount == 10) {
         accCount = 0;
@@ -2852,7 +2858,9 @@ void standby()
 #if ENABLE_MEMS
   if (mems && state.check(STATE_MEMS_READY)) {
     calibrateMEMS();
+    xSemaphoreTake(memsMutex, portMAX_DELAY);
     mems->setLowPower(true);
+    xSemaphoreGive(memsMutex);
   }
 #if ENABLE_OTA
   while (state.check(STATE_STANDBY)) {
