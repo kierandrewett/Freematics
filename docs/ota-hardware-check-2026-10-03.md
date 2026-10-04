@@ -225,6 +225,23 @@
   reader, not the Model B, so hardware update/rollback validation remains
   pending.
 
+## Follow-up — 2026-10-04 (current OTA candidate)
+
+- Built a tokenless OTA `1.0.15` candidate from clean, signed source commit
+  `873f881692822a5e6e1516f778550eb19d73c620`. The image embeds boot build ID
+  `873f88169282`, is 714,464 bytes, and has SHA-256
+  `dba3ace90df5548761942183e3cbca213dee513bb6a3f380544ca0625b317684`.
+  Credential-aware packaging, the exact-two-file allowlist, and sidecar
+  verification passed. It remains local at
+  `.pio/ota-release-candidate-873f881-v1.0.15/` (directory `0700`, assets
+  `0600`); it has not been published or flashed.
+- The OTA parked-voltage gate and explicit dual-slot partition-table tests
+  pass; the release packager and publisher suites pass (37 tests combined).
+  Cellular download, live parked-state monitoring, first-boot acceptance, and
+  automatic rollback remain unverified on hardware. Current USB enumeration
+  still reports a CH340 bridge rather than a verified Model B interface, so
+  no device was opened or flashed.
+
 ## Scope and remaining validation
 
 This confirms board identity, local image installation, application boot, and
