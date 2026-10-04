@@ -37,9 +37,11 @@ The latest GitHub release is expected to contain these exact asset names:
 The sidecar uses standard `sha256sum` format. The updater downloads both over
 HTTPS, follows only a short redirect chain to allowlisted GitHub release hosts,
 streams the image to the inactive slot, checks the digest, validates the ESP
-image, records the pending digest, and changes the boot partition. The new
-image is accepted only after storage and motion-sensor initialization; the
-ESP32 bootloader rolls back a failed/power-cut first boot.
+image, records the pending image size and digest together, and changes the boot
+partition. On first boot, firmware hashes the running partition again and
+compares it with that saved identity before it can accept the image. Acceptance
+also requires storage, motion-sensor, and credential initialization; the ESP32
+bootloader rolls back a failed/power-cut first boot.
 
 Every OTA image embeds `FREEMATICS_RELEASE_VERSION=major.minor.patch`. Before
 staging, the running firmware requires a valid candidate version strictly
@@ -97,7 +99,10 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_version_policy.cpp -o /tmp/test_ota_version_policy
 /tmp/test_ota_version_policy
-g++ -std=c++11 -Wall -Wextra -Werror -pedantic \\
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_boot_identity.cpp -o /tmp/test_ota_boot_identity
+/tmp/test_ota_boot_identity
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_stage_policy.cpp -o /tmp/test_ota_stage_policy
 /tmp/test_ota_stage_policy
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v

@@ -2,6 +2,7 @@
 
 #include "FreematicsCellTLS.h"
 #include "config.h"
+#include "ota_boot_identity.h"
 #include "ota_release_policy.h"
 #include "ota_sha256_sidecar.h"
 #include "ota_stage_policy.h"
@@ -27,11 +28,20 @@ const size_t kSidecarCapacity = 256;
 const uint8_t kSha256Bytes = 32;
 const uint8_t kMaxRedirects = 3;
 const uint32_t kSidecarMaximum = 255;
+const size_t kPartitionHashChunkBytes = 1024;
 const unsigned kHttpTimeoutMs = 15UL * 60UL * 1000UL;
 // The release version is parsed from the downloaded image before it can be
 // staged. Keep a matching marker in every image so OTA can reject downgrades.
 const char kFirmwareReleaseMarker[] =
     "FREEMATICS_RELEASE_VERSION=" FREEMATICS_RELEASE;
+
+struct PendingOtaIdentity {
+  uint32_t imageSize;
+  uint8_t digest[kSha256Bytes];
+};
+
+static_assert(sizeof(PendingOtaIdentity) == 36,
+              "pending OTA identity must remain a fixed 36-byte NVS blob");
 
 bool cancelled(const volatile bool* requested)
 {
@@ -142,24 +152,36 @@ bool writeFirmware(void* context, const unsigned char* bytes, size_t length)
   return true;
 }
 
-bool readDigest(const char* key, uint8_t digest[kSha256Bytes])
+bool readBlob(const char* key, void* value, size_t valueLength)
 {
+  if (!key || !value || !valueLength) return false;
   nvs_handle_t handle;
   if (nvs_open(kNvsNamespace, NVS_READONLY, &handle) != ESP_OK) return false;
-  size_t length = kSha256Bytes;
-  const esp_err_t result = nvs_get_blob(handle, key, digest, &length);
+  size_t length = valueLength;
+  const esp_err_t result = nvs_get_blob(handle, key, value, &length);
   nvs_close(handle);
-  return result == ESP_OK && length == kSha256Bytes;
+  return result == ESP_OK && length == valueLength;
+}
+
+bool writeBlob(const char* key, const void* value, size_t valueLength)
+{
+  if (!key || !value || !valueLength) return false;
+  nvs_handle_t handle;
+  if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
+  const esp_err_t result = nvs_set_blob(handle, key, value, valueLength);
+  const esp_err_t committed = result == ESP_OK ? nvs_commit(handle) : result;
+  nvs_close(handle);
+  return committed == ESP_OK;
+}
+
+bool readDigest(const char* key, uint8_t digest[kSha256Bytes])
+{
+  return readBlob(key, digest, kSha256Bytes);
 }
 
 bool writeDigest(const char* key, const uint8_t digest[kSha256Bytes])
 {
-  nvs_handle_t handle;
-  if (nvs_open(kNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) return false;
-  const esp_err_t result = nvs_set_blob(handle, key, digest, kSha256Bytes);
-  const esp_err_t committed = result == ESP_OK ? nvs_commit(handle) : result;
-  nvs_close(handle);
-  return committed == ESP_OK;
+  return writeBlob(key, digest, kSha256Bytes);
 }
 
 void eraseDigest(const char* key)
@@ -171,6 +193,56 @@ void eraseDigest(const char* key)
   nvs_close(handle);
 }
 
+bool writePendingIdentity(uint32_t imageSize,
+                          const uint8_t digest[kSha256Bytes])
+{
+  if (!imageSize || !digest) return false;
+  PendingOtaIdentity identity = {};
+  identity.imageSize = imageSize;
+  memcpy(identity.digest, digest, sizeof(identity.digest));
+  return writeBlob(kPendingDigestKey, &identity, sizeof(identity));
+}
+
+bool readPendingIdentity(PendingOtaIdentity* identity)
+{
+  if (!identity) return false;
+  return readBlob(kPendingDigestKey, identity, sizeof(*identity)) &&
+         identity->imageSize;
+}
+
+bool hashPartitionImage(const esp_partition_t* partition, uint32_t imageSize,
+                        uint8_t digest[kSha256Bytes])
+{
+  if (!partition || !imageSize || imageSize > partition->size || !digest) {
+    return false;
+  }
+
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  if (mbedtls_sha256_starts_ret(&sha, 0) != 0) {
+    mbedtls_sha256_free(&sha);
+    return false;
+  }
+
+  uint8_t buffer[kPartitionHashChunkBytes];
+  uint32_t offset = 0;
+  bool okay = true;
+  while (offset < imageSize) {
+    const size_t chunk = imageSize - offset < sizeof(buffer)
+        ? imageSize - offset : sizeof(buffer);
+    if (esp_partition_read(partition, offset, buffer, chunk) != ESP_OK ||
+        mbedtls_sha256_update_ret(&sha, buffer, chunk) != 0) {
+      okay = false;
+      break;
+    }
+    offset += (uint32_t)chunk;
+    delay(0);
+  }
+  if (okay && mbedtls_sha256_finish_ret(&sha, digest) != 0) okay = false;
+  mbedtls_sha256_free(&sha);
+  return okay;
+}
+
 struct StageOperations {
   FirmwareWriter& firmware;
   const uint8_t* digest;
@@ -179,7 +251,7 @@ struct StageOperations {
   void abortImage() { esp_ota_abort(firmware.handle); }
   bool finishImage() { return esp_ota_end(firmware.handle) == ESP_OK; }
   bool writePendingDigest() {
-    return writeDigest(kPendingDigestKey, digest);
+    return writePendingIdentity(firmware.bytesWritten, digest);
   }
   void erasePendingDigest() { eraseDigest(kPendingDigestKey); }
   bool selectBootPartition() {
@@ -331,10 +403,14 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
   if (!running || esp_ota_get_state_partition(running, &imageState) != ESP_OK) return true;
 
   if (imageState == ESP_OTA_IMG_PENDING_VERIFY) {
-    uint8_t digest[kSha256Bytes];
+    PendingOtaIdentity pending = {};
+    uint8_t actualDigest[kSha256Bytes];
     if (!storageReady || !motionSensorReady || !telemetryCredentialReady ||
-        !readDigest(kPendingDigestKey, digest)) {
-      Serial.println("[OTA] New image failed core-service validation; rolling back");
+        !readPendingIdentity(&pending) ||
+        !hashPartitionImage(running, pending.imageSize, actualDigest) ||
+        !freematics::ota::matchesRunningImage(pending.imageSize, running->size,
+                                               pending.digest, actualDigest)) {
+      Serial.println("[OTA] New image failed identity or core-service validation; rolling back");
       esp_ota_mark_app_invalid_rollback_and_reboot();
       return false;
     }
@@ -343,7 +419,7 @@ bool validatePendingOtaImage(bool storageReady, bool motionSensorReady,
       esp_ota_mark_app_invalid_rollback_and_reboot();
       return false;
     }
-    if (!writeDigest(kInstalledDigestKey, digest)) {
+    if (!writeDigest(kInstalledDigestKey, pending.digest)) {
       Serial.println("[OTA] Image confirmed, but release identity was not saved");
       eraseDigest(kPendingDigestKey);
       return true;
