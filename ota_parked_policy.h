@@ -12,9 +12,16 @@
 class OTAParkedPolicy {
  public:
   static const uint32_t kRequiredQuietMs = 60UL * 60UL * 1000UL;
+  static constexpr float kMinimumVehicleSupplyVolts = 6.0f;
+  static constexpr float kChargingVoltage = 13.2f;
   // Standby polls the accelerometer every 250 ms. A missed or stalled poll
   // longer than this breaks the evidence of continuous quiet.
   static const uint32_t kMotionSampleMaxGapMs = 1500UL;
+
+  static bool vehicleSupplyPlausible(float volts) {
+    return volts == volts && volts <= FLT_MAX && volts >= -FLT_MAX &&
+        volts >= kMinimumVehicleSupplyVolts && volts < kChargingVoltage;
+  }
 
   struct Signal {
     bool supported;
@@ -102,7 +109,8 @@ class OTAParkedPolicy {
     if (!fresh(observation.rpm, nowMs)) return kRpmUnavailable;
     if (observation.rpm.value != 0.0f) return kRpmNotZero;
     if (!fresh(observation.modelBSupplyVolts, nowMs)) return kSupplyUnavailable;
-    if (observation.modelBSupplyVolts.value >= 13.2f) return kSupplyCharging;
+    if (observation.modelBSupplyVolts.value >= kChargingVoltage) return kSupplyCharging;
+    if (!vehicleSupplyPlausible(observation.modelBSupplyVolts.value)) return kSupplyUnavailable;
 
     return kEligible;
   }

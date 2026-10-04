@@ -2868,11 +2868,19 @@ void standby()
     otaCheckRequested = true;
     bool motionWake = false;
     bool sensorFailure = false;
+    bool supplyUnsafe = false;
+    float otaSupplyVoltage = 0;
     while (state.check(STATE_STANDBY) && !otaAttemptDone) {
       bool failedThisPoll = false;
       if (waitMotion(250, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                      &failedThisPoll)) {
         motionWake = true;
+        otaCancelRequested = true;
+        break;
+      }
+      otaSupplyVoltage = readVehicleVoltage();
+      if (!OTAParkedPolicy::vehicleSupplyPlausible(otaSupplyVoltage)) {
+        supplyUnsafe = true;
         otaCancelRequested = true;
         break;
       }
@@ -2882,13 +2890,18 @@ void standby()
         break;
       }
     }
-    if (motionWake || sensorFailure) {
+    if (motionWake || sensorFailure || supplyUnsafe) {
       // Let the modem owner observe cancellation and close its socket before
       // releasing the shared coprocessor link to OBD acquisition.
       otaCancelRequested = true;
       while (!otaAttemptDone) delay(25);
       if (otaAttemptResult == OTA_ATTEMPT_INSTALLED) cancelStagedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
+      if (supplyUnsafe) {
+        noteOtaResetEvent(millis(), false);
+        wakeRecord = WAKE_MAGIC | (otaSupplyVoltage >= IGNITION_WAKE_VOLTAGE ? WAKE_CHARGING : WAKE_MOTION);
+        Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or charging");
+      }
       break;
     }
     if (otaAttemptDone) {
@@ -2900,15 +2913,20 @@ void standby()
         unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
 #endif
         bool sensorReadFailed = false;
-        if (unsafeToReboot ||
-            waitMotion(1000, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
-                       &sensorReadFailed) || sensorReadFailed ||
-            !otaParkedPolicy.motionProofCurrent(millis())) {
+        const bool motionWake = waitMotion(1000, STANDBY_MOTION_THRESHOLD,
+            STANDBY_MOTION_CONFIRM_SAMPLES, &sensorReadFailed);
+        const OTAParkedPolicy::Denial finalDenial =
+            unsafeToReboot || motionWake || sensorReadFailed
+                ? OTAParkedPolicy::kMotionUnavailable : finalOtaParkedCheck();
+        if (unsafeToReboot || motionWake || sensorReadFailed ||
+            finalDenial != OTAParkedPolicy::kEligible) {
           cancelStagedOtaUpdate();
           otaAttemptResult = OTA_ATTEMPT_CANCELLED;
           otaAttemptDone = false;
           if (unsafeToReboot) Serial.println("[OTA] Staged image cancelled: durable storage or credential unavailable");
-          else Serial.println("[OTA] Staged image cancelled: continuous motion-sensor proof unavailable");
+          else if (motionWake || sensorReadFailed) Serial.println("[OTA] Staged image cancelled: continuous motion-sensor proof unavailable");
+          else Serial.printf("[OTA] Staged image cancelled: parked safety gate changed (%u)\n",
+                             (unsigned)finalDenial);
           break;
         }
         Serial.println("[OTA] Inactive image staged; rebooting into pending verification");

@@ -82,6 +82,10 @@ static void testActivityAndRebootResetTimer() {
 }
 
 static void testVehicleSignalsAndReadinessRemainFailClosed() {
+  assert(Policy::vehicleSupplyPlausible(6.0f));
+  assert(Policy::vehicleSupplyPlausible(13.19f));
+  assert(!Policy::vehicleSupplyPlausible(5.99f));
+  assert(!Policy::vehicleSupplyPlausible(13.2f));
   const uint32_t start = 5000;
   const uint32_t checkAt = start + Policy::kRequiredQuietMs;
   Policy policy;
@@ -112,7 +116,30 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   state.modelBSupplyVolts.value = 13.2f;
   assert(policy.observe(checkAt, state) == Policy::kSupplyCharging);
   state = parked(checkAt);
+  state.modelBSupplyVolts.value = 0.0f;
+  assert(policy.observe(checkAt, state) == Policy::kSupplyUnavailable);
+  state = parked(checkAt);
   assert(policy.observe(checkAt, state) == Policy::kEligible);
+}
+
+static void testParkedSignalsAreRecheckedAfterDownload() {
+  const uint32_t start = 9000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  Policy::Observation state = parked(checkAt);
+  assert(policy.observe(checkAt, state) == Policy::kEligible);
+
+  const uint32_t completedAt = checkAt + 250;
+  policy.observeMotionSample(completedAt, true, false);
+  state = parked(completedAt);
+  state.rpm.value = 850.0f;
+  assert(policy.observe(completedAt, state) == Policy::kRpmNotZero);
+
+  state = parked(completedAt);
+  state.modelBSupplyVolts.value = 14.1f;
+  assert(policy.observe(completedAt, state) == Policy::kSupplyCharging);
 }
 
 static void testWrapSafeContinuousQuietTimer() {
@@ -130,6 +157,7 @@ int main() {
   testMotionInvalidSampleAndLongGapRestartTimer();
   testActivityAndRebootResetTimer();
   testVehicleSignalsAndReadinessRemainFailClosed();
+  testParkedSignalsAreRecheckedAfterDownload();
   testWrapSafeContinuousQuietTimer();
   puts("OTA parked eligibility: all tests passed");
   return 0;

@@ -12,11 +12,13 @@ No wall-clock window is used. The 60-minute timer starts only after a valid
 MEMS sample and is earned by continuous successful samples; movement, an
 invalid sample, or a sampling gap over 1.5 seconds restarts or invalidates the
 proof. A failed motion read during an OTA transfer cancels the transfer, and a
-staged image is not rebooted into without a fresh final motion check. After
-six hours the standby loop can attempt a check, but only after the full
-60-minute quiet period and fresh supported readings show speed 0, RPM 0, and
-Model B supply below 13.2 V. Missing, stale, unsupported, or invalid readings
-fail closed.
+staged image is not rebooted into without fresh final motion, OBD speed/RPM,
+Model B supply, storage, and credential checks. Model B supply must remain in
+the plausible vehicle range (6.0 V to below 13.2 V); a missing, weak, or
+charging-voltage reading cancels the transfer. After six hours the standby
+loop can attempt a check, but only after the full 60-minute quiet period and
+fresh supported readings show speed 0, RPM 0, and plausible Model B supply.
+Missing, stale, unsupported, or invalid readings fail closed.
 OTA also requires a successfully persisted-and-read-back telemetry credential
 and a healthy SD journal; failed SD mount alone is not considered storage
 ready, and the journal must still be healthy at first-boot validation.
