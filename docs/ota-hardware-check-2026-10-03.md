@@ -123,6 +123,14 @@
   embeds build ID `d0b77c61e3ed`. The image is local, credential-bearing, and
   unflashed; its build directory is owner-only. Emulator cases cover compact,
   spaced single-frame, numbered continuation, and invalid VIN responses.
+- Hardened OTA parked-state enforcement in source commit `fdfca35720f7`:
+  supply must remain between 6.0 V and 13.2 V during transfer, and the full
+  parked gate (including fresh speed/RPM and supply) is repeated before reboot.
+  The OTA-enabled private bootstrap image has SHA-256
+  `409759078f748271e918947d6209f54d2cb28e8975fa598b7d4a1a8d6766140a` and
+  embeds build ID `fdfca35720f7`. A local configured-credential scan confirms
+  this bootstrap contains a credential; its build directory is owner-only.
+  It has not been published or flashed.
 
 ## Scope and remaining validation
 
