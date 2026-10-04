@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from measure_usb_stream import identify_freematics_usb, summarize
+from measure_usb_stream import (
+    capture_is_newer,
+    identify_freematics_usb,
+    observe_successful_pid_updates,
+    summarize,
+    timeout_counter_delta,
+)
 
 
 class FreematicsUsbIdentityTests(unittest.TestCase):
@@ -43,6 +49,33 @@ class FreematicsUsbIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaisesRegex(ValueError, "cannot verify USB identity"):
                 identify_freematics_usb("/dev/ttyUSB0", Path(temp))
+
+
+class FreematicsObdTimingTests(unittest.TestCase):
+    def test_age_reset_detects_success_even_when_pid_value_is_unchanged(self):
+        previous_age = {}
+        self.assertEqual(
+            observe_successful_pid_updates({0x40C: [20]}, previous_age), []
+        )
+        self.assertEqual(
+            observe_successful_pid_updates({0x40C: [270]}, previous_age), []
+        )
+        self.assertEqual(
+            observe_successful_pid_updates({0x40C: [15]}, previous_age),
+            [(0x0C, 15)],
+        )
+
+    def test_timeout_counter_delta_handles_uint32_wrap(self):
+        self.assertEqual(timeout_counter_delta(None, 3), 0)
+        self.assertEqual(timeout_counter_delta(10, 13), 3)
+        self.assertEqual(timeout_counter_delta(0xFFFFFFFF, 1), 2)
+
+    def test_capture_order_rejects_replays_and_accepts_u32_wrap(self):
+        self.assertTrue(capture_is_newer(None, 7))
+        self.assertTrue(capture_is_newer(100, 101))
+        self.assertFalse(capture_is_newer(100, 100))
+        self.assertFalse(capture_is_newer(100, 99))
+        self.assertTrue(capture_is_newer(0xFFFFFFF0, 12))
 
 
 if __name__ == "__main__":

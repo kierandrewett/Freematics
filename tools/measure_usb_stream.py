@@ -102,6 +102,38 @@ def percentile(values: list[float], percent: float) -> float | None:
     return round(ordered[min(len(ordered) - 1, math.ceil(percent * len(ordered)) - 1)], 2)
 
 
+def observe_successful_pid_updates(
+    fields: dict[int, list[float]], previous_age: dict[int, int]
+) -> list[tuple[int, int]]:
+    """Detect successful reads from per-PID age resets, even for unchanged values."""
+    updates = []
+    for age_pid, values in fields.items():
+        if not 0x400 <= age_pid <= 0x4FF or not values:
+            continue
+        pid = age_pid & 0xFF
+        age = max(0, int(values[0]))
+        previous = previous_age.get(pid)
+        if previous is not None and age + 40 < previous:
+            updates.append((pid, age))
+        previous_age[pid] = age
+    return updates
+
+
+def timeout_counter_delta(previous: int | None, current: int) -> int:
+    """Handle the device's cumulative uint32 timeout counter across wrap."""
+    if previous is None:
+        return 0
+    return ((current & 0xFFFFFFFF) - previous) & 0xFFFFFFFF
+
+
+def capture_is_newer(previous: int | None, current: int) -> bool:
+    """Accept capture-clock wrap, but reject duplicate or delayed same-boot frames."""
+    if previous is None:
+        return True
+    delta = (current - previous) & 0xFFFFFFFF
+    return 0 < delta < 0x80000000
+
+
 def summarize(
     port: str,
     duration: float,
@@ -138,6 +170,11 @@ def summarize(
         observed_counters: dict[int, list[int]] = defaultdict(list)
         last_age: dict[int, int] = {}
         last_sample_tick: dict[int, int] = {}
+        successful_pid_updates: dict[int, int] = defaultdict(int)
+        failed_pid_reads = 0
+        previous_timeout_count: int | None = None
+        read_latency_observations: list[int] = []
+        obd_activity_captures = 0
         previous_boot: int | None = None
         previous_capture: int | None = None
         previous_arrival: float | None = None
@@ -203,14 +240,14 @@ def summarize(
                     previous_capture = None
                     last_age.clear()
                     last_sample_tick.clear()
+                    previous_timeout_count = None
                 if previous_capture is not None:
                     delta = (frame["capture"] - previous_capture) & 0xFFFFFFFF
-                    if delta < 0x80000000:
-                        capture_deltas.append(delta)
-                        unwrapped_capture += delta
-                    else:
-                        totals["non_monotonic_capture_ticks"] += 1
-                        unwrapped_capture = frame["capture"]
+                    if not capture_is_newer(previous_capture, frame["capture"]):
+                        totals["replayed_capture_frames"] += 1
+                        continue
+                    capture_deltas.append(delta)
+                    unwrapped_capture += delta
                 else:
                     unwrapped_capture = frame["capture"]
                 previous_capture = frame["capture"]
@@ -223,6 +260,32 @@ def summarize(
                 records.append({"dropped": dropped})
 
                 fields = frame["fields"]
+                updates = observe_successful_pid_updates(fields, last_age)
+                for pid, age in updates:
+                    successful_pid_updates[pid] += 1
+                    if pid in PID_LABELS:
+                        sample_tick = unwrapped_capture - age
+                        prior_tick = last_sample_tick.get(pid)
+                        if prior_tick is not None and sample_tick > prior_tick:
+                            refresh_intervals[pid].append(sample_tick - prior_tick)
+                        last_sample_tick[pid] = sample_tick
+
+                timeout_field = fields.get(0x87)
+                timeout_increment = 0
+                if timeout_field:
+                    timeout_count = int(timeout_field[0]) & 0xFFFFFFFF
+                    timeout_increment = timeout_counter_delta(
+                        previous_timeout_count, timeout_count
+                    )
+                    failed_pid_reads += timeout_increment
+                    previous_timeout_count = timeout_count
+
+                latency_field = fields.get(0x88)
+                if updates or timeout_increment:
+                    obd_activity_captures += 1
+                    if latency_field:
+                        read_latency_observations.append(int(latency_field[0]))
+
                 for metric_pid in (0x87, 0x88, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x97):
                     if metric_pid in fields and fields[metric_pid]:
                         value = int(fields[metric_pid][0])
@@ -237,18 +300,8 @@ def summarize(
                         continue
                     age = max(0, int(age_field[0]))
                     ages[pid].append(age)
-                    previous = last_age.get(pid)
-                    # A substantial age reset indicates a new successful ECU
-                    # response; merely repeating a cached value does not.
-                    if previous is not None and age + 40 < previous:
-                        sample_tick = unwrapped_capture - age
-                        prior_tick = last_sample_tick.get(pid)
-                        if prior_tick is not None and sample_tick > prior_tick:
-                            refresh_intervals[pid].append(sample_tick - prior_tick)
-                        last_sample_tick[pid] = sample_tick
-                    elif previous is None:
+                    if pid not in last_sample_tick:
                         last_sample_tick[pid] = unwrapped_capture - age
-                    last_age[pid] = age
 
         elapsed = max(0.001, time.monotonic() - started)
         whole_frame_gaps = [delta for delta in capture_deltas if delta > 300]
@@ -277,6 +330,7 @@ def summarize(
             "baud": baud_rate,
             "valid_frames": totals["valid_frames"],
             "corrupt_ft1_records": totals["corrupt_ft1_records"],
+            "replayed_capture_frames": totals["replayed_capture_frames"],
             "non_telemetry_lines": totals["non_telemetry_lines"],
             "device_restarts": totals["device_restarts"],
             "received_bytes": totals["bytes_received"],
@@ -306,6 +360,21 @@ def summarize(
                 f"0x{pid:02X}": [first_device_metrics.get(pid), last_device_metrics.get(pid)]
                 for pid in (0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x87, 0x97)
                 if pid in first_device_metrics
+            },
+            "obd_poll_observations": {
+                "successful_pid_age_resets": {
+                    f"0x{pid:02X}": count
+                    for pid, count in sorted(successful_pid_updates.items())
+                },
+                "failed_pid_reads_from_timeout_counter": failed_pid_reads,
+                "capture_frames_with_obd_activity": obd_activity_captures,
+                "last_read_latency_ms_at_activity": {
+                    "samples": len(read_latency_observations),
+                    "median": percentile(read_latency_observations, 0.50),
+                    "p95": percentile(read_latency_observations, 0.95),
+                    "max": max(read_latency_observations) if read_latency_observations else None,
+                },
+                "interpretation": "Successful PID reads are observed from device-side age resets, including unchanged values. Latency is sampled at activity-bearing captures; multiple reads between 250 ms frames may be coalesced.",
             },
             "pid_freshness_and_updates": per_pid,
             "partial_record_bytes_at_end": len(buffer),
