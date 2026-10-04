@@ -139,6 +139,13 @@ tag and never clobbers assets. Use it instead of uploading files manually:
 python3 tools/publish_ota_release.py v1.0.1 .pio/ota-release-v1.0.1
 ```
 
+The device downloads the firmware and its SHA-256 sidecar from the same GitHub
+release over HTTPS. The checksum detects transfer corruption or a mismatched
+asset; it is not an independent publisher signature. A compromised GitHub
+account or release could replace both files with a matching pair. The current
+OTA trust model therefore relies on GitHub account/repository security and
+HTTPS, and does not claim cryptographic publisher authentication.
+
 The package directory must be owner-only (`0700`), and packaged files are
 owner-only (`0600`). `.gitignore` alone does not protect manual uploads.
 
