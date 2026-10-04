@@ -74,6 +74,20 @@
   flashed. The configured ESP32 bootloader enables application rollback, and
   the selected partition table provides two OTA application slots. This is
   build-configuration evidence only, not a current hardware readback.
+- From source commit `2edf1f6`, both the regular production environment and
+  tokenless OTA-enabled environment build successfully. The production image
+  is private and unflashed; no boot ID or installed-image checksum is claimed.
+- After first-boot acceptance was made host-testable in commit `2edf1f6`, built
+  a fresh tokenless OTA `1.0.4` image from that commit. The Model B image SHA-256
+  is `3c417545bee1f7e2cdeb67caffb90556aa74f02016afcdbd3fe8a590dc78ac1b`;
+  the sidecar verifies, and the credential-aware packager accepted the binary
+  against the current ignored `.env`, process environment, and
+  `local_config.h`. It is staged locally under
+  `.pio/ota-release-2edf1f6-v1.0.4/`; it has not been published or flashed.
+- Current USB inventory contains a CH340 serial adapter, not the Model B's
+  CP210x identity. No Freematics board was detected, so there was no serial
+  open, reset, or flash. The public Freematics releases endpoint currently has
+  no release assets.
 
 ## Scope and remaining validation
 
@@ -84,5 +98,7 @@ recording until a full power-cycle check restores it. The vehicle is
 disconnected indoors, so fresh zero-speed/RPM and vehicle-supply checks cannot
 be made; the 60-minute parked gate, cellular release download, motion
 cancellation, pending-image acceptance, and automatic rollback remain
-untested on hardware. Do not publish or distribute the flashed images: they
-embed the private telemetry credential.
+untested on hardware. Private migration/production images embed the telemetry
+credential and must never be published. The separate tokenless OTA candidate
+is package-checked but remains local until the hardware safety and rollback
+checks pass.
