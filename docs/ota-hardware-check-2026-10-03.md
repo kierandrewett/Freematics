@@ -212,6 +212,18 @@
   at `.pio/ota-release-a2c05de-v1.0.8/` is local-only, with directory mode
   `0700` and files `0600`; it supersedes the earlier local 1.0.8 candidate and
   has not been published or flashed.
+- Rebuilt the private OTA-capable production bootstrap from signed source
+  commit `6bec45de50c4` with `PRODUCTION_BUILD=1`. The build enforces production
+  configuration validation; the image carries the configured credential and
+  three configured private-value signatures were detected without printing
+  them. Image build ID: `6bec45de50c4`; image size: 712,144 bytes; SHA-256:
+  `f726b64d98c98a6e0155b6853926ac6a9abb69cc05fad9dda468f4f783b9fcb4`. Its
+  ESP32 image checksum/hash validates, and the generated partition table has
+  separate 6,400 KiB `ota_0` and `ota_1` slots. The image and ELF are mode
+  `0600`; this is a local private bootstrap, not a release asset, and it was
+  not flashed. The current USB inventory still identifies only the CH340
+  reader, not the Model B, so hardware update/rollback validation remains
+  pending.
 
 ## Scope and remaining validation
 
