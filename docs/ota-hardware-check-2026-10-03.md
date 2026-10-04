@@ -241,6 +241,14 @@
   automatic rollback remain unverified on hardware. Current USB enumeration
   still reports a CH340 bridge rather than a verified Model B interface, so
   no device was opened or flashed.
+- Rebuilt the private OTA-capable production bootstrap from signed source
+  commit `8c560139ef574e844b2775ee85979b347ab2a0be`. Its boot build ID is
+  `8c560139ef57`, image size is 714,784 bytes, and SHA-256 is
+  `fc5e6162712aa7cf50e82aee98a878bd067aaad66e4549683eda184b89127ce2`.
+  The configured-private-value scan confirms it carries private production
+  configuration; the image is mode `0600`, local-only, and not flashed or
+  publishable. The USB bridge still does not identify the attached board as a
+  verified Model B.
 
 ## Scope and remaining validation
 
