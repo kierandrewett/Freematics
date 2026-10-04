@@ -918,7 +918,26 @@ void pollOBD()
             diagnosticLateness = lateness;
         }
     }
-    if (diagnostic >= 0) {
+    bool engineStopped = false;
+    bool vehicleStopped = false;
+    bool rpmKnown = false;
+    bool speedKnown = false;
+    for (const auto& item : obdData) {
+        const uint32_t age = now - item.ts;
+        const bool fresh = item.ts && age <= 2UL * OBD_FAST_INTERVAL_MS && obd.isValidPID(item.pid);
+        if (item.pid == PID_RPM && fresh) {
+            engineStopped = item.value == 0;
+            rpmKnown = true;
+        } else if (item.pid == PID_SPEED && fresh) {
+            vehicleStopped = item.value == 0;
+            speedKnown = true;
+        }
+    }
+    // DTC reads can wait up to OBD_DTC_TIMEOUT and block every live PID on
+    // the single ECU bridge. Defer them unless fresh RPM and speed both prove
+    // the engine and vehicle are stopped, preserving live acquisition cadence
+    // during driving and idle troubleshooting.
+    if (diagnostic >= 0 && rpmKnown && speedKnown && engineStopped && vehicleStopped) {
         dtcScanIndex = diagnostic;
         scanDiagnostics();
         publishOBDSnapshot();

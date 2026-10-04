@@ -134,6 +134,8 @@ uint32_t obdScheduleStarted = 0;
 struct FakeOBD {
   bool supported[256] = {};
   bool fail[256] = {};
+  bool fixed[256] = {};
+  float fixedValue[256] = {};
   uint32_t responseMs[256] = {};
   unsigned reads[256] = {};
   std::vector<byte> order;
@@ -143,7 +145,7 @@ struct FakeOBD {
     reads[pid]++; order.push_back(pid); tick += responseMs[pid];
     if (fail[pid]) return false;
     completions.push_back({pid, tick});
-    value = float(reads[pid]); return true;
+    value = fixed[pid] ? fixedValue[pid] : float(reads[pid]); return true;
   }
 } obd;
 
@@ -259,12 +261,26 @@ int main() {
   std::cout << "rollover=" << rollover << "\n";
   pass &= rollover;
 
-  seed(); dtcData[0].lastScan = 0; callFor(1020);
+  seed();
+  obd.fixed[PID_RPM] = obd.fixed[PID_SPEED] = true;
+  obd.fixedValue[PID_RPM] = obd.fixedValue[PID_SPEED] = 0;
+  dtcData[0].lastScan = 0; callFor(1020);
   bool oneDtc = diagnosticCalls > 0 && diagnosticMaxPerCall <= 1;
   std::cout << "dtc_preserved=" << oneDtc << " calls=" << diagnosticCalls << "\n";
   pass &= oneDtc;
 
-  seed(); diagnosticResponseMs = OBD_DTC_TIMEOUT_MS; dtcData[0].lastScan = 0; callFor(6000);
+  seed(); callFor(5000); dtcData[0].lastScan = 0;
+  obdData[0].value = 800; obdData[0].ts = tick;
+  obdData[1].value = 0; obdData[1].ts = tick;
+  callFor(1000);
+  bool dtcDeferredWhileEngineRunning = diagnosticCalls == 0;
+  std::cout << "dtc_deferred_while_engine_running=" << dtcDeferredWhileEngineRunning << "\n";
+  pass &= dtcDeferredWhileEngineRunning;
+
+  seed();
+  obd.fixed[PID_RPM] = obd.fixed[PID_SPEED] = true;
+  obd.fixedValue[PID_RPM] = obd.fixedValue[PID_SPEED] = 0;
+  diagnosticResponseMs = OBD_DTC_TIMEOUT_MS; dtcData[0].lastScan = 0; callFor(6000);
   const uint32_t dtcTimeoutRpmGap = maxCompletionGap(PID_RPM);
   bool dtcCostVisible = dtcTimeoutRpmGap >= diagnosticResponseMs;
   std::cout << "dtc_timeout_ms=" << diagnosticResponseMs << " dtc_timeout_rpm_gap_ms=" << dtcTimeoutRpmGap
