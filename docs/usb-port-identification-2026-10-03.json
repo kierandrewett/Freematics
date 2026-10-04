@@ -8,7 +8,11 @@
       "kernel_driver": "ch341"
     }
   ],
-  "expected_freematics_model_b_usb_bridge": "Silicon Labs CP2104 10c4:ea60",
+  "expected_freematics_model_b_usb_bridge": "Silicon Labs CP210x (CP2102/CP2104) 10c4:ea60",
+  "hardware_references": [
+    "https://freematics.com/dl/schematics_oneplus_r14_20190612.pdf",
+    "https://freematics.com/dl/schematics_oneplus_hd_20200604.pdf"
+  ],
   "freematics_usb_bridge_present": false,
   "passive_captures_before_identity_guard": [
     {

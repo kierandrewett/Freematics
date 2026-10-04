@@ -21,7 +21,7 @@ from pathlib import Path
 
 BAUD = termios.B115200
 MAX_LINE = 16 * 1024
-FREEMATICS_USB_VID_PID = ("10c4", "ea60")  # Silicon Labs CP2104 on Model B
+FREEMATICS_USB_VID_PID = ("10c4", "ea60")  # Silicon Labs CP210x family
 PID_LABELS = {
     0x0C: "engine_rpm",
     0x0D: "vehicle_speed",
@@ -36,7 +36,7 @@ PID_LABELS = {
 def identify_freematics_usb(
     port: str, sys_class_tty: Path = Path("/sys/class/tty")
 ) -> tuple[str, str]:
-    """Require the Model B CP2104 USB bridge before touching a serial port."""
+    """Require the Model B CP210x USB bridge before touching a serial port."""
     tty_name = Path(port).resolve().name
     device_link = sys_class_tty / tty_name / "device"
     try:
@@ -55,7 +55,7 @@ def identify_freematics_usb(
             if identity != FREEMATICS_USB_VID_PID:
                 raise ValueError(
                     f"{port} is USB {identity[0]}:{identity[1]}, expected Freematics "
-                    "Model B CP2104 10c4:ea60"
+                    "Model B CP210x (CP2102/CP2104) 10c4:ea60"
                 )
             return identity
 

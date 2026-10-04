@@ -21,7 +21,7 @@ class FreematicsUsbIdentityTests(unittest.TestCase):
         (class_entry / "device").symlink_to(tty_device)
         return root / "class" / "tty"
 
-    def test_accepts_freematics_model_b_cp2104(self):
+    def test_accepts_freematics_model_b_cp210x_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             sys_class_tty = self.make_sysfs(root, "10c4", "ea60")
