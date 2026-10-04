@@ -170,6 +170,12 @@
   serial bridge at `/dev/ttyUSB0`, without a board-specific USB identity. That
   is insufficient to identify the Model B confidently; no serial session or
   flash was attempted, and vehicle connection/live telemetry remain unverified.
+- Inspected the linked firmware symbols, not just compiler flags: the OTA
+  production ELF contains the strong `verifyRollbackLater` override, while
+  the normal production ELF retains the framework's weak default. The bundled
+  ESP32 SDK enables `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. This confirms the
+  app-level first-boot validation path is linked in the OTA build; real boot
+  acceptance and automatic rollback remain hardware-unverified.
 
 ## Scope and remaining validation
 
