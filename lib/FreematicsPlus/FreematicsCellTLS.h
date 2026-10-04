@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FreematicsBase.h"
+#include "FreematicsHttpStream.h"
 #include <mbedtls/ssl.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
@@ -9,13 +10,9 @@
 // TLS runs on the ESP32. The modem supplies a cellular TCP socket only.
 class CellularTLS {
 public:
-    static const size_t HTTP_LOCATION_CAPACITY = 2048;
-    struct HTTPResponseInfo {
-        uint16_t status;
-        uint32_t contentLength;
-        char location[HTTP_LOCATION_CAPACITY];
-    };
-    typedef bool (*HTTPBodyWriter)(void* context, const unsigned char* data, size_t length);
+    static const size_t HTTP_LOCATION_CAPACITY = freematics::cell::kHttpLocationCapacity;
+    typedef freematics::cell::HTTPResponseInfo HTTPResponseInfo;
+    typedef freematics::cell::HTTPBodyWriter HTTPBodyWriter;
     typedef bool (*HTTPContinueCheck)(void* context);
 
     CellularTLS();

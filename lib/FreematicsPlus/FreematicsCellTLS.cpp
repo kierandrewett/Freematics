@@ -10,10 +10,6 @@
 #ifndef CELL_TLS_COMMAND_SETTLE_MS
 #define CELL_TLS_COMMAND_SETTLE_MS 10
 #endif
-#ifndef CELL_TLS_HTTP_BODY_CHUNK_BYTES
-#define CELL_TLS_HTTP_BODY_CHUNK_BYTES 256
-#endif
-
 namespace {
 bool timeValid(time_t value) { return value >= 1704067200 && value <= 2145916799; }
 int hexDigit(char value)
@@ -346,115 +342,11 @@ bool CellularTLS::streamResponse(uint32_t maxContentLength, HTTPBodyWriter write
     HTTPResponseInfo* info, unsigned timeout)
 {
     if (!m_connected || !writer || !info) return false;
-    memset(info, 0, sizeof(*info));
     m_deadline = millis() + max(timeout, 15000U);
-
-    // Keep both an individual line and aggregate headers strictly bounded.
-    static const size_t HEADER_LINE_CAPACITY = 2048;
-    static const size_t HEADER_BYTES_LIMIT = 8192;
-    static const unsigned HEADER_LINE_LIMIT = 64;
-    char header[HEADER_LINE_CAPACITY];
-    size_t headerBytes = 0;
-    auto readHeaderLine = [this](char* output, size_t capacity, size_t& length) -> bool {
-        length = 0;
-        while (length + 1 < capacity) {
-            unsigned char ch;
-            if (read(&ch, 1) != 1 || ch == 0) return false;
-            if (ch == '\n') {
-                if (!length || output[length - 1] != '\r') return false;
-                length--;
-                output[length] = 0;
-                return true;
-            }
-            output[length++] = (char)ch;
-        }
-        return false;
+    const auto reader = [](void* readerContext, unsigned char* bytes,
+                           size_t capacity) -> int {
+        return static_cast<CellularTLS*>(readerContext)->read(bytes, capacity);
     };
-    unsigned status = 0;
-    size_t statusLineLength = 0;
-    if (!readHeaderLine(header, sizeof(header), statusLineLength)) return false;
-    headerBytes += statusLineLength + 2;
-    if (headerBytes > HEADER_BYTES_LIMIT || statusLineLength < 12 || strncmp(header, "HTTP/1.", 7) ||
-        (header[7] != '0' && header[7] != '1') || header[8] != ' ' ||
-        !isdigit((unsigned char)header[9]) || !isdigit((unsigned char)header[10]) ||
-        !isdigit((unsigned char)header[11]) || (header[12] && header[12] != ' ')) return false;
-    for (size_t i = 12; i < statusLineLength; i++)
-        if (((unsigned char)header[i] < 0x20 && header[i] != '\t') || (unsigned char)header[i] == 0x7f) return false;
-    status = (unsigned)(header[9] - '0') * 100 + (unsigned)(header[10] - '0') * 10 + (unsigned)(header[11] - '0');
-    if (status < 100 || status > 599) return false;
-
-    bool haveLength = false;
-    bool haveLocation = false;
-    bool haveTransferEncoding = false;
-    uint32_t bodyLength = 0;
-    bool ended = false;
-    for (unsigned count = 0; count < HEADER_LINE_LIMIT; count++) {
-        size_t lineLength = 0;
-        if (!readHeaderLine(header, sizeof(header), lineLength)) return false;
-        headerBytes += lineLength + 2;
-        if (headerBytes > HEADER_BYTES_LIMIT) return false;
-        if (!lineLength) { ended = true; break; }
-
-        // Reject malformed field syntax and control characters before interpreting values.
-        char* colon = strchr(header, ':');
-        if (!colon || colon == header) return false;
-        for (char* p = header; p < colon; p++) {
-            unsigned char c = (unsigned char)*p;
-            if (!(isalnum(c) || strchr("!#$%&'*+-.^_`|~", c))) return false;
-        }
-        for (const unsigned char* p = (const unsigned char*)colon + 1; *p; p++)
-            if ((*p < 0x20 && *p != '\t') || *p == 0x7f) return false;
-
-        const char* value = colon + 1;
-        while (*value == ' ' || *value == '\t') value++;
-        char* valueEnd = header + lineLength;
-        while (valueEnd > value && (valueEnd[-1] == ' ' || valueEnd[-1] == '\t')) *--valueEnd = 0;
-
-        size_t nameLength = colon - header;
-        if (nameLength == 14 && !strncasecmp(header, "Content-Length", nameLength)) {
-            if (haveLength || !*value) return false;
-            uint32_t parsed = 0;
-            for (const char* p = value; *p; p++) {
-                if (!isdigit((unsigned char)*p)) return false;
-                unsigned digit = (unsigned)(*p - '0');
-                if (parsed > (UINT32_MAX - digit) / 10) return false;
-                parsed = parsed * 10 + digit;
-            }
-            // Redirect/error bodies are never consumed by this API, so their
-            // advertised length is unrelated to the caller's asset-size cap.
-            if (status == 200 && parsed > maxContentLength) return false;
-            bodyLength = parsed;
-            haveLength = true;
-        } else if (nameLength == 17 && !strncasecmp(header, "Transfer-Encoding", nameLength)) {
-            // This primitive intentionally supports only a fixed Content-Length body.
-            // Error/redirect bodies are not consumed, so their framing is irrelevant.
-            if (haveTransferEncoding || status == 200) return false;
-            haveTransferEncoding = true;
-        } else if (nameLength == 8 && !strncasecmp(header, "Location", nameLength)) {
-            if (haveLocation || strlen(value) >= sizeof(info->location)) return false;
-            memcpy(info->location, value, strlen(value) + 1);
-            haveLocation = true;
-        }
-    }
-    if (!ended || (status == 200 && (!haveLength || haveTransferEncoding))) return false;
-    if (!haveLength) bodyLength = 0;
-
-    info->status = (uint16_t)status;
-    info->contentLength = bodyLength;
-    // Redirect and error bodies are not firmware bytes. Return their bounded
-    // metadata so the caller can validate Location/status, then close this
-    // connection without accidentally feeding that body to the OTA writer.
-    if (status != 200) return true;
-
-    unsigned char body[ CELL_TLS_HTTP_BODY_CHUNK_BYTES ];
-    uint32_t remaining = bodyLength;
-    while (remaining) {
-        size_t wanted = remaining < sizeof(body) ? remaining : sizeof(body);
-        int received = read(body, wanted);
-        if (received <= 0 || (size_t)received > wanted) return false;
-        if (!writer(context, body, (size_t)received)) return false;
-        remaining -= (uint32_t)received;
-    }
-
-    return true;
+    return freematics::cell::streamHttpResponse(
+        reader, this, maxContentLength, writer, context, info);
 }

@@ -95,6 +95,11 @@ the telemetry token, and other build outputs may contain private build data.
 The packager is the release boundary; `.gitignore` alone does not protect
 manual uploads.
 
+On POSIX build hosts, PlatformIO's per-environment build directory is set to
+mode `0700` before compilation, and the final firmware binary/ELF/map are set
+to `0600`. This protects local build products as well as preventing accidental
+sharing of token-bearing production images.
+
 ## Local checks
 
 ```sh
@@ -119,6 +124,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_stage_policy.cpp -o /tmp/test_ota_stage_policy
 /tmp/test_ota_stage_policy
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_cell_http_stream.cpp -o /tmp/test_cell_http_stream
+/tmp/test_cell_http_stream
 python3 -m unittest discover -s tools -p 'test_package_ota_release.py' -v
 ```
 

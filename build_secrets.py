@@ -9,6 +9,26 @@ from production_config import load_build_environment, validate_production_config
 
 Import("env")
 
+build_dir = Path(env.subst("$BUILD_DIR"))
+build_dir.mkdir(parents=True, exist_ok=True)
+if os.name == "posix":
+    # Production images contain the collector token; even tokenless builds can
+    # contain private APN settings. Keep all per-environment build products
+    # inaccessible to other local users from the start of compilation.
+    os.chmod(build_dir, 0o700)
+
+
+def protect_build_outputs(source, target, build_env):
+    output_dir = Path(build_env.subst("$BUILD_DIR"))
+    if os.name == "posix":
+        os.chmod(output_dir, 0o700)
+        for name in ("firmware.bin", "firmware.elf", "firmware.map"):
+            output = output_dir / name
+            if output.exists():
+                os.chmod(output, 0o600)
+
+
+env.AddPostAction("$BUILD_DIR/firmware.bin", protect_build_outputs)
 
 settings = load_build_environment(Path(env.subst("$PROJECT_DIR")) / ".env", os.environ)
 token = settings.get("FREEMATICS_TOKEN", "")
