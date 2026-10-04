@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from urllib.parse import quote_from_bytes
@@ -27,6 +28,7 @@ TOKEN_PRESENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_EMBEDDED=1"
 TOKEN_ABSENT_MARKER = "FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
 OTA_RELEASE_MARKER = "FREEMATICS_OTA_RELEASE_BUILD=1"
 RELEASE_VERSION_MARKER = b"FREEMATICS_RELEASE_VERSION="
+SOURCE_COMMIT_MARKER = b"FREEMATICS_SOURCE_COMMIT="
 _PRIVATE_VALUE_KEY_RE = re.compile(
     r"(?:TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|"
     r"USERNAME|USER|LOGIN|SIM[_-]?CARD[_-]?PIN|SIM[_-]?PIN|PIN|SSID|"
@@ -150,6 +152,52 @@ def firmware_release_version(image_path: Path) -> str | None:
     return None
 
 
+def firmware_source_commit(image_path: Path) -> str | None:
+    """Return the unique full Git commit marker embedded in an OTA image."""
+    with image_path.open("rb") as image:
+        overlap = b""
+        matches: set[bytes] = set()
+        while chunk := image.read(1024 * 1024):
+            searchable = overlap + chunk
+            search_from = 0
+            while True:
+                marker_at = searchable.find(SOURCE_COMMIT_MARKER, search_from)
+                if marker_at < 0:
+                    break
+                start = marker_at + len(SOURCE_COMMIT_MARKER)
+                end = searchable.find(b"\0", start)
+                if end >= 0:
+                    matches.add(searchable[start:end])
+                search_from = marker_at + 1
+            overlap = searchable[-(len(SOURCE_COMMIT_MARKER) + 41):]
+    if len(matches) != 1:
+        return None
+    commit = next(iter(matches))
+    return commit.decode("ascii") if re.fullmatch(rb"[0-9a-f]{40}", commit) else None
+
+
+def _current_source_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=REPOSITORY_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+        )
+    except OSError:
+        result = None
+    if (
+        result is None
+        or result.returncode
+        or not re.fullmatch(r"[0-9a-f]{40}", result.stdout.strip())
+    ):
+        raise ValueError("cannot verify the current Git source commit; refusing OTA packaging")
+    return result.stdout.strip()
+
+
 def _verify_tokenless_build(image_path: Path) -> str:
     embedded = _image_contains_value(image_path, TOKEN_PRESENT_MARKER)
     absent = _image_contains_value(image_path, TOKEN_ABSENT_MARKER)
@@ -157,6 +205,11 @@ def _verify_tokenless_build(image_path: Path) -> str:
     version = firmware_release_version(image_path)
     if embedded or not absent or not ota_release or version is None:
         raise ValueError("firmware is missing a required token-free OTA/version marker; refusing to package")
+    image_commit = firmware_source_commit(image_path)
+    if image_commit is None:
+        raise ValueError("firmware is missing a valid source commit marker; refusing to package")
+    if image_commit != _current_source_commit():
+        raise ValueError("firmware source commit does not match the current checkout; refusing to package")
     return version
 
 

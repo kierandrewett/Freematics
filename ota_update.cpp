@@ -37,6 +37,11 @@ const unsigned kHttpTimeoutMs = 15UL * 60UL * 1000UL;
 // staged. Keep a matching marker in every image so OTA can reject downgrades.
 const char kFirmwareReleaseMarker[] =
     "FREEMATICS_RELEASE_VERSION=" FREEMATICS_RELEASE;
+#ifndef FREEMATICS_SOURCE_COMMIT
+#define FREEMATICS_SOURCE_COMMIT "unknown"
+#endif
+const char kFirmwareSourceCommitMarker[] __attribute__((used)) =
+    "FREEMATICS_SOURCE_COMMIT=" FREEMATICS_SOURCE_COMMIT;
 
 struct PendingOtaIdentity {
   uint32_t magic;

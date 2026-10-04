@@ -14,8 +14,10 @@ from package_ota_release import (
     ASSET_NAME,
     SIDECAR_NAME,
     _credential_signatures,
+    _current_source_commit,
     _image_contains_c_string,
     _image_contains_value,
+    firmware_source_commit,
     package_release,
     verify_release_directory,
 )
@@ -27,15 +29,28 @@ class PackageOtaReleaseTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.firmware = self.root / ".pio" / "build" / "esp32dev" / "firmware.bin"
         self.firmware.parent.mkdir(parents=True)
-        self.payload = (b"FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
-                        b"FREEMATICS_OTA_RELEASE_BUILD=1" +
-                        b"FREEMATICS_RELEASE_VERSION=\x00" +
-                        b"FREEMATICS_RELEASE_VERSION=1.0.1\x00" +
-                        bytes(range(256)) * 17 + b"firmware\x00payload")
+        self.source_commit = _current_source_commit()
+        self.payload = (
+            b"FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
+            b"FREEMATICS_OTA_RELEASE_BUILD=1"
+            b"FREEMATICS_RELEASE_VERSION=\x00"
+            b"FREEMATICS_RELEASE_VERSION=1.0.1\x00"
+            b"FREEMATICS_SOURCE_COMMIT="
+            + self.source_commit.encode("ascii")
+            + b"\x00"
+            + bytes(range(256)) * 17
+            + b"firmware\x00payload"
+        )
         self.firmware.write_bytes(self.payload)
         self.output = self.root / "release-assets"
+        self.source_commit_check = patch(
+            "package_ota_release._current_source_commit",
+            return_value=self.source_commit,
+        )
+        self.source_commit_check.start()
 
     def tearDown(self):
+        self.source_commit_check.stop()
         self.temp.cleanup()
 
     def test_names_contents_and_sha256sum_format(self):
@@ -53,6 +68,34 @@ class PackageOtaReleaseTests(unittest.TestCase):
     def test_verifier_accepts_exact_unmodified_asset_pair(self):
         image, sidecar = package_release(self.firmware, self.output)
         self.assertEqual(verify_release_directory(self.output), (image, sidecar))
+
+    def test_source_commit_marker_matches_current_checkout(self):
+        self.assertEqual(firmware_source_commit(self.firmware), self.source_commit)
+
+    def test_source_commit_marker_can_cross_binary_scan_chunks(self):
+        with patch("package_ota_release.IMAGE_SCAN_CHUNK_BYTES", 17):
+            self.assertEqual(firmware_source_commit(self.firmware), self.source_commit)
+
+    def test_refuses_image_from_a_different_source_commit(self):
+        foreign_commit = (
+            ("0" if self.source_commit[0] != "0" else "1") + self.source_commit[1:]
+        )
+        self.firmware.write_bytes(
+            self.payload.replace(
+                self.source_commit.encode("ascii"), foreign_commit.encode("ascii")
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "does not match the current checkout"):
+            package_release(self.firmware, self.output)
+
+    def test_refuses_image_without_source_commit_marker(self):
+        self.firmware.write_bytes(
+            self.payload.replace(
+                b"FREEMATICS_SOURCE_COMMIT=", b"FREEMATICS_OLD_COMMIT="
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "valid source commit marker"):
+            package_release(self.firmware, self.output)
 
     def test_image_scanner_handles_chunk_boundaries_and_one_byte_values(self):
         self.firmware.write_bytes(b"abcz1234")

@@ -120,3 +120,26 @@ if not build_id:
 if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", build_id):
     raise RuntimeError("FREEMATICS_BUILD_ID must be 1-32 characters: A-Z, a-z, 0-9, dot, underscore, or hyphen")
 env.Append(CPPDEFINES=[("FREEMATICS_BUILD_ID", env.StringifyMacro(build_id))])
+
+try:
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "--verify", "HEAD"],
+        cwd=project_dir,
+        text=True,
+        stderr=subprocess.DEVNULL,
+    ).strip().lower()
+    dirty_source = bool(subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=project_dir,
+        text=True,
+        stderr=subprocess.DEVNULL,
+    ))
+except (OSError, subprocess.CalledProcessError):
+    source_commit = "unknown"
+    dirty_source = True
+
+if ota_release and not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+    raise RuntimeError("OTA release build requires a full Git source commit")
+if ota_release and dirty_source:
+    raise RuntimeError("OTA release build requires a clean source tree")
+env.Append(CPPDEFINES=[("FREEMATICS_SOURCE_COMMIT", env.StringifyMacro(source_commit))])

@@ -118,6 +118,10 @@ requires both that marker and the token-absent marker, scans for configured
 tokens, passwords, usernames, SIM PINs, Wi-Fi SSIDs, APNs, server hosts, and
 exact server-path strings from the ignored `.env`, process environment, and
 matching `local_config.h` settings, and repeats the checks on the staged copy.
+OTA builds also require a clean Git worktree and embed the full source commit
+in the firmware. Packaging and the final publisher check that this marker
+matches the current checkout, preventing a stale or dirty-build image from
+being published under a newer source revision.
 For configured values at least eight bytes long, it also checks common Base64,
 hex, URL-escaped, and UTF-16 encodings. Credential literals in
 `local_config.h` are joined across adjacent C strings and comments are

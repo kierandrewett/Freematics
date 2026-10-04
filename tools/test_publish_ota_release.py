@@ -7,7 +7,12 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from package_ota_release import ASSET_NAME, SIDECAR_NAME, package_release
+from package_ota_release import (
+    ASSET_NAME,
+    SIDECAR_NAME,
+    _current_source_commit,
+    package_release,
+)
 from publish_ota_release import publish
 
 
@@ -16,16 +21,24 @@ class PublishOtaReleaseTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.firmware = self.root / "firmware.bin"
+        source_commit = _current_source_commit().encode("ascii")
         self.firmware.write_bytes(
             b"FREEMATICS_CREDENTIAL_TOKEN_ABSENT=1"
             b"FREEMATICS_OTA_RELEASE_BUILD=1"
             b"FREEMATICS_RELEASE_VERSION=1.0.1\0"
+            b"FREEMATICS_SOURCE_COMMIT=" + source_commit + b"\0"
             b"token-free-fixture-image"
         )
+        self.source_commit_check = patch(
+            "package_ota_release._current_source_commit",
+            return_value=source_commit.decode("ascii"),
+        )
+        self.source_commit_check.start()
         self.asset_dir = self.root / "assets"
         package_release(self.firmware, self.asset_dir)
 
     def tearDown(self):
+        self.source_commit_check.stop()
         self.temp.cleanup()
 
     @patch("publish_ota_release.subprocess.run")
