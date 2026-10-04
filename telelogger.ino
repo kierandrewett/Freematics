@@ -31,6 +31,7 @@
 #include "sensorwaveform.h"
 #include "telequeue.h"
 #include "usbtelemetry.h"
+#include "usbtelemetry_checksum.h"
 #include "mode09_identity.h"
 #include "ota_update.h"
 #include "ota_parked_policy.h"
@@ -1983,7 +1984,7 @@ void collectSample()
       // HardwareSerial serializes each buffer write against debug output, so a
       // single call prevents other task logs from corrupting a partial frame.
       const int headerLength = snprintf(record->payload, sizeof(record->payload),
-        "@FT1,%llu,%lu,%u,%llu,%lu,%s|",
+        "@FT2,%llu,%lu,%u,%llu,%lu,%s|",
         (unsigned long long)record->bootId,
         (unsigned long)record->captureMs,
         (unsigned int)record->utcValid,
@@ -1999,9 +2000,21 @@ void collectSample()
         wireFrame.tailer();
         const size_t frameLength = wireFrame.length();
         const size_t totalLength = (size_t)headerLength + frameLength;
-        if (!wireFrame.overflowed() && totalLength + 1 < sizeof(record->payload)) {
-          record->payload[totalLength] = '\n';
-          (void)usbTelemetryQueue.publish(record, (uint16_t)(totalLength + 1));
+        char* checksumMarker = strrchr(record->payload, '*');
+        if (!wireFrame.overflowed() && checksumMarker &&
+            checksumMarker < record->payload + totalLength) {
+          const size_t checksumOffset = (size_t)(checksumMarker - record->payload);
+          const uint32_t checksum = usbTelemetryCrc32(
+            (const uint8_t*)record->payload, checksumOffset);
+          const size_t remaining = sizeof(record->payload) - checksumOffset;
+          const int trailerLength = snprintf(checksumMarker, remaining, "*%08lX\n",
+                                               (unsigned long)checksum);
+          if (trailerLength == 10 && (size_t)trailerLength < remaining) {
+            const size_t completeLength = checksumOffset + (size_t)trailerLength;
+            (void)usbTelemetryQueue.publish(record, (uint16_t)completeLength);
+          } else {
+            usbTelemetryQueue.publish(record, 0);
+          }
         } else {
           usbTelemetryQueue.publish(record, 0);
         }

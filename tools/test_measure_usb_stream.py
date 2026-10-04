@@ -1,6 +1,7 @@
 """Regression tests for refusing the wrong USB serial adapter."""
 
 from pathlib import Path
+import zlib
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from measure_usb_stream import (
     capture_is_newer,
     identify_freematics_usb,
+    parse_frame,
     observe_successful_pid_updates,
     sd_core_error_categories,
     summarize,
@@ -53,6 +55,18 @@ class FreematicsUsbIdentityTests(unittest.TestCase):
 
 
 class FreematicsObdTimingTests(unittest.TestCase):
+    def test_parse_frame_accepts_ft1_and_metadata_checked_ft2(self):
+        payload = "ABCDEF#0:1250,10C:540,40C:5,24:1300"
+        ft1_checksum = sum(payload.encode("ascii")) & 0xFF
+        ft1 = f"@FT1,42,1250,0,0,0,0C|{payload}*{ft1_checksum:02X}".encode()
+        self.assertEqual(parse_frame(ft1)["capture"], 1250)
+
+        ft2_body = f"@FT2,42,1250,1,1790966401250,2,0C;vin=W0L0SDL68D4050841|{payload}"
+        ft2 = f"{ft2_body}*{zlib.crc32(ft2_body.encode()):08X}".encode()
+        self.assertEqual(parse_frame(ft2)["dropped"], 2)
+        corrupted = ft2.replace(b"1250", b"2250", 1)
+        self.assertIsNone(parse_frame(corrupted))
+
     def test_age_reset_detects_success_even_when_pid_value_is_unchanged(self):
         previous_age = {}
         self.assertEqual(

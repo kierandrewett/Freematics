@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure live Freematics @FT1 timing without sending serial commands.
+"""Measure live Freematics @FT1/@FT2 timing without sending serial commands.
 
 Opens the port read-only, configures 460800 8N1 through termios, and never
 changes DTR/RTS. Output contains aggregate counters and ages only (no VIN,
@@ -16,6 +16,7 @@ import select
 import statistics
 import termios
 import time
+import zlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -63,15 +64,23 @@ def identify_freematics_usb(
 
 
 def parse_frame(line: bytes) -> dict | None:
-    """Return non-identifying timing/field metadata for a valid FT1 record."""
+    """Return non-identifying timing/field metadata for a valid FT1/FT2 record."""
     try:
         text = line.decode("ascii").rstrip("\r")
         header, payload = text.split("|", 1)
-        meta = header.removeprefix("@FT1,").split(",", 5)
+        version2 = header.startswith("@FT2,")
+        if not version2 and not header.startswith("@FT1,"):
+            return None
+        meta = header.removeprefix("@FT2," if version2 else "@FT1,").split(",", 5)
         boot, capture, utc_valid, utc_ms, dropped, _supported = meta
         device_payload, checksum_text = payload.rsplit("*", 1)
-        checksum = int(checksum_text, 16)
-        if sum(device_payload.encode("ascii")) & 0xFF != checksum:
+        if version2:
+            if len(checksum_text) != 8:
+                return None
+            checksum = int(checksum_text, 16)
+            if zlib.crc32(text.rsplit("*", 1)[0].encode("ascii")) != checksum:
+                return None
+        elif sum(device_payload.encode("ascii")) & 0xFF != int(checksum_text, 16):
             return None
         if not device_payload.split("#", 1)[0]:
             return None
@@ -225,7 +234,7 @@ def summarize(
                 line, _, remainder = buffer.partition(b"\n")
                 buffer[:] = remainder
                 line = line.rstrip(b"\r")
-                if not line.startswith(b"@FT1,"):
+                if not (line.startswith(b"@FT1,") or line.startswith(b"@FT2,")):
                     if line:
                         totals["non_telemetry_lines"] += 1
                         lowered = line.lower()
@@ -246,7 +255,7 @@ def summarize(
                     continue
                 frame = parse_frame(line)
                 if frame is None:
-                    totals["corrupt_ft1_records"] += 1
+                    totals["corrupt_telemetry_records"] += 1
                     continue
                 totals["valid_frames"] += 1
                 totals["valid_frame_bytes"] += len(line) + 1
@@ -352,15 +361,15 @@ def summarize(
             "measurement_seconds": round(elapsed, 2),
             "baud": baud_rate,
             "valid_frames": totals["valid_frames"],
-            "corrupt_ft1_records": totals["corrupt_ft1_records"],
+            "corrupt_telemetry_records": totals["corrupt_telemetry_records"],
             "replayed_capture_frames": totals["replayed_capture_frames"],
             "non_telemetry_lines": totals["non_telemetry_lines"],
             "device_restarts": totals["device_restarts"],
             "received_bytes": totals["bytes_received"],
-            "valid_ft1_frame_bytes": totals["valid_frame_bytes"],
-            "largest_valid_ft1_frame_bytes": totals["largest_frame_bytes"],
+            "valid_telemetry_frame_bytes": totals["valid_frame_bytes"],
+            "largest_valid_telemetry_frame_bytes": totals["largest_frame_bytes"],
             "estimated_uart_wire_utilization_pct": round(link_busy_pct, 2),
-            "estimated_ft1_only_uart_wire_utilization_pct": round(ft_link_busy_pct, 2),
+            "estimated_telemetry_only_uart_wire_utilization_pct": round(ft_link_busy_pct, 2),
             "capture_interval_ms": {
                 "median": percentile(capture_deltas, 0.50),
                 "p95": percentile(capture_deltas, 0.95),

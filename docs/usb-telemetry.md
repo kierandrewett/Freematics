@@ -1,15 +1,28 @@
-# Freematics USB telemetry (FT1)
+# Freematics USB telemetry (FT2, with FT1 compatibility)
 
 The Model B USB serial connection is a passive telemetry feed, not an ELM327
 command channel. It emits one newline-terminated record for each sampler
-frame. Debug text may appear between records; consumers should accept only
-validated `@FT1,` records and tolerate partial serial reads.
+frame. Current firmware emits FT2. Debug text may appear between records;
+consumers should accept only validated `@FT2,` records and tolerate partial
+serial reads. The dashboard also accepts legacy FT1 records from older firmware.
 
 The envelope is:
 
 ```text
-@FT1,<boot-id>,<capture-ms>,<utc-valid>,<capture-utc-ms>,<dropped>,<metadata>|<serialized-sample>\n
+@FT2,<boot-id>,<capture-ms>,<utc-valid>,<capture-utc-ms>,<dropped>,<metadata>|<serialized-sample>*<crc32>\n
 ```
+
+The FT2 CRC is CRC-32/ISO-HDLC (the standard `zlib.crc32` result), encoded as
+eight uppercase hexadecimal digits. It covers the exact ASCII bytes starting
+with `@FT2` and ending at the final serialized-sample byte, immediately before
+`*`. Capture clocks, UTC validity, USB drop count, support map, VIN,
+identity/raw metadata, device ID, measurement values, ages, and waveforms are
+therefore integrity-checked together. A CRC failure invalidates the entire FT2
+record; consumers must not fall back to parsing its contents as FT1.
+
+Legacy FT1 keeps its original one- or two-digit additive checksum over only
+the serialized sample. FT1 metadata therefore has weaker integrity and is
+accepted for compatibility with older firmware.
 
 `capture-ms` is the device monotonic capture time. `capture-utc-ms` is Unix
 epoch milliseconds and is valid only when `utc-valid` is `1`; otherwise it is
@@ -22,14 +35,14 @@ USB output uses a fixed two-record queue and a separate, low-priority writer
 task. Every new sample replaces an older snapshot that is waiting to be sent;
 the record already being written is left unchanged. The drop counter increases
 for replaced or rejected records, avoiding a stale FIFO backlog while the host
-is slow. UART startup reserves a TX ring larger than the maximum FT1 line so
+is slow. UART startup reserves a TX ring larger than the maximum FT2 line so
 the writer enqueues each record as a bounded operation instead of holding the
 shared UART lock for the line's full wire time. If that ring cannot initialize,
-FT1 streaming stays disabled while acquisition, journalling, and uploads
+FT2 streaming stays disabled while acquisition, journalling, and uploads
 continue.
-The FT1 writer is separate from the sampler, SD-journal, and upload paths; the
+The FT2 writer is separate from the sampler, SD-journal, and upload paths; the
 queue handoff itself never waits for the laptop. Debug messages may also be
-written by firmware tasks. This bounds the FT1 firmware handoff; the USB
+written by firmware tasks. This bounds the FT2 firmware handoff; the USB
 adapter/host may still lose bytes, so readers must validate checksums and
 recover at the next complete record. The fixed-cadence sampling functions do
 not write to `Serial`; missed frames, queue drops, and power phase remain
@@ -59,7 +72,7 @@ width and reject duplicate, malformed, or unknown raw entries. The metadata
 buffer is sized to 2 KiB and tested with all catalogue entries at the maximum
 four-byte width. A firmware-side metadata/line overflow rejects that USB
 record and increments the dropped record count; it does not emit a truncated
-list as valid data. Debug log lines may still occur between FT1 records and
+list as valid data. Debug log lines may still occur between telemetry records and
 are not part of this metadata format.
 
 The firmware reads Mode 09 PID 00 once after OBD initialization and queries
@@ -77,8 +90,9 @@ g++ -std=c++11 -Wall -Wextra -Werror tools/test_mode09_identity.cpp -o /tmp/test
 /tmp/test_mode09_identity
 ```
 
-The checksum on the serialized sample must be validated independently of the
-FT1 envelope metadata. A syntactically valid USB record is not proof that the
+For FT2, validate the whole-record CRC before using any metadata or sample
+field. For FT1, validate the legacy sample checksum and treat envelope metadata
+as unauthenticated. In either version, a valid checksum is not proof that the
 ECU supports a PID or that an ECU transaction succeeded unless the associated
 support/status fields say so.
 
