@@ -98,9 +98,16 @@ static constexpr byte OBD_FAST_PIDS_PER_CYCLE = 3;
 static constexpr byte OBD_AUX_PIDS_PER_CYCLE = 1;
 static constexpr uint32_t OBD_PID_READ_WARN_MS = 200;
 static constexpr uint32_t DTC_SCAN_INTERVAL_MS = 120000;
+static constexpr unsigned USB_TELEMETRY_RAW_PID_COUNT = 1;
 
 struct PID_POLLING_INFO { byte pid; byte priority; float value; uint32_t ts; };
 struct DTC_POLLING_INFO { uint32_t lastScan; };
+struct UsbRawMode01Value { byte pid; byte length; byte bytes[4]; byte valid; };
+struct OBDSnapshot { UsbRawMode01Value rawMode01[USB_TELEMETRY_RAW_PID_COUNT]; } obdSnapshot = {};
+static const byte usbRawMode01Pids[USB_TELEMETRY_RAW_PID_COUNT] = {PID_RPM};
+int sensorMux = 0;
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
 struct State { void clear(unsigned) { clears++; } unsigned clears = 0; } state;
 static constexpr unsigned STATE_OBD_READY = 2;
 struct SerialStub {
@@ -145,11 +152,17 @@ struct FakeOBD {
   std::vector<byte> order;
   std::vector<std::pair<byte, uint32_t>> completions;
   bool isValidPID(byte pid) const { return supported[pid]; }
-  bool readPID(byte pid, float& value) {
+  bool readPID(byte pid, float& value, byte* raw, size_t capacity, byte& rawLength) {
     reads[pid]++; order.push_back(pid); tick += responseMs[pid];
     if (fail[pid]) return false;
     completions.push_back({pid, tick});
-    value = fixed[pid] ? fixedValue[pid] : float(reads[pid]); return true;
+    value = fixed[pid] ? fixedValue[pid] : float(reads[pid]);
+    if (raw && capacity >= 2) {
+      raw[0] = pid;
+      raw[1] = byte(reads[pid]);
+      rawLength = 2;
+    }
+    return true;
   }
 } obd;
 
@@ -171,6 +184,7 @@ void serviceFreezeFrameRead(uint32_t timeout) { freezeFrameRequests++; freezeFra
 static void seed(uint32_t start = 0) {
   tick = start; started = start; obd = FakeOBD{}; std::memset(obdData, 0, sizeof(obdData));
   std::memset(dtcData, 0, sizeof(dtcData)); std::memset(obdPollState, 0, sizeof(obdPollState));
+  std::memset(&obdSnapshot, 0, sizeof(obdSnapshot));
   for (unsigned i = 0; i < PID_COUNT; i++) {
     const byte pid = i < 11 ? byte(i + 1) : byte(i + 3);
     obdData[i] = {pid, byte(i < 6 ? 1 : 2), 0, 0};
@@ -233,6 +247,10 @@ int main() {
   std::cout << "maximum_gap_ms=" << maximumGap << " rpm_gap_ms=" << maxCompletionGap(PID_RPM) << " speed_gap_ms=" << maxCompletionGap(PID_SPEED) << "\n";
   std::cout << "completion_gaps_33=" << fullFresh << " core_250=" << coreFresh << " reads=" << obd.order.size() << "\n";
   pass &= fullFresh && coreFresh;
+  const bool rawReadShared = obdSnapshot.rawMode01[0].valid &&
+      obdSnapshot.rawMode01[0].pid == PID_RPM && obdSnapshot.rawMode01[0].length == 2;
+  std::cout << "raw_response_shared_with_live_read=" << rawReadShared << "\n";
+  pass &= rawReadShared;
 
   seed();
   for (unsigned i = 0; i < PID_COUNT; i++) obd.responseMs[obdData[i].pid] = 5 + (i % 13);

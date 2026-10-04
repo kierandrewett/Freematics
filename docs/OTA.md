@@ -63,9 +63,13 @@ actually journaled and accepted current-boot sample.
 The modem task owns the shared coprocessor link during the request. A motion
 wake cancels modem/TLS command waits between 50 ms UART reads and prevents a
 staged image from rebooting. Forced modem power-down still uses the driver's
-2.51-second power pulse. This is a bounded source-level path, but wake-to-sample
-recovery has not yet been measured on hardware; verify it under stalled-modem
-conditions before enabling production OTA.
+2.51-second power pulse. The standby owner waits at most 30 seconds for the
+modem task to acknowledge cancellation; if ownership is still stuck, it resets
+the ESP instead of releasing the shared link concurrently. Boot-slot selection
+is not part of the transfer task, so that reset leaves the current image
+selected. This is a bounded source-level path, but wake-to-sample recovery has
+not yet been measured on hardware; verify it under stalled-modem conditions
+before enabling production OTA.
 
 ## Release assets
 

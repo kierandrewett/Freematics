@@ -34,6 +34,7 @@
 #include "usbtelemetry_checksum.h"
 #include "mode09_identity.h"
 #include "ota_update.h"
+#include "ota_cancel_policy.h"
 #include "ota_parked_policy.h"
 #include "ota_first_upload_policy.h"
 #include "sdaccess.h"
@@ -3093,6 +3094,22 @@ OTAParkedPolicy::Denial finalOtaParkedCheck()
   return otaParkedPolicy.observe(millis(), observation);
 }
 
+void waitForOtaCancellationCompletionOrRestart()
+{
+  const uint32_t cancellationStartedAt = millis();
+  while (!otaAttemptDone) {
+    if (freematics::ota::cancellationWaitExpired(cancellationStartedAt, millis())) {
+      // Never release the shared modem link while its owner may still be
+      // inside a stalled cellular command. A cold restart abandons the
+      // unactivated candidate and returns to normal boot/recording policy.
+      Serial.println("[OTA] Cancellation did not return modem ownership in 30 s; restarting safely");
+      ESP.restart();
+      for (;;) delay(1000);
+    }
+    delay(25);
+  }
+}
+
 /*******************************************************************************
   Implementing stand-by mode
 *******************************************************************************/
@@ -3264,7 +3281,7 @@ void standby()
       // Let the modem owner observe cancellation and close its socket before
       // releasing the shared coprocessor link to OBD acquisition.
       otaCancelRequested = true;
-      while (!otaAttemptDone) delay(25);
+      waitForOtaCancellationCompletionOrRestart();
       if (otaAttemptResult == OTA_ATTEMPT_READY) discardVerifiedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
       if (storageUnsafe) Serial.println("[OTA] Attempt cancelled: durable storage became unhealthy");
