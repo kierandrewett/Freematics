@@ -255,14 +255,15 @@ WITH ordered AS (
     FROM sample
     WHERE capture_session_id IS NOT NULL AND capture_sequence IS NOT NULL
 ), deltas AS (
-    SELECT *, ((capture_sequence - previous_capture_sequence - 1 + 4294967296)
-               % 4294967296) AS missing_sequences
+    SELECT *, ((capture_sequence - previous_capture_sequence + 4294967296)
+               % 4294967296) AS sequence_delta
     FROM ordered
 )
 SELECT device_id, trip_id, capture_session_id, previous_capture_sequence,
-       capture_sequence, missing_sequences
+       capture_sequence, sequence_delta - 1 AS missing_sequences
 FROM deltas
-WHERE previous_capture_sequence IS NOT NULL AND missing_sequences > 0;
+WHERE previous_capture_sequence IS NOT NULL
+  AND sequence_delta > 1 AND sequence_delta < 2147483648;
 DROP VIEW IF EXISTS trip_metric_summary;
 
 CREATE VIEW IF NOT EXISTS trip_metric_summary AS

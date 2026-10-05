@@ -294,6 +294,19 @@ class DashboardViewsTest(unittest.TestCase):
                     "VALUES ('CAR', 'TRIP', ?, ?, ?, 1, 'partial', 'SESSION', ?)",
                     (sequence, timeline, timeline, (1, 2, 3, 4, 5, 7)[sequence]),
                 )
+            # Sequence IDs are uint32 values. A missing ID at rollover must
+            # create a chart break, while a contiguous sequence must not.
+            for sequence, timeline, session_id, capture_sequence in (
+                (6, 2800, "WRAP", 4_294_967_294),
+                (7, 3050, "WRAP", 0),
+                (8, 3300, "CONTIG", 100),
+                (9, 3550, "CONTIG", 101),
+            ):
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, archive_mtime_ms, timestamp_quality, capture_session_id, capture_sequence) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 1, 'partial', ?, ?)",
+                    (sequence, timeline, timeline, session_id, capture_sequence),
+                )
             dashboard = build_dashboard("trips")
             for panel_id in (21, 22, 23, 24, 25, 26, 27, 38, 39, 50):
                 with self.subTest(panel_id=panel_id):
@@ -313,6 +326,10 @@ class DashboardViewsTest(unittest.TestCase):
                     sequence_gap_rows = [row for row in rows if row[0] == 2.425]
                     self.assertEqual(len(sequence_gap_rows), 1)
                     self.assertTrue(all(value is None for value in sequence_gap_rows[0][1:]))
+                    wrap_gap_rows = [row for row in rows if row[0] == 2.925]
+                    self.assertEqual(len(wrap_gap_rows), 1)
+                    self.assertTrue(all(value is None for value in wrap_gap_rows[0][1:]))
+                    self.assertFalse(any(row[0] == 3.425 for row in rows))
                     self.assertFalse(any(row[0] == 1.4 for row in rows))
                     self.assertIn(1.0, [row[0] for row in rows])
                     self.assertIn(1.25, [row[0] for row in rows])
@@ -320,6 +337,13 @@ class DashboardViewsTest(unittest.TestCase):
                     self.assertIn(1.8, [row[0] for row in rows])
                     self.assertIn(2.3, [row[0] for row in rows])
                     self.assertIn(2.55, [row[0] for row in rows])
+                    self.assertIn(2.925, [row[0] for row in rows])
+
+            sequence_gaps = connection.execute(
+                "SELECT previous_capture_sequence, capture_sequence, missing_sequences "
+                "FROM sample_capture_sequence_gaps"
+            ).fetchall()
+            self.assertCountEqual(sequence_gaps, [(4_294_967_294, 0, 1), (5, 7, 1)])
         finally:
             connection.close()
 
