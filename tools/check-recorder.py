@@ -49,9 +49,12 @@ assert "batch is unjournaled and will be discarded" in queue_source
 replay_batch_start = firmware.index("uint8_t buildReplayBatch(")
 replay_batch_end = firmware.index("\nuint8_t replayBatchLimit", replay_batch_start)
 replay_batch = firmware[replay_batch_start:replay_batch_end]
-append_success = replay_batch.index("if (!store.appendRaw(frame, length))")
+append_branch = replay_batch.index("appended = envelopeLength > 0")
+append_failure = replay_batch.index("if (!appended)")
 current_boot_marker = replay_batch.index("if (currentBootRecord) *includesCurrentBootRecord = true;")
-assert append_success < current_boot_marker, "current-boot OTA marker must follow successful SD append"
+assert append_branch < append_failure < current_boot_marker, (
+    "current-boot OTA marker must follow the complete SD append and failure check"
+)
 
 recorder = extract(firmware, "void recordSamples(void*)")
 sd_recorder = recorder.split("#else", 1)[0]
