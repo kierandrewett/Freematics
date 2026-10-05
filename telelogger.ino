@@ -1729,6 +1729,8 @@ bool waitMotion(long timeout, float threshold = MOTION_THRESHOLD, uint8_t confir
         motionSensorReady = mems->read(acc);
         xSemaphoreGive(memsMutex);
       }
+      if (motionSensorReady && !OTASensorActivityLatch::finiteMotionVector(acc))
+        motionSensorReady = false;
       if (motionSensorReady) {
       if (accCount == 10) {
         accCount = 0;

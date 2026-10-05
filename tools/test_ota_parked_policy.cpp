@@ -2,6 +2,7 @@
 #include "../ota_sensor_activity.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 
 typedef OTAParkedPolicy Policy;
@@ -328,6 +329,12 @@ static void testWrapSafeContinuousQuietTimer() {
 static void testHighRateEventsSurviveBlockingWorkUntilConsumed() {
   OTASensorActivityLatch latch;
   assert(latch.consume() == OTASensorActivityLatch::kNoEvent);
+  const float validMotion[3] = {0.01f, -0.02f, 0.03f};
+  const float invalidMotion[3] = {0.01f, NAN, 0.03f};
+  const float infiniteMotion[3] = {0.01f, INFINITY, 0.03f};
+  assert(OTASensorActivityLatch::finiteMotionVector(validMotion));
+  assert(!OTASensorActivityLatch::finiteMotionVector(invalidMotion));
+  assert(!OTASensorActivityLatch::finiteMotionVector(infiniteMotion));
 
   // Simulate the acquisition task observing an excursion while the standby
   // owner is blocked hashing an image. The event must still deny activation.
@@ -346,6 +353,10 @@ static void testHighRateEventsSurviveBlockingWorkUntilConsumed() {
   latch.observeSupply(11.9f);
   assert(latch.consume() == (OTASensorActivityLatch::kMotion | OTASensorActivityLatch::kSupply));
   latch.observeMotionRead(false);
+  assert(latch.consume() == OTASensorActivityLatch::kMotionSensorUnavailable);
+  latch.observeMotion(NAN, 0.08f);
+  assert(latch.consume() == OTASensorActivityLatch::kMotionSensorUnavailable);
+  latch.observeMotion(0.01f, INFINITY);
   assert(latch.consume() == OTASensorActivityLatch::kMotionSensorUnavailable);
 }
 
