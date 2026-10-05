@@ -2482,7 +2482,11 @@ void acquireMEMS(void*)
   uint8_t failures = 0;
   uint32_t lastRetry = 0;
   for (;;) {
-    if (!state.check(STATE_WORKING)) { delay(50); continue; }
+    const bool working = state.check(STATE_WORKING);
+    const bool parkedOtaWatch = otaParkedWatchActive && state.check(STATE_STANDBY);
+    const uint32_t samplingInterval =
+        OTASensorActivityLatch::samplingIntervalMs(working, parkedOtaWatch);
+    if (!working && !parkedOtaWatch) { delay(samplingInterval); continue; }
 #if ENABLE_OBD
     // The Model B voltage input is a passive ADC read. Sampling it here at
     // 50 Hz catches the cranking dip whether or not the motion sensor works.
@@ -2500,7 +2504,7 @@ void acquireMEMS(void*)
       portEXIT_CRITICAL(&sensorMux);
     }
 #endif
-    if (!mems) { delay(20); continue; }
+    if (!mems) { delay(samplingInterval); continue; }
     if (!state.check(STATE_MEMS_READY)) {
       if (!lastRetry || millis() - lastRetry >= 5000UL) {
         lastRetry = millis();
@@ -2518,7 +2522,7 @@ void acquireMEMS(void*)
           Serial.println("[MEMS] Sensor recovered; acquisition resumed");
         }
       }
-      if (!state.check(STATE_MEMS_READY)) { delay(20); continue; }
+      if (!state.check(STATE_MEMS_READY)) { delay(samplingInterval); continue; }
     }
     xSemaphoreTake(memsMutex, portMAX_DELAY);
     MEMSSnapshot snapshot = {};
@@ -2562,7 +2566,7 @@ void acquireMEMS(void*)
       Serial.println("[MEMS] Repeated read failures; retrying sensor initialisation");
       }
     }
-    delay(20);
+    delay(samplingInterval);
   }
 #endif
   vTaskDelete(nullptr);

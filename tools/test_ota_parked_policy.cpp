@@ -261,6 +261,12 @@ static void testMotionDuringDownloadInvalidatesTheQuietProof() {
   assert(!policy.quietPeriodComplete(checkAt + 500));
 }
 
+static void testMotionWorkerRemainsScheduledDuringParkedOtaChecks() {
+  assert(OTASensorActivityLatch::samplingIntervalMs(true, false) == 20);
+  assert(OTASensorActivityLatch::samplingIntervalMs(false, true) == 250);
+  assert(OTASensorActivityLatch::samplingIntervalMs(false, false) == 50);
+}
+
 static void testSupplyEvidenceMustRemainContinuousAndResting() {
   const uint32_t start = 42000;
   const uint32_t checkAt = start + Policy::kRequiredQuietMs;
@@ -370,6 +376,7 @@ int main() {
   testParkedSignalsAreRecheckedAfterDownload();
   testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();
+  testMotionWorkerRemainsScheduledDuringParkedOtaChecks();
   testSupplyEvidenceMustRemainContinuousAndResting();
   testSupplyObservationGapInvalidatesParkedProof();
   testWrapSafeContinuousQuietTimer();

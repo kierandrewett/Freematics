@@ -23,6 +23,8 @@ using byte=uint8_t;
 #define ENABLE_ORIENTATION 0
 #define STATE_WORKING 1
 #define STATE_MEMS_READY 2
+#define STATE_STANDBY 4
+#define STANDBY_MOTION_THRESHOLD 0.08f
 #define PHASE_TRIP 1
 #define PHASE_WRAP_UP 2
 #define BUFFER_LENGTH 3072
@@ -41,6 +43,7 @@ using byte=uint8_t;
 struct ELEMENT_HEAD { uint16_t pid; uint8_t type; uint8_t count; };
 struct CBuffer {
     uint16_t offset=0;
+    uint8_t waveformVoltageSamples=0,waveformMotionSamples=0;
     unsigned voltageRecords=0,motionTimestamps=0,rawVectors=0,gyroVectors=0;
     uint32_t firstVoltageTimestamp=0,firstMotionTimestamp=0;
     float firstRawAcceleration=0;
@@ -63,6 +66,7 @@ struct CBuffer {
     }
 };
 #include "sensorwaveform.h"
+#include "ota_sensor_activity.h"
 struct Stop {};
 uint32_t tick=1000;
 uint32_t stopAt=9000;
@@ -76,6 +80,8 @@ volatile uint8_t powerPhase=PHASE_TRIP;
 float accBias[3]={.25f};
 struct {unsigned flags=3;bool check(unsigned mask){return (flags&mask)==mask;}
 void set(unsigned mask){flags|=mask;}void clear(unsigned mask){flags&=~mask;}} state;
+volatile bool otaParkedWatchActive=false;
+OTASensorActivityLatch otaSensorActivityLatch;
 struct {template<class T>void println(T){} } Serial;
 struct { uint8_t devType=13; } sys;
 float readVehicleVoltage() { return 14.2f; }
@@ -123,6 +129,21 @@ int main(){
     assert(rawVectors==motionTimestamps && gyroVectors==motionTimestamps);
     assert(firstRawAcceleration==.5f);
     assert(!sensorWaveforms.hasPending());
+
+    // OTA standby must keep this worker sampling while the standby owner may
+    // be blocked in SD/OBD/hash operations; the activity latch protects that gap.
+    powerPhase=PHASE_WRAP_UP;
+    state.clear(STATE_WORKING);
+    state.set(STATE_STANDBY);
+    otaParkedWatchActive=true;
+    const unsigned readsBeforeParkedWatch=sensor.reads;
+    stopAt=tick+300;
+    try{acquireMEMS(nullptr);}catch(const Stop&){}
+    assert(sensor.reads>readsBeforeParkedWatch);
+    assert((otaSensorActivityLatch.consume() & OTASensorActivityLatch::kMotion)!=0);
+    otaParkedWatchActive=false;
+    state.clear(STATE_STANDBY);
+    state.set(STATE_WORKING);
 
     // Wrap-up preserves fresh watcher snapshots but must not add waveform
     // readings which would otherwise be attached to a later trip on resume.

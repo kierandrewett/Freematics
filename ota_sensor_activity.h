@@ -9,6 +9,13 @@
 // access (the firmware uses otaActivityMux; host tests are single-threaded).
 class OTASensorActivityLatch {
  public:
+  // Keep the MEMS worker alive while parked OTA checks block on SD, OBD, or
+  // hashing. Working acquisition remains high-rate; idle non-OTA standby sleeps.
+  static uint32_t samplingIntervalMs(bool working, bool parkedOtaWatch) {
+    if (working) return 20;
+    return parkedOtaWatch ? 250 : 50;
+  }
+
   enum Event : uint8_t {
     kNoEvent = 0,
     kMotion = 1,
