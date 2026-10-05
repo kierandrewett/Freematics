@@ -39,6 +39,7 @@
 #include "ota_sensor_activity.h"
 #include "ota_first_upload_policy.h"
 #include "sdaccess.h"
+#include "sd_retry_policy.h"
 #include "recording_checkpoint_policy.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
@@ -2294,18 +2295,19 @@ void recordSamples(void*)
     if (!state.check(STATE_WORKING)) { delay(50); continue; }
 #if STORAGE == STORAGE_SD
   static uint32_t lastRecovery = 0;
+  static SDRecoveryBackoff sdRecoveryBackoff;
   if (durableQueue.damaged() &&
       (!lastRecovery || millis() - lastRecovery >= 5000UL)) {
     lastRecovery = millis();
     durableQueue.recover();
   }
-  // Retry a failed boot mount at a bounded rate. An already-open CSV logger
-  // must not be reopened just because the journal was unavailable.
-  static uint32_t lastSDRetry = 0;
+  // Retry failed boot mounts and runtime SD faults with bounded backoff. An
+  // already-open CSV logger must not be reopened just because the journal is
+  // unavailable.
   static bool journalPauseReported = false;
-  if ((!state.check(STATE_STORAGE_READY) || (fileid && !logger.healthy()) || !durableQueue.healthy()) &&
-      (lastSDRetry == 0 || millis() - lastSDRetry >= 30000UL)) {
-    lastSDRetry = millis();
+  const bool storageUnavailable = !state.check(STATE_STORAGE_READY) ||
+      (fileid && !logger.healthy()) || !durableQueue.healthy();
+  if (storageUnavailable && sdRecoveryBackoff.due(millis())) {
     Serial.println("[STORAGE] Retrying SD storage");
     SDGuard recovery;
     if (recovery) {
@@ -2323,7 +2325,11 @@ void recordSamples(void*)
         if (fileid) state.set(STATE_STORAGE_READY);
       }
     }
+    const bool recovered = state.check(STATE_STORAGE_READY) && logger.healthy() &&
+        durableQueue.healthy();
+    sdRecoveryBackoff.recordAttempt(millis(), recovered);
   }
+  if (!storageUnavailable && durableQueue.healthy()) sdRecoveryBackoff.reset();
   if (durableQueue.healthy()) journalPauseReported = false;
 #endif
 

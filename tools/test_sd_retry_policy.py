@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Test the recorder's bounded SD recovery backoff and firmware integration."""
+
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SdRetryPolicyTests(unittest.TestCase):
+    def test_backoff_limits_retries_and_resets_after_recovery(self) -> None:
+        source = ROOT / "tools/test_sd_retry_policy.cpp"
+        with tempfile.TemporaryDirectory(prefix="freematics-sd-retry-") as directory:
+            binary = Path(directory) / "test_sd_retry_policy"
+            subprocess.run(
+                ["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                check=True,
+            )
+            subprocess.run([str(binary)], check=True)
+
+    def test_recorder_uses_backoff_only_while_storage_is_unhealthy(self) -> None:
+        firmware = (ROOT / "telelogger.ino").read_text(encoding="utf-8")
+        start = firmware.index("void recordSamples(void*)")
+        end = firmware.index("\nvoid ", start + len("void recordSamples(void*)"))
+        recorder = firmware[start:end]
+        self.assertIn("static SDRecoveryBackoff sdRecoveryBackoff", recorder)
+        self.assertIn("storageUnavailable && sdRecoveryBackoff.due", recorder)
+        self.assertIn("sdRecoveryBackoff.recordAttempt", recorder)
+        self.assertIn(
+            "if (!storageUnavailable && durableQueue.healthy()) sdRecoveryBackoff.reset();",
+            recorder,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
