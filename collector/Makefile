@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-O3 -Wunused-result
-HEADERS = httpint.h httpapi.h capture_inbox.h
+HEADERS = httpint.h httpapi.h capture_inbox.h measurement_age.h
 TARGET = teleserver
 OBJS += teleserver.o capture_inbox.o udpserver.o teletrips.o telebroker.o data2kml.o processpil.o httpd/httppil.o httpd/httpd.o cJSON/cJSON.o cJSON/cJSON_Utils.o libb64/cdecode.o libb64/cencode.o jsonconfig.o
 
@@ -43,3 +43,8 @@ clean:
 	@rm -f $(TARGET) $(TARGET).exe
 	@rm -f *.o
 	@rm -rf Debug Release
+
+.PHONY: test-measurement-age
+test-measurement-age:
+	$(CC) -std=c11 -Wall -Wextra -Werror -pedantic measurement_age_test.c -o /tmp/freematics-measurement-age-test
+	/tmp/freematics-measurement-age-test

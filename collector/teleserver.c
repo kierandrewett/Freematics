@@ -45,6 +45,7 @@ int uncompress(unsigned char* dest, unsigned long* destLen, const unsigned char*
 #include "logdata.h"
 #include "processpil.h"
 #include "revision.h"
+#include "measurement_age.h"
 
 int uhPush(UrlHandlerParam* param);
 int uhPull(UrlHandlerParam* param);
@@ -317,6 +318,8 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_parked gauge\n"
 		"# HELP freematics_device_data_age_seconds Age of the newest telemetry packet.\n"
 		"# TYPE freematics_device_data_age_seconds gauge\n"
+		"# HELP freematics_device_battery_voltage_age_seconds Age of the latest device supply-voltage measurement, including device-clock elapsed time and collector receipt age.\n"
+		"# TYPE freematics_device_battery_voltage_age_seconds gauge\n"
 		"# HELP freematics_device_data_received_bytes_total Telemetry bytes accepted by the collector.\n"
 		"# TYPE freematics_device_data_received_bytes_total counter\n"
 		"# HELP freematics_device_queue_readings Filled telemetry readings waiting for upload.\n"
@@ -445,7 +448,14 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_last_latency_milliseconds", pld->devid, pld->tripid, pld->data + PID_OBD_LAST_LATENCY, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_state", pld->devid, pld->tripid, pld->data + PID_OBD_STATE, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_core_failures", pld->devid, pld->tripid, pld->data + PID_OBD_FAST_FAILURES, 1);
-		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, pld->data + PID_BATTERY_VOLTAGE, 0.01);
+		const PID_DATA* batteryVoltage = pld->data + PID_BATTERY_VOLTAGE;
+		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, batteryVoltage, 0.01);
+		if (batteryVoltage->ts) {
+			unsigned int voltageAge = telemetryMeasurementAgeMs(pld->deviceTick, batteryVoltage->ts, age);
+			l = appendFormat(buf, bs, l,
+				"freematics_device_battery_voltage_age_seconds{device_id=\"%s\",trip_id=\"%s\"} %.3f\n",
+				pld->devid, pld->tripid, voltageAge / 1000.0);
+		}
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_latitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LATITUDE, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_longitude_degrees", pld->devid, pld->tripid, pld->data + PID_GPS_LONGITUDE, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_gps_altitude_metres", pld->devid, pld->tripid, pld->data + PID_GPS_ALTITUDE, 1);
@@ -1097,16 +1107,12 @@ static unsigned int tickAgeMs(uint64_t now, uint64_t then)
 
 static unsigned int addAgeMs(unsigned int first, unsigned int second)
 {
-	return first > UINT_MAX - second ? UINT_MAX : first + second;
+	return telemetryAddAgeMs(first, second);
 }
 
 static unsigned int elapsedDeviceMs(uint32_t current, uint32_t then)
 {
-	if (!then) return 0;
-	uint32_t elapsed = current - then;
-	// A device timestamp is valid for less than half the uint32_t range. This
-	// accepts a normal rollover but rejects an older sample from another trip.
-	return (int32_t)elapsed >= 0 ? elapsed : 0;
+	return telemetryElapsedDeviceMs(current, then);
 }
 
 static unsigned int obdValueAgeMs(const CHANNEL_DATA* pld, uint16_t pid, unsigned int receiptAge)
