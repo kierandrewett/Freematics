@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+import re
 import unittest
 
 
@@ -22,6 +23,26 @@ def read_partitions() -> dict[str, tuple[str, str, int, int]]:
 
 
 class OtaPartitionTableTests(unittest.TestCase):
+    def test_platformio_upload_and_ota_targets_use_the_16mb_partition_layout(self):
+        platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
+        production_match = re.search(
+            r"^\[env:esp32dev\]\s*$([\s\S]*?)(?=^\[|\Z)",
+            platformio,
+            re.MULTILINE,
+        )
+        ota_match = re.search(
+            r"^\[env:esp32dev-ota-production\]\s*$([\s\S]*?)(?=^\[|\Z)",
+            platformio,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(production_match)
+        self.assertIsNotNone(ota_match)
+        production = production_match.group(1)
+        ota_production = ota_match.group(1)
+        self.assertRegex(production, r"(?m)^board_upload\.flash_size\s*=\s*16MB\s*$")
+        self.assertRegex(production, r"(?m)^board_build\.partitions\s*=\s*default_16MB\.csv\s*$")
+        self.assertRegex(ota_production, r"(?m)^extends\s*=\s*env:esp32dev\s*$")
+
     def test_declares_two_aligned_non_overlapping_ota_slots(self):
         partitions = read_partitions()
         app0 = partitions["app0"]
