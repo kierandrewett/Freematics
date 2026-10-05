@@ -16,6 +16,16 @@ CaptureInboxResult captureInboxStore(const char* root, const char* device_id,
     return CAPTURE_INBOX_ERROR;
 }
 
+CaptureInboxResult captureInboxReceiptEnsure(const char* root, const char* device_id,
+                                             uint64_t session, uint32_t sequence,
+                                             int64_t now_seconds,
+                                             CaptureInboxReceipt* receipt_out)
+{
+    (void)root; (void)device_id; (void)session; (void)sequence;
+    (void)now_seconds; (void)receipt_out;
+    return CAPTURE_INBOX_ERROR;
+}
+
 #else
 
 #include <ctype.h>
@@ -37,6 +47,11 @@ CaptureInboxResult captureInboxStore(const char* root, const char* device_id,
 #define INBOX_DIR "capture-inbox"
 #define HEADER_LIMIT 160
 
+static int valid_device_id(const char* id);
+static int ensure_directory(const char* path);
+static int write_all(int fd, const void* data, size_t length);
+static int read_exact(int fd, void* data, size_t length);
+
 static uint32_t crc32_bytes(const unsigned char* data, size_t length)
 {
     uint32_t crc = UINT32_C(0xffffffff);
@@ -48,6 +63,163 @@ static uint32_t crc32_bytes(const unsigned char* data, size_t length)
             crc = (crc >> 1) ^ ((crc & 1U) ? UINT32_C(0xedb88320) : 0U);
     }
     return crc ^ UINT32_C(0xffffffff);
+}
+
+#define RECEIPT_MIN_EPOCH_MS UINT64_C(1704067200000)
+#define RECEIPT_MAX_EPOCH_MS UINT64_C(4102444800000)
+
+static int make_receipt(uint64_t session, uint32_t sequence, int64_t now_seconds,
+                        char* record, size_t capacity, CaptureInboxReceipt* receipt)
+{
+    char prefix[128];
+    uint64_t epoch_ms = 0;
+    int plausible = 0;
+    int prefix_length, record_length;
+    uint32_t crc;
+    if (now_seconds >= 0 && (uint64_t)now_seconds <= UINT64_MAX / 1000U) {
+        uint64_t candidate = (uint64_t)now_seconds * 1000U;
+        if (candidate >= RECEIPT_MIN_EPOCH_MS && candidate <= RECEIPT_MAX_EPOCH_MS) {
+            epoch_ms = candidate;
+            plausible = 1;
+        }
+    }
+    prefix_length = snprintf(prefix, sizeof(prefix), "FQR1,%016" PRIx64 ",%" PRIu32 ",%" PRIu64 ",%d",
+                             session, sequence, epoch_ms, plausible);
+    if (prefix_length < 0 || (size_t)prefix_length >= sizeof(prefix)) return 0;
+    crc = crc32_bytes((const unsigned char*)prefix, (size_t)prefix_length);
+    record_length = snprintf(record, capacity, "%s,%08" PRIx32 "\n", prefix, crc);
+    if (record_length < 0 || (size_t)record_length >= capacity) return 0;
+    if (receipt) {
+        receipt->epoch_ms = epoch_ms;
+        receipt->clock_plausible = plausible;
+    }
+    return record_length;
+}
+
+static int read_receipt(const char* path, uint64_t session, uint32_t sequence,
+                        CaptureInboxReceipt* receipt)
+{
+    char record[160], expected[160];
+    ssize_t count;
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    struct stat st;
+    int64_t epoch_seconds;
+    int consumed = 0;
+    uint64_t stored_session, epoch_ms;
+    uint32_t stored_sequence, stored_crc;
+    int plausible;
+    int expected_length;
+    if (fd < 0) return -1;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size >= (off_t)sizeof(record)) { close(fd); return -1; }
+    count = st.st_size;
+    if (!read_exact(fd, record, (size_t)count) || fsync(fd) != 0) { close(fd); return -1; }
+    {
+        unsigned char extra;
+        ssize_t n;
+        do { n = read(fd, &extra, 1); } while (n < 0 && errno == EINTR);
+        if (n != 0) { close(fd); return -1; }
+    }
+    if (close(fd) != 0) return -1;
+    record[count] = '\0';
+    if (sscanf(record, "FQR1,%16" SCNx64 ",%" SCNu32 ",%" SCNu64 ",%d,%8" SCNx32 "\n%n",
+               &stored_session, &stored_sequence, &epoch_ms, &plausible, &stored_crc, &consumed) != 5 ||
+        consumed != count || (size_t)count != strlen(record) ||
+        stored_session != session || stored_sequence != sequence ||
+        (plausible != 0 && plausible != 1)) return -1;
+    if ((!plausible && epoch_ms != 0) ||
+        (plausible && (epoch_ms < RECEIPT_MIN_EPOCH_MS || epoch_ms > RECEIPT_MAX_EPOCH_MS || epoch_ms % 1000U)))
+        return -1;
+    epoch_seconds = plausible ? (int64_t)(epoch_ms / 1000U) : 0;
+    expected_length = make_receipt(session, sequence, epoch_seconds, expected, sizeof(expected), NULL);
+    if (expected_length != count || memcmp(expected, record, (size_t)count) != 0) return -1;
+    if (receipt) {
+        receipt->epoch_ms = epoch_ms;
+        receipt->clock_plausible = plausible;
+    }
+    return 1;
+}
+
+CaptureInboxResult captureInboxReceiptEnsure(const char* root, const char* device_id,
+                                             uint64_t session, uint32_t sequence,
+                                             int64_t now_seconds,
+                                             CaptureInboxReceipt* receipt_out)
+{
+    char inbox[PATH_MAX], device[PATH_MAX], final_path[PATH_MAX];
+    char temp_path[PATH_MAX], record[160], filename[96], capture_filename[96];
+    CaptureInboxReceipt candidate;
+    int dirfd = -1, fd = -1, record_length, existing;
+    struct stat st;
+    if (receipt_out) memset(receipt_out, 0, sizeof(*receipt_out));
+    if (!root || !*root || !valid_device_id(device_id) || !session || strlen(root) >= PATH_MAX - 160)
+        return CAPTURE_INBOX_INVALID;
+    if (snprintf(inbox, sizeof(inbox), "%s/%s", root, INBOX_DIR) >= (int)sizeof(inbox) ||
+        snprintf(device, sizeof(device), "%s/%s", inbox, device_id) >= (int)sizeof(device) ||
+        snprintf(capture_filename, sizeof(capture_filename), "%016" PRIx64 "-%" PRIu32 ".fqi", session, sequence) >= (int)sizeof(capture_filename) ||
+        snprintf(filename, sizeof(filename), "%016" PRIx64 "-%" PRIu32 ".receipt", session, sequence) >= (int)sizeof(filename) ||
+        snprintf(final_path, sizeof(final_path), "%s/%s", device, filename) >= (int)sizeof(final_path))
+        return CAPTURE_INBOX_INVALID;
+    if (!ensure_directory(root) || !ensure_directory(inbox) || !ensure_directory(device)) return CAPTURE_INBOX_ERROR;
+    dirfd = open(device, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) return CAPTURE_INBOX_ERROR;
+    if (fstatat(dirfd, capture_filename, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+        int saved_errno = errno;
+        close(dirfd);
+        return saved_errno == ENOENT ? CAPTURE_INBOX_INVALID : CAPTURE_INBOX_ERROR;
+    }
+    if (!S_ISREG(st.st_mode)) { close(dirfd); return CAPTURE_INBOX_INVALID; }
+    if (fstatat(dirfd, filename, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+        if (!S_ISREG(st.st_mode)) { close(dirfd); return CAPTURE_INBOX_ERROR; }
+        existing = read_receipt(final_path, session, sequence, receipt_out);
+        if (existing != 1) { close(dirfd); return CAPTURE_INBOX_ERROR; }
+    } else if (errno != ENOENT) {
+        close(dirfd);
+        return CAPTURE_INBOX_ERROR;
+    } else {
+        existing = 0;
+    }
+    if (existing == 1) {
+        int sync_ok = fsync(dirfd) == 0;
+        int close_ok = close(dirfd) == 0;
+        return sync_ok && close_ok ? CAPTURE_INBOX_DUPLICATE : CAPTURE_INBOX_ERROR;
+    }
+    record_length = make_receipt(session, sequence, now_seconds, record, sizeof(record), &candidate);
+    if (!record_length) { close(dirfd); return CAPTURE_INBOX_ERROR; }
+    if (snprintf(temp_path, sizeof(temp_path), "%s/.receipt-%ld-XXXXXX", device, (long)getpid()) >= (int)sizeof(temp_path)) {
+        close(dirfd); return CAPTURE_INBOX_ERROR;
+    }
+    fd = mkstemp(temp_path);
+    if (fd < 0) { close(dirfd); return CAPTURE_INBOX_ERROR; }
+    (void)fchmod(fd, 0600);
+    if (!write_all(fd, record, (size_t)record_length) || fsync(fd) != 0) {
+        close(fd); unlink(temp_path); close(dirfd); return CAPTURE_INBOX_ERROR;
+    }
+    if (close(fd) != 0) { unlink(temp_path); close(dirfd); return CAPTURE_INBOX_ERROR; }
+    fd = -1;
+    if (link(temp_path, final_path) != 0) {
+        int saved_errno = errno;
+        unlink(temp_path);
+        if (saved_errno == EEXIST) {
+            existing = read_receipt(final_path, session, sequence, receipt_out);
+            if (existing == 1) {
+                int sync_ok = fsync(dirfd) == 0;
+                int close_ok = close(dirfd) == 0;
+                if (sync_ok && close_ok) return CAPTURE_INBOX_DUPLICATE;
+                return CAPTURE_INBOX_ERROR;
+            }
+        }
+        close(dirfd);
+        return CAPTURE_INBOX_ERROR;
+    }
+    if (fsync(dirfd) != 0) { unlink(temp_path); close(dirfd); return CAPTURE_INBOX_ERROR; }
+    if (unlink(temp_path) != 0) { close(dirfd); return CAPTURE_INBOX_ERROR; }
+    {
+        int sync_ok = fsync(dirfd) == 0;
+        int close_ok = close(dirfd) == 0;
+        if (!sync_ok || !close_ok) return CAPTURE_INBOX_ERROR;
+    }
+    if (receipt_out) *receipt_out = candidate;
+    return CAPTURE_INBOX_STORED;
 }
 
 static int valid_device_id(const char* id)

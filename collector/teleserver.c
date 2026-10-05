@@ -1924,6 +1924,17 @@ int uhPostV2(UrlHandlerParam* param)
 			free(sample);
 			return captureV2Error(param, 503, "Capture inbox durability failure");
 		}
+		/* Receipt time is sampled only after the capture and its directory are
+		 * durable. The sidecar is immutable across retries and must be durable
+		 * before this request can acknowledge the sequence. */
+		time_t receipt_time = time(NULL);
+		CaptureInboxReceipt receipt;
+		CaptureInboxResult receipt_saved = captureInboxReceiptEnsure(dataDir, pld->devid,
+			(uint64_t)session, (uint32_t)sequence, (int64_t)receipt_time, &receipt);
+		if (receipt_saved != CAPTURE_INBOX_STORED && receipt_saved != CAPTURE_INBOX_DUPLICATE) {
+			free(sample);
+			return captureV2Error(param, 503, "Capture receipt durability failure");
+		}
 		/* A new durable record updates the live snapshot without writing a
 		 * second copy to the legacy text archive. Duplicates never roll the live
 		 * snapshot backwards after a lost response/retry. */

@@ -20,7 +20,7 @@ from package_ota_release import (  # noqa: E402
 
 class DashboardViewsTest(unittest.TestCase):
     def test_dashboard_schema_change_increments_grafana_version(self) -> None:
-        self.assertEqual(build_dashboard("combined")["version"], 15)
+        self.assertEqual(build_dashboard("combined")["version"], 16)
 
     def test_generated_and_checked_in_exports_exclude_configured_private_values(self) -> None:
         if not (REPOSITORY / "local_config.h").exists():
@@ -360,6 +360,12 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("sample_over_target_intervals AS g", capture_evidence["targets"][0]["queryText"])
         self.assertIn('"Missing IDs before sample"', capture_evidence["targets"][0]["queryText"])
         self.assertIn("sample_capture_sequence_gaps AS cg", capture_evidence["targets"][0]["queryText"])
+        evidence_sql = capture_evidence["targets"][0]["queryText"]
+        self.assertIn('"Collector receipt timestamp (approx host epoch ms)"', evidence_sql)
+        self.assertIn('"Estimated capture-to-receipt offset (ms)"', evidence_sql)
+        self.assertIn("s.capture_utc_ms IS NOT NULL AND s.collector_received_ms IS NOT NULL", evidence_sql)
+        self.assertIn("approximate host wall-clock offset", capture_evidence["description"])
+        self.assertIn("not independently verified", capture_evidence["description"])
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
@@ -367,6 +373,45 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(route["targets"][0]["queryType"], "time series")
         self.assertEqual(route["targets"][0]["timeColumns"], ["time"])
         self.assertNotIn("transformations", route)
+
+    def test_capture_evidence_keeps_receipt_separate_and_only_estimates_delay_with_capture_utc(self) -> None:
+        dashboard = build_dashboard("trips")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 42)
+        sql = panel["targets"][0]["queryText"]
+        for variable, value in {
+            "${device:sqlstring}": "'CAR'",
+            "${trip:sqlstring}": "'TRIP'",
+            "CAST($__from AS INTEGER)": "0",
+            "CAST($__to AS INTEGER)": "9999999999999",
+        }.items():
+            sql = sql.replace(variable, value)
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((REPOSITORY / "collector" / "history_schema.sql").read_text())
+            connection.execute(
+                "INSERT INTO trip(device_id,trip_id,archive_path,collector_login_ms,timestamp_quality,archive_mtime_ms,updated_at_ms) "
+                "VALUES('CAR','TRIP','/CAR/TRIP',0,'partial',0,0)"
+            )
+            connection.executemany(
+                "INSERT INTO sample(device_id,trip_id,sequence,device_monotonic_ms,capture_utc_ms,timeline_ms,"
+                "collector_received_ms,archive_mtime_ms,timestamp_quality) VALUES('CAR','TRIP',?,?,?,?,?,0,'device_clock')",
+                ((0, 1000, 1_800_000_000_000, 1000, 1_800_000_000_250),
+                 (1, 2000, None, 2000, 1_800_000_001_000)),
+            )
+            rows = connection.execute(sql).fetchall()
+            names = [column[0] for column in connection.execute(sql).description]
+            captured = dict(zip(names, rows[0]))
+            unknown = dict(zip(names, rows[1]))
+            self.assertEqual(captured["Capture UTC (ms)"], 1_800_000_000_000)
+            self.assertEqual(captured["Collector receipt timestamp (approx host epoch ms)"],
+                             1_800_000_000_250)
+            self.assertEqual(captured["Estimated capture-to-receipt offset (ms)"], 250)
+            self.assertEqual(unknown["Capture UTC (ms)"], None)
+            self.assertEqual(unknown["Collector receipt timestamp (approx host epoch ms)"],
+                             1_800_000_001_000)
+            self.assertEqual(unknown["Estimated capture-to-receipt offset (ms)"], None)
+        finally:
+            connection.close()
 
         expected_layout = {
             38: {"h": 5, "w": 24, "x": 0, "y": 58},

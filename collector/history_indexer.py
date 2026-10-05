@@ -54,6 +54,12 @@ DTC_SYSTEMS = ("powertrain", "chassis", "body", "network")
 INBOX_PATH_RE = re.compile(r"^([0-9A-Fa-f]{16})-([0-9]+)\.fqi$")
 INBOX_DEVICE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 UINT32_MODULUS = 1 << 32
+RECEIPT_MIN_EPOCH_MS = 1_704_067_200_000
+RECEIPT_MAX_EPOCH_MS = 4_102_444_800_000
+RECEIPT_SIDECAR_VERSION = "1"
+RECEIPT_RE = re.compile(
+    rb"FQR1,([0-9A-Fa-f]{16}),([0-9]{1,10}),([0-9]{1,13}),([01]),([0-9A-Fa-f]{8})\n"
+)
 _REQUIRED_COLUMNS = {
     "trip": {
         "device_id", "trip_id", "archive_path", "collector_login_ms",
@@ -92,7 +98,7 @@ class InboxRecord:
     frame: Frame
     payload_sha256: str
     source_path: str
-    collector_received_ms: int
+    collector_received_ms: int | None
     source_state: tuple[int, int, int, int, int]
 
 
@@ -140,11 +146,46 @@ def parse_inbox_record(path: Path) -> InboxRecord | None:
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     stat = path.stat()
+    receipt_ms = parse_receipt_sidecar(path, session_id, sequence)
     return InboxRecord(
         device_id, session_id.lower(), sequence, frames[0],
-        hashlib.sha256(payload).hexdigest(), str(path), int(stat.st_mtime * 1_000),
+        hashlib.sha256(payload).hexdigest(), str(path), receipt_ms,
         (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns),
     )
+
+
+def parse_receipt_sidecar(path: Path, session_id: str, sequence: int) -> int | None:
+    """Return an approximate host receipt epoch only for an exact valid FQR1 sidecar."""
+    sidecar = path.with_name(f"{session_id}-{sequence}.receipt")
+    try:
+        if sidecar.stat().st_size > 58:
+            return None
+        raw = sidecar.read_bytes()
+    except OSError:
+        return None
+    match = RECEIPT_RE.fullmatch(raw)
+    if match is None:
+        return None
+    raw_session, raw_sequence, raw_epoch, raw_plausible, raw_crc = match.groups()
+    if raw_session.lower().decode("ascii") != session_id.lower():
+        return None
+    if int(raw_sequence) != sequence or str(int(raw_sequence)) != raw_sequence.decode("ascii"):
+        return None
+    prefix, _separator, _checksum = raw[:-1].rpartition(b",")
+    if int(raw_crc, 16) != zlib.crc32(prefix):
+        return None
+    epoch_ms = int(raw_epoch)
+    if str(epoch_ms).encode("ascii") != raw_epoch:
+        return None
+    plausible = raw_plausible == b"1"
+    if plausible:
+        if (not RECEIPT_MIN_EPOCH_MS <= epoch_ms <= RECEIPT_MAX_EPOCH_MS
+                or epoch_ms % 1_000 != 0):
+            return None
+        return epoch_ms
+    if epoch_ms != 0:
+        return None
+    return None
 
 
 def order_wrapped_sequences(records: list[InboxRecord]) -> list[InboxRecord]:
@@ -767,6 +808,13 @@ class HistoryIndexer:
         persisted_schema_version = (
             int(persisted_schema_version[0]) if persisted_schema_version else 0
         )
+        receipt_version_row = connection.execute(
+            "SELECT value FROM history_projection_meta "
+            "WHERE key='capture_inbox_receipt_sidecar_version_seen'"
+        ).fetchone()
+        receipt_version_seen = receipt_version_row[0] if receipt_version_row else None
+        if receipt_version_seen != RECEIPT_SIDECAR_VERSION:
+            force_rebuild = True
         if (self._capture_inbox_projection_generation is not None
                 and self._capture_inbox_projection_generation != projection_generation):
             force_rebuild = True
@@ -806,6 +854,7 @@ class HistoryIndexer:
             indexed_identities: dict[
                 tuple[str, int], tuple[str, tuple[int, int, int, int, int]]
             ] = {}
+            indexed_missing_receipts: set[tuple[str, int]] = set()
             if not force_rebuild:
                 indexed_identities = {
                     (session_id.lower(), capture_sequence): (
@@ -817,6 +866,18 @@ class HistoryIndexer:
                         "SELECT session_id,capture_sequence,source_path,source_dev,source_ino,"
                         "source_size,source_mtime_ns,source_ctime_ns "
                         "FROM capture_inbox_record WHERE device_id=?",
+                        (device_directory.name,),
+                    )
+                }
+                indexed_missing_receipts = {
+                    (session_id.lower(), capture_sequence)
+                    for session_id, capture_sequence in connection.execute(
+                        "SELECT c.session_id,c.capture_sequence "
+                        "FROM capture_inbox_record AS c "
+                        "JOIN sample AS s ON s.device_id=c.device_id "
+                        "AND s.capture_session_id=c.session_id "
+                        "AND s.capture_sequence=c.capture_sequence "
+                        "WHERE c.device_id=? AND s.collector_received_ms IS NULL",
                         (device_directory.name,),
                     )
                 }
@@ -850,8 +911,13 @@ class HistoryIndexer:
                 candidates.setdefault(session_key, []).append(path)
                 indexed_entry = indexed_identities.get((session_key[1], capture_sequence))
                 same_indexed_path = indexed_entry is not None and indexed_entry[0] == str(path)
+                receipt_ready = (
+                    (session_key[1], capture_sequence) in indexed_missing_receipts
+                    and path.with_name(f"{session_key[1]}-{capture_sequence}.receipt").is_file()
+                )
                 if (not force_rebuild and session_key not in changed_sessions
-                        and same_indexed_path):
+                        and same_indexed_path
+                        and not receipt_ready):
                     continue
                 try:
                     file_state_before_parse = self._capture_inbox_file_state(path)
@@ -918,7 +984,8 @@ class HistoryIndexer:
         # append-only sessions above bypass the rehydration query entirely.
         indexed_records: dict[tuple[str, str], list[InboxRecord]] = {}
         indexed_metadata: dict[
-            tuple[str, str, int], tuple[str, str, int, int, int, int, int, int, int, int]
+            tuple[str, str, int],
+            tuple[str, str, int, int | None, int, int, int, int, int, int],
         ] = {}
         indexed_fields: dict[tuple[str, str, int], list[tuple[str, str]]] = {}
         session_keys = [] if force_rebuild else [
@@ -952,7 +1019,7 @@ class HistoryIndexer:
                  tick, received, sample_sequence, pid, text_value, numeric_value) = row
                 key = (device_id, session_id, capture_sequence)
                 indexed_metadata.setdefault(
-                    key, (payload_hash, source_path, tick, received or 0, sample_sequence,
+                    key, (payload_hash, source_path, tick, received, sample_sequence,
                           source_dev, source_ino, source_size, source_mtime_ns, source_ctime_ns)
                 )
                 if pid is not None:
@@ -1034,6 +1101,11 @@ class HistoryIndexer:
                     # identity; neither version is projected.
                     by_sequence.pop(record.capture_sequence)
                     conflicts.add(record.capture_sequence)
+                elif (incumbent.collector_received_ms is None
+                      and record.collector_received_ms is not None):
+                    # A receipt sidecar can become durable just after the FQI
+                    # was first indexed. Preserve the upgraded receipt metadata.
+                    by_sequence[record.capture_sequence] = record
             records = order_wrapped_sequences(list(by_sequence.values()))
             digest = hashlib.sha256("\n".join(
                 f"{record.capture_sequence}:{record.payload_sha256}:{record.collector_received_ms}"
@@ -1102,6 +1174,11 @@ class HistoryIndexer:
             "WHERE key='capture_inbox_schema_version_seen'",
             (str(final_schema_version),),
         )
+        connection.execute(
+            "INSERT INTO history_projection_meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            ("capture_inbox_receipt_sidecar_version_seen", RECEIPT_SIDECAR_VERSION),
+        )
         connection.commit()
         self._capture_inbox_directory_states.update(scanned_directory_states)
         for directory_key in scanned_directory_states:
@@ -1143,7 +1220,6 @@ class HistoryIndexer:
             for index in range(1, len(records))
         ]
         frames = [record.frame for record in records]
-        trip_mtime = max(record.collector_received_ms for record in records)
         source_bytes = 0
         for record in records:
             try:

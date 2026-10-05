@@ -30,6 +30,14 @@ class HistoryIndexerTest(unittest.TestCase):
         path.write_bytes(header + payload)
         return path
 
+    @staticmethod
+    def write_receipt_sidecar(path: Path, session: str, sequence: int,
+                              epoch_ms: int, plausible: int = 1) -> Path:
+        prefix = f"FQR1,{session},{sequence},{epoch_ms},{plausible}".encode("ascii")
+        sidecar = path.with_name(f"{session}-{sequence}.receipt")
+        sidecar.write_bytes(prefix + f",{zlib.crc32(prefix):08x}\n".encode("ascii"))
+        return sidecar
+
     def test_capture_inbox_uses_capture_identity_clock_and_valid_device_utc(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"
@@ -48,7 +56,7 @@ class HistoryIndexerTest(unittest.TestCase):
                     "FROM sample"
                 ).fetchone()
                 self.assertEqual(sample, (1000, 1791030012345, 0, "device_clock",
-                                          int(inbox_file.stat().st_mtime * 1000),
+                                          None,
                                           "0123456789abcdef", 7))
                 fields = connection.execute(
                     "SELECT pid,numeric_value FROM sample_field ORDER BY ordinal"
@@ -76,7 +84,7 @@ class HistoryIndexerTest(unittest.TestCase):
                     "SELECT capture_utc_ms,timeline_ms,time_basis,collector_received_ms "
                     "FROM sample"
                 ).fetchone()
-                self.assertEqual(row, (None, 0, "device_monotonic", int(path.stat().st_mtime * 1000)))
+                self.assertEqual(row, (None, 0, "device_monotonic", None))
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 1)
 
     def test_corrupt_inbox_records_are_retained_but_not_projected(self) -> None:
@@ -277,10 +285,6 @@ class HistoryIndexerTest(unittest.TestCase):
                 root, "CAR", session, 41,
                 b"0:5000,90:1791030016,91:345,10C:710",
             )
-            received_ms = min(
-                int(path.stat().st_mtime * 1000)
-                for path in (root / "capture-inbox/CAR").glob("*.fqi")
-            )
             database = Path(directory) / "history.sqlite"
             HistoryIndexer(root, database, now_ms=lambda: 1_900_000_000_000).index_once()
             with closing(sqlite3.connect(database)) as connection:
@@ -291,7 +295,88 @@ class HistoryIndexerTest(unittest.TestCase):
                 self.assertEqual(connection.execute(
                     "SELECT MIN(timeline_ms),MAX(timeline_ms),MIN(collector_received_ms) "
                     "FROM sample"
-                ).fetchone(), (0, 4000, received_ms))
+                ).fetchone(), (0, 4000, None))
+
+    def test_receipt_sidecar_is_validated_and_duplicate_projection_is_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session, sequence, receipt_ms = "0123456789abcdef", 7, 1_800_000_123_000
+            path = self.write_inbox_record(
+                root, "CAR", session, sequence,
+                b"0:1000,90:1791030012,91:345,10C:800",
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_receipt_sidecar(path, session, sequence, receipt_ms)
+            # The sidecar may become visible just after the capture file. Its
+            # directory fingerprint must trigger re-projection without touching FQI.
+            self.assertEqual(indexer.index_once(), 1)
+            self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                capture_ms, received_ms, timeline_ms = connection.execute(
+                    "SELECT capture_utc_ms,collector_received_ms,timeline_ms FROM sample"
+                ).fetchone()
+            self.assertEqual(capture_ms, 1_791_030_012_345)
+            self.assertEqual(received_ms, receipt_ms)
+            self.assertEqual(timeline_ms, 0)
+
+    def test_missing_or_invalid_receipt_sidecars_remain_unknown(self) -> None:
+        cases = ("missing", "bad_crc", "out_of_range", "before_epoch_range", "subsecond",
+                 "flag_epoch_mismatch", "untrusted_clock", "bad_length")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "data"
+                session, sequence = "000000000000000a", 3
+                path = self.write_inbox_record(root, "CAR", session, sequence,
+                                               b"0:1000,90:1791030012,91:345")
+                sidecar = path.with_name(f"{session}-{sequence}.receipt")
+                if case != "missing":
+                    epoch, flag = 1_800_000_000_000, 1
+                    if case == "out_of_range":
+                        epoch = 4_102_444_800_001
+                    elif case == "before_epoch_range":
+                        epoch = 1_704_067_199_999
+                    elif case == "subsecond":
+                        epoch += 1
+                    elif case == "flag_epoch_mismatch":
+                        epoch, flag = 1, 0
+                    elif case == "untrusted_clock":
+                        epoch, flag = 0, 0
+                    self.write_receipt_sidecar(path, session, sequence, epoch, flag)
+                    if case == "bad_crc":
+                        raw = bytearray(sidecar.read_bytes())
+                        raw[-9] = ord("0") if raw[-9] != ord("0") else ord("1")
+                        sidecar.write_bytes(raw)
+                    elif case == "bad_length":
+                        sidecar.write_bytes(sidecar.read_bytes()[:-1])
+                record = parse_inbox_record(path)
+                self.assertIsNotNone(record)
+                self.assertIsNone(record.collector_received_ms)
+
+    def test_projection_upgrade_clears_legacy_fqi_mtime_receipt_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            path = self.write_inbox_record(root, "CAR", "000000000000000b", 4,
+                                           b"0:1000,90:1791030012,91:345")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "UPDATE sample SET collector_received_ms=?",
+                    (int(path.stat().st_mtime * 1000),),
+                )
+                connection.execute(
+                    "DELETE FROM history_projection_meta "
+                    "WHERE key='capture_inbox_receipt_sidecar_version_seen'"
+                )
+                connection.commit()
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertIsNone(connection.execute(
+                    "SELECT collector_received_ms FROM sample"
+                ).fetchone()[0])
 
     def test_capture_sequence_wrap_has_no_false_hole_or_time_gap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
