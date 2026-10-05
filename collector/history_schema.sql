@@ -119,8 +119,64 @@ CREATE TABLE IF NOT EXISTS capture_inbox_record (
     capture_sequence INTEGER NOT NULL,
     payload_sha256 TEXT NOT NULL,
     source_path TEXT NOT NULL,
+    source_dev INTEGER NOT NULL DEFAULT 0,
+    source_ino INTEGER NOT NULL DEFAULT 0,
+    source_size INTEGER NOT NULL DEFAULT 0,
+    source_mtime_ns INTEGER NOT NULL DEFAULT 0,
+    source_ctime_ns INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (device_id, session_id, capture_sequence)
 );
+
+INSERT OR IGNORE INTO history_projection_meta(key, value)
+VALUES ('capture_inbox_projection_generation', '0');
+INSERT OR IGNORE INTO history_projection_meta(key, value)
+VALUES ('capture_inbox_projection_generation_seen', '0');
+INSERT OR IGNORE INTO history_projection_meta(key, value)
+VALUES ('capture_inbox_schema_version_seen', '0');
+
+CREATE TRIGGER IF NOT EXISTS capture_inbox_projection_record_delete
+AFTER DELETE ON capture_inbox_record
+BEGIN
+    UPDATE history_projection_meta
+       SET value = CAST(value AS INTEGER) + 1
+     WHERE key = 'capture_inbox_projection_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS capture_inbox_sample_generation_delete
+AFTER DELETE ON sample
+WHEN OLD.capture_session_id IS NOT NULL
+BEGIN
+    UPDATE history_projection_meta
+       SET value = CAST(value AS INTEGER) + 1
+     WHERE key = 'capture_inbox_projection_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS capture_inbox_metric_generation_delete
+AFTER DELETE ON sample_metric
+WHEN OLD.trip_id LIKE 'fqi-%'
+BEGIN
+    UPDATE history_projection_meta
+       SET value = CAST(value AS INTEGER) + 1
+     WHERE key = 'capture_inbox_projection_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS capture_inbox_field_generation_delete
+AFTER DELETE ON sample_field
+WHEN OLD.trip_id LIKE 'fqi-%'
+BEGIN
+    UPDATE history_projection_meta
+       SET value = CAST(value AS INTEGER) + 1
+     WHERE key = 'capture_inbox_projection_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS capture_inbox_dtc_generation_delete
+AFTER DELETE ON diagnostic_code
+WHEN OLD.trip_id LIKE 'fqi-%'
+BEGIN
+    UPDATE history_projection_meta
+       SET value = CAST(value AS INTEGER) + 1
+     WHERE key = 'capture_inbox_projection_generation';
+END;
 
 CREATE TABLE IF NOT EXISTS metric_catalogue (
     pid TEXT PRIMARY KEY,

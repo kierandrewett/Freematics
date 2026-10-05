@@ -6,6 +6,7 @@ import unittest
 import zlib
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from history_indexer import (
     DTC_CODE_SLOTS,
@@ -15,6 +16,7 @@ from history_indexer import (
     device_clock_capture_ms,
     display_timestamps,
     frame_timestamps,
+    parse_inbox_record,
     parse_frames,
 )
 
@@ -90,6 +92,163 @@ class HistoryIndexerTest(unittest.TestCase):
             with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
 
+    def test_rewritten_indexed_capture_is_rebuilt_without_directory_mtime_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "00000000000000ab"
+            path = self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            original_directory_mtime = path.parent.stat().st_mtime_ns
+
+            replacement = self.write_inbox_record(
+                root, "CAR", session, 7, b"0:1000,10C:710"
+            )
+            self.assertEqual(path, replacement)
+            self.assertEqual(path.parent.stat().st_mtime_ns, original_directory_mtime)
+            self.assertEqual(indexer.index_once(), 1)
+
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE pid='0x10C'"
+                ).fetchone(), (710.0,))
+                self.assertEqual(connection.execute(
+                    "SELECT source_size,source_mtime_ns,source_ctime_ns "
+                    "FROM capture_inbox_record"
+                ).fetchone(), (
+                    path.stat().st_size, path.stat().st_mtime_ns, path.stat().st_ctime_ns,
+                ))
+
+    def test_rewritten_indexed_capture_that_becomes_corrupt_removes_stale_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "00000000000000ac"
+            path = self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+
+            data = bytearray(path.read_bytes())
+            data[-1] ^= 1  # Keep size and path stable but invalidate the payload CRC.
+            path.write_bytes(data)
+            self.assertEqual(indexer.index_once(), 1)
+
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample WHERE capture_session_id=?", (session,)
+                ).fetchone(), (0,))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM capture_inbox_record WHERE session_id=?", (session,)
+                ).fetchone(), (0,))
+
+    def test_capture_changed_during_parse_is_retried_from_the_next_poll(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "00000000000000ad"
+            path = self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:710")
+
+            real_parse = parse_inbox_record
+            rewrote = False
+
+            def rewrite_before_read(candidate: Path):
+                nonlocal rewrote
+                if candidate == path and not rewrote:
+                    rewrote = True
+                    self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:720")
+                return real_parse(candidate)
+
+            with patch("history_indexer.parse_inbox_record", side_effect=rewrite_before_read):
+                self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE pid='0x10C'"
+                ).fetchone(), (700.0,))
+
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE pid='0x10C'"
+                ).fetchone(), (720.0,))
+
+    def test_source_removed_during_rewrite_scan_preserves_ingested_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "00000000000000ae"
+            path = self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:710")
+
+            real_glob = Path.glob
+
+            def remove_before_enumeration(directory_path: Path, pattern: str):
+                if directory_path == path.parent and pattern == "*.fqi":
+                    path.unlink(missing_ok=True)
+                return real_glob(directory_path, pattern)
+
+            with patch("history_indexer.Path.glob", new=remove_before_enumeration):
+                self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE pid='0x10C'"
+                ).fetchone(), (700.0,))
+
+    def test_source_removed_during_rewrite_scan_preserves_its_record_in_multi_record_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "00000000000000af"
+            changed = self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:700")
+            self.write_inbox_record(root, "CAR", session, 8, b"0:1250,10C:800")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_inbox_record(root, "CAR", session, 7, b"0:1000,10C:710")
+
+            real_glob = Path.glob
+
+            def remove_changed_before_enumeration(directory_path: Path, pattern: str):
+                if directory_path == changed.parent and pattern == "*.fqi":
+                    changed.unlink(missing_ok=True)
+                return real_glob(directory_path, pattern)
+
+            with patch("history_indexer.Path.glob", new=remove_changed_before_enumeration):
+                self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count FROM trip WHERE trip_id=?", (f"fqi-{session}",)
+                ).fetchone(), (2,))
+                self.assertEqual(connection.execute(
+                    "SELECT sequence,numeric_value FROM sample_field WHERE pid='0x10C' "
+                    "ORDER BY sequence"
+                ).fetchall(), [(0, 700.0), (1, 800.0)])
+
+    def test_recording_gap_counters_survive_inbox_decode_and_numeric_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            self.write_inbox_record(
+                root, "CAR", "0123456789abcdef", 7,
+                b"0:1000,8E:12,9E:2,9F:3,A6:4,A7:5",
+            )
+            database = Path(directory) / "history.sqlite"
+            HistoryIndexer(root, database).index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT pid,numeric_value,text_value FROM sample_metric "
+                    "WHERE pid IN ('0x08E','0x09E','0x09F','0x0A6','0x0A7') ORDER BY pid"
+                ).fetchall(), [
+                    ("0x08E", 12.0, None),
+                    ("0x09E", 2.0, None),
+                    ("0x09F", 3.0, None),
+                    ("0x0A6", 4.0, None),
+                    ("0x0A7", 5.0, None),
+                ])
+
     def test_capture_sequence_holes_are_separate_from_clock_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "data"
@@ -156,6 +315,448 @@ class HistoryIndexerTest(unittest.TestCase):
                 self.assertEqual(connection.execute(
                     "SELECT COUNT(*) FROM sample_capture_sequence_gaps"
                 ).fetchone()[0], 0)
+
+    def test_append_only_inbox_adds_rows_without_rewriting_existing_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000004"
+            first = self.write_inbox_record(
+                root, "CAR", session, 10,
+                b"0:1000,90:1791030012,91:345,10C:700,24:1380,300:1,301:4660",
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: 1_900_000_000_000)
+            indexer.initialise()
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript("""
+                    CREATE TABLE row_mutations(table_name TEXT, operation TEXT, sequence INTEGER);
+                    CREATE TRIGGER sample_old_delete AFTER DELETE ON sample
+                      WHEN OLD.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample','delete',OLD.sequence); END;
+                    CREATE TRIGGER sample_old_insert AFTER INSERT ON sample
+                      WHEN NEW.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample','insert',NEW.sequence); END;
+                    CREATE TRIGGER metric_old_insert AFTER INSERT ON sample_metric
+                      WHEN NEW.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample_metric','insert',NEW.sequence); END;
+                    CREATE TRIGGER metric_old_delete AFTER DELETE ON sample_metric
+                      WHEN OLD.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample_metric','delete',OLD.sequence); END;
+                    CREATE TRIGGER field_old_insert AFTER INSERT ON sample_field
+                      WHEN NEW.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample_field','insert',NEW.sequence); END;
+                    CREATE TRIGGER field_old_delete AFTER DELETE ON sample_field
+                      WHEN OLD.sequence=0 BEGIN INSERT INTO row_mutations VALUES('sample_field','delete',OLD.sequence); END;
+                    CREATE TRIGGER dtc_old_insert AFTER INSERT ON diagnostic_code
+                      WHEN NEW.sequence=0 BEGIN INSERT INTO row_mutations VALUES('diagnostic_code','insert',NEW.sequence); END;
+                    CREATE TRIGGER dtc_old_delete AFTER DELETE ON diagnostic_code
+                      WHEN OLD.sequence=0 BEGIN INSERT INTO row_mutations VALUES('diagnostic_code','delete',OLD.sequence); END;
+                    CREATE TRIGGER inbox_old_insert AFTER INSERT ON capture_inbox_record
+                      WHEN NEW.capture_sequence=10 BEGIN INSERT INTO row_mutations VALUES('capture_inbox_record','insert',NEW.capture_sequence); END;
+                    CREATE TRIGGER inbox_old_delete AFTER DELETE ON capture_inbox_record
+                      WHEN OLD.capture_sequence=10 BEGIN INSERT INTO row_mutations VALUES('capture_inbox_record','delete',OLD.capture_sequence); END;
+                """)
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("DELETE FROM row_mutations")
+                connection.commit()
+            self.write_inbox_record(
+                root, "CAR", session, 11,
+                b"0:1250,90:1791030012,91:595,10C:710,24:1240",
+            )
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT * FROM row_mutations"
+                ).fetchall(), [])
+                self.assertEqual(connection.execute(
+                    "SELECT sequence,capture_utc_ms,timeline_ms FROM sample ORDER BY sequence"
+                ).fetchall(), [(0, 1791030012345, 0), (1, 1791030012595, 250)])
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_metric WHERE sequence=0 AND pid='0x10C'"
+                ).fetchone(), (700.0,))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM diagnostic_code WHERE sequence=0"
+                ).fetchone(), (1,))
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count,missing_capture_sequence_count FROM trip"
+                ).fetchone(), (2, 0))
+            self.assertTrue(first.exists())
+
+    def test_inbox_rebuild_preserves_binary64_numeric_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000007"
+            precise = "0.12345678901234567"
+            self.write_inbox_record(
+                root, "CAR", session, 10,
+                f"0:100,10C:{precise},300:1,301:4660".encode(),
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            # Out-of-order arrival forces the full-rebuild path, which
+            # rehydrates the first value from its SQLite REAL projection.
+            self.write_inbox_record(root, "CAR", session, 9, b"0:50,10C:690")
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                restored = connection.execute(
+                    "SELECT m.numeric_value FROM sample_metric AS m "
+                    "JOIN sample AS s ON s.device_id=m.device_id AND s.trip_id=m.trip_id "
+                    "AND s.sequence=m.sequence WHERE s.capture_sequence=10 AND m.pid='0x10C'"
+                ).fetchone()[0]
+                self.assertEqual(restored, float(precise))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM diagnostic_code AS d "
+                    "JOIN sample AS s ON s.device_id=d.device_id AND s.trip_id=d.trip_id "
+                    "AND s.sequence=d.sequence WHERE s.capture_sequence=10"
+                ).fetchone(), (1,))
+
+    def test_inbox_append_continues_when_an_indexed_source_file_was_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000008"
+            first = self.write_inbox_record(root, "CAR", session, 10, b"0:100,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            first.unlink()
+            second = self.write_inbox_record(root, "CAR", session, 11, b"0:350,10C:710")
+
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count,data_bytes,missing_capture_sequence_count FROM trip"
+                ).fetchone(), (2, second.stat().st_size, 0))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample WHERE capture_session_id=?", (session,)
+                ).fetchone(), (2,))
+
+    def test_steady_inbox_poll_parses_only_new_files_and_batches_field_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000009"
+            for sequence in range(24):
+                self.write_inbox_record(
+                    root, "CAR", session, sequence,
+                    f"0:{1000 + sequence * 250},10C:{700 + sequence},40C:20".encode(),
+                )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            # Restarting the collector must not turn an ordinary append into
+            # a full-session field rehydrate.
+            indexer = HistoryIndexer(root, database)
+            self.write_inbox_record(
+                root, "CAR", session, 24, b"0:7000,10C:724,40C:20"
+            )
+
+            real_connect = sqlite3.connect
+            statements: list[str] = []
+            rehydrated_rows: list[tuple] = []
+            identity_lookups: list[str] = []
+
+            class TracedConnection:
+                def __init__(self, connection: sqlite3.Connection) -> None:
+                    self.connection = connection
+
+                def execute(self, sql: str, parameters=()):
+                    statements.append(sql)
+                    if "select session_id,capture_sequence,source_path,source_dev" in sql.lower():
+                        identity_lookups.append(sql)
+                    cursor = self.connection.execute(sql, parameters)
+                    if "from capture_inbox_record as r" in sql.lower():
+                        rows = cursor.fetchall()
+                        rehydrated_rows.extend(rows)
+                        return rows
+                    return cursor
+
+                def __getattr__(self, name: str):
+                    return getattr(self.connection, name)
+
+            def traced_connect(*args, **kwargs):
+                return TracedConnection(real_connect(*args, **kwargs))
+
+            with patch("history_indexer.sqlite3.connect", side_effect=traced_connect), \
+                 patch("history_indexer.parse_inbox_record", wraps=parse_inbox_record) as parse_record:
+                self.assertEqual(indexer.index_once(), 1)
+
+            self.assertEqual(parse_record.call_count, 1)
+            # An append should load only the newly captured record fields.
+            # Rehydrating every prior sample here makes each append slower as
+            # the recording grows and can starve timely history synchronization.
+            self.assertLessEqual(len(rehydrated_rows), 3)
+            self.assertEqual(len(identity_lookups), 1)
+            field_selects = [
+                sql for sql in statements
+                if sql.lstrip().lower().startswith("select") and "sample_field" in sql.lower()
+            ]
+            self.assertEqual(field_selects, [])
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count FROM trip WHERE trip_id=?", (f"fqi-{session}",)
+                ).fetchone(), (25,))
+
+            statements.clear()
+            identity_lookups.clear()
+            real_glob = Path.glob
+            device_glob_calls: list[str] = []
+
+            def traced_glob(path: Path, pattern: str):
+                if path == root / "capture-inbox" / "CAR":
+                    device_glob_calls.append(pattern)
+                return real_glob(path, pattern)
+
+            with patch("history_indexer.sqlite3.connect", side_effect=traced_connect), \
+                 patch("history_indexer.Path.glob", new=traced_glob), \
+                 patch("history_indexer.parse_inbox_record", wraps=parse_inbox_record) as parse_record:
+                self.assertEqual(indexer.index_once(), 0)
+
+            self.assertEqual(parse_record.call_count, 0)
+            self.assertEqual(device_glob_calls, [])
+            field_selects = [
+                sql for sql in statements
+                if sql.lstrip().lower().startswith("select") and "sample_field" in sql.lower()
+            ]
+            self.assertEqual(field_selects, [])
+            # Idle checks stat the known immutable source paths using persisted
+            # metadata, but do not hydrate rows, enumerate the directory, or parse files.
+            self.assertEqual(len(identity_lookups), 1)
+
+            partial_path = root / "capture-inbox" / "CAR" / f"{session}-25.fqi"
+            partial_path.write_bytes(f"FQI1,{session},25,100,00000000\npartial".encode())
+            self.assertEqual(indexer.index_once(), 0)
+            directory = partial_path.parent
+            directory_mtime_ns = directory.stat().st_mtime_ns
+            self.write_inbox_record(
+                root, "CAR", session, 25, b"0:7250,10C:725,40C:20"
+            )
+            self.assertEqual(directory.stat().st_mtime_ns, directory_mtime_ns)
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count FROM trip WHERE trip_id=?", (f"fqi-{session}",)
+                ).fetchone(), (26,))
+
+    def test_inbox_source_removal_does_not_delete_existing_history_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            inbox_file = self.write_inbox_record(
+                root, "CAR", "000000000000000A", 3, b"0:1000,10C:700"
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            inbox_file.unlink()
+            inbox_file.parent.rmdir()
+            self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample WHERE capture_session_id=?",
+                    ("000000000000000a",),
+                ).fetchone(), (1,))
+
+    def test_in_place_capture_projection_reset_invalidates_directory_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "000000000000000b"
+            self.write_inbox_record(root, "CAR", session, 3, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            database_inode = database.stat().st_ino
+
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("PRAGMA foreign_keys=ON")
+                connection.execute(
+                    "DELETE FROM trip WHERE device_id=? AND trip_id=?",
+                    ("CAR", f"fqi-{session}"),
+                )
+                connection.execute(
+                    "DELETE FROM capture_inbox_record WHERE device_id=? AND session_id=?",
+                    ("CAR", session),
+                )
+                connection.execute(
+                    "DELETE FROM ingest_file WHERE archive_path=?",
+                    (f"capture-inbox://CAR/{session}",),
+                )
+                connection.commit()
+            self.assertEqual(database.stat().st_ino, database_inode)
+
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample WHERE capture_session_id=?", (session,)
+                ).fetchone(), (1,))
+
+    def test_in_place_detail_projection_delete_rebuilds_from_inbox_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "000000000000000c"
+            self.write_inbox_record(
+                root, "CAR", session, 3, b"0:1000,10C:700,40C:20"
+            )
+            database = Path(directory) / "history.sqlite"
+            self.assertEqual(HistoryIndexer(root, database).index_once(), 1)
+
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "DELETE FROM sample_field WHERE trip_id=? AND pid='0x10C'",
+                    (f"fqi-{session}",),
+                )
+                connection.commit()
+
+            # A fresh indexer has no in-memory state; the persisted generation
+            # mismatch must still force a complete projection rebuild.
+            self.assertEqual(HistoryIndexer(root, database).index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE trip_id=? AND pid='0x10C'",
+                    (f"fqi-{session}",),
+                ).fetchone(), (700.0,))
+
+    def test_projection_generation_change_during_scan_is_not_acknowledged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "000000000000000d"
+            self.write_inbox_record(root, "CAR", session, 0, b"0:1000,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_inbox_record(root, "CAR", session, 1, b"0:1250,10C:710")
+
+            real_parse = parse_inbox_record
+            deleted = False
+
+            def parse_then_delete(path: Path):
+                nonlocal deleted
+                record = real_parse(path)
+                if path.name.endswith("-1.fqi") and not deleted:
+                    with closing(sqlite3.connect(database)) as concurrent_connection:
+                        concurrent_connection.execute(
+                            "DELETE FROM sample_field WHERE trip_id=? AND sequence=0",
+                            (f"fqi-{session}",),
+                        )
+                        concurrent_connection.commit()
+                    deleted = True
+                return record
+
+            with patch("history_indexer.parse_inbox_record", side_effect=parse_then_delete):
+                # The generation changes after scanning starts, so this pass
+                # must not advance its checkpoint over the incomplete view.
+                self.assertEqual(indexer.index_once(), 0)
+            self.assertTrue(deleted)
+
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE trip_id=? "
+                    "AND sequence=0 AND pid='0x10C'", (f"fqi-{session}",)
+                ).fetchone(), (700.0,))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample WHERE capture_session_id=?", (session,)
+                ).fetchone(), (2,))
+
+    def test_schema_only_detail_projection_reset_is_rebuilt_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "000000000000000e"
+            self.write_inbox_record(
+                root, "CAR", session, 0, b"0:1000,10C:700,40C:20"
+            )
+            database = Path(directory) / "history.sqlite"
+            self.assertEqual(HistoryIndexer(root, database).index_once(), 1)
+
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("DROP TABLE sample_field")
+                connection.commit()
+
+            # Schema initialization recreates the empty detail table. Its
+            # persisted version checkpoint forces an inbox-backed rebuild.
+            self.assertEqual(HistoryIndexer(root, database).index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT numeric_value FROM sample_field WHERE trip_id=? "
+                    "AND sequence=0 AND pid='0x10C'", (f"fqi-{session}",)
+                ).fetchone(), (700.0,))
+
+    def test_inbox_out_of_order_and_conflicting_identity_use_full_rebuild(self) -> None:
+        for scenario in ("out_of_order", "conflict"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "data"
+                session = "abcdef0000000005"
+                self.write_inbox_record(root, "CAR", session, 10, b"0:100,10C:700")
+                database = Path(directory) / "history.sqlite"
+                indexer = HistoryIndexer(root, database)
+                indexer.index_once()
+                with closing(sqlite3.connect(database)) as connection:
+                    connection.executescript("""
+                        CREATE TABLE deletes(sequence INTEGER);
+                        CREATE TRIGGER observe_delete AFTER DELETE ON sample
+                          BEGIN INSERT INTO deletes VALUES(OLD.sequence); END;
+                    """)
+                if scenario == "out_of_order":
+                    self.write_inbox_record(root, "CAR", session, 9, b"0:50,10C:690")
+                else:
+                    conflict = root / "capture-inbox/CAR" / f"{session.upper()}-10.fqi"
+                    payload = b"0:101,10C:701"
+                    conflict.write_bytes(
+                        f"FQI1,{session.upper()},10,{len(payload)},{zlib.crc32(payload):08x}\n".encode()
+                        + payload
+                    )
+                indexer.index_once()
+                with closing(sqlite3.connect(database)) as connection:
+                    self.assertGreater(connection.execute("SELECT COUNT(*) FROM deletes").fetchone()[0], 0)
+
+    def test_inbox_sequence_wrap_continues_incrementally_when_unambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000006"
+            self.write_inbox_record(root, "CAR", session, 0xFFFFFFFF, b"0:4294967200,10C:700")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            indexer.initialise()
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript("""
+                    CREATE TABLE deletes(sequence INTEGER);
+                    CREATE TRIGGER observe_delete AFTER DELETE ON sample
+                      BEGIN INSERT INTO deletes VALUES(OLD.sequence); END;
+                """)
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("DELETE FROM deletes")
+                connection.commit()
+            self.write_inbox_record(root, "CAR", session, 0, b"0:100,10C:710")
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM deletes").fetchone()[0], 0)
+                self.assertEqual(connection.execute(
+                    "SELECT capture_sequence FROM sample ORDER BY sequence"
+                ).fetchall(), [(0xFFFFFFFF,), (0,)])
+                self.assertEqual(connection.execute(
+                    "SELECT missing_capture_sequence_count FROM trip"
+                ).fetchone(), (0,))
+
+    def test_incremental_append_updates_capture_and_interval_gap_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "000000000000000b"
+            self.write_inbox_record(
+                root, "CAR", session, 10,
+                b"0:1000,90:1791030012,91:345,10C:700",
+            )
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database)
+            self.assertEqual(indexer.index_once(), 1)
+            self.write_inbox_record(
+                root, "CAR", session, 13,
+                b"0:5000,90:1791030016,91:345,10C:710",
+            )
+
+            self.assertEqual(indexer.index_once(), 1)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT sample_count,missing_capture_sequence_count,gap_count,"
+                    "over_target_interval_count,timeline_end_ms FROM trip"
+                ).fetchone(), (2, 2, 1, 1, 4000))
+                self.assertEqual(connection.execute(
+                    "SELECT capture_utc_ms,timeline_ms FROM sample ORDER BY sequence"
+                ).fetchall(), [(1791030012345, 0), (1791030016345, 4000)])
 
     def test_device_clock_fields_enforce_integer_ranges(self) -> None:
         self.assertEqual(

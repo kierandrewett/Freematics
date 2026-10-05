@@ -93,6 +93,7 @@ class InboxRecord:
     payload_sha256: str
     source_path: str
     collector_received_ms: int
+    source_state: tuple[int, int, int, int, int]
 
 
 def parse_inbox_record(path: Path) -> InboxRecord | None:
@@ -142,6 +143,7 @@ def parse_inbox_record(path: Path) -> InboxRecord | None:
     return InboxRecord(
         device_id, session_id.lower(), sequence, frames[0],
         hashlib.sha256(payload).hexdigest(), str(path), int(stat.st_mtime * 1_000),
+        (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns),
     )
 
 
@@ -486,6 +488,12 @@ class HistoryIndexer:
         self.now_ms = now_ms or (lambda: int(time.time() * 1_000))
         self.rebuild = rebuild
         self._initialized = False
+        self._capture_inbox_directory_states: dict[str, tuple[int, int, int, int]] = {}
+        self._capture_inbox_database_identity: tuple[int, int] | None = None
+        self._capture_inbox_invalid_file_states: dict[str, tuple[int, int, int, int, int]] = {}
+        self._capture_inbox_projection_generation: int | None = None
+        self._capture_inbox_schema_version: int | None = None
+
     @staticmethod
     def _schema_issue(connection: sqlite3.Connection) -> str | None:
         tables = {
@@ -536,7 +544,56 @@ class HistoryIndexer:
             connection.execute("PRAGMA busy_timeout = 30000")
             self._ensure_sample_columns(connection)
             self._ensure_trip_columns(connection)
-            connection.executescript((Path(__file__).with_name("history_schema.sql")).read_text())
+            schema_source = Path(__file__).with_name("history_schema.sql").read_text()
+            schema_hash = hashlib.sha256(schema_source.encode("utf-8")).hexdigest()
+            meta_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='history_projection_meta'"
+            ).fetchone() is not None
+            applied_hash = None
+            if meta_exists:
+                row = connection.execute(
+                    "SELECT value FROM history_projection_meta "
+                    "WHERE key='history_schema_source_sha256'"
+                ).fetchone()
+                applied_hash = row[0] if row else None
+            expected_objects = set(re.findall(
+                r"CREATE\s+(?:UNIQUE\s+)?(?:TABLE|VIEW|TRIGGER|INDEX)\s+"
+                r"(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)",
+                schema_source, re.IGNORECASE,
+            ))
+            actual_objects = {
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger','index')"
+                )
+            }
+            expected_views = {
+                name: re.sub(r"\s+", " ", body).strip().casefold()
+                for name, body in re.findall(
+                    r"CREATE\s+(?:TEMP\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+                    r"([A-Za-z_][A-Za-z0-9_]*)\s+AS\s+(.*?);",
+                    schema_source, re.IGNORECASE | re.DOTALL,
+                )
+            }
+            actual_views = {
+                name: re.sub(
+                    r"\s+", " ", re.split(r"\bAS\b", sql, maxsplit=1, flags=re.IGNORECASE)[1]
+                ).strip().rstrip(";").casefold()
+                for name, sql in connection.execute(
+                    "SELECT name,sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL"
+                )
+                if re.search(r"\bAS\b", sql, re.IGNORECASE)
+            }
+            views_match = all(actual_views.get(name) == body for name, body in expected_views.items())
+            if (applied_hash != schema_hash or not expected_objects.issubset(actual_objects)
+                    or not views_match):
+                connection.executescript(schema_source)
+                connection.execute(
+                    "INSERT INTO history_projection_meta(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    ("history_schema_source_sha256", schema_hash),
+                )
+            self._ensure_capture_inbox_columns(connection)
             self._refresh_interval_count_projections(connection)
             self._populate_catalogue(connection)
             connection.commit()
@@ -602,6 +659,17 @@ class HistoryIndexer:
             if name not in columns:
                 connection.execute(f"ALTER TABLE trip ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
 
+    @staticmethod
+    def _ensure_capture_inbox_columns(connection: sqlite3.Connection) -> None:
+        columns = {row[1] for row in connection.execute(
+            "PRAGMA table_info(capture_inbox_record)"
+        )}
+        for name in ("source_dev", "source_ino", "source_size", "source_mtime_ns", "source_ctime_ns"):
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE capture_inbox_record ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0"
+                )
+
     def _populate_catalogue(self, connection: sqlite3.Connection) -> None:
         """Populate standard and device metric metadata from one catalogue."""
 
@@ -633,6 +701,14 @@ class HistoryIndexer:
                 ),
             )
 
+    @staticmethod
+    def _capture_inbox_file_state(path: Path) -> tuple[int, int, int, int, int]:
+        state = path.stat()
+        return (
+            state.st_dev, state.st_ino, state.st_size,
+            state.st_mtime_ns, state.st_ctime_ns,
+        )
+
     def index_once(self) -> int:
         if not self._initialized:
             self.initialise()
@@ -654,22 +730,297 @@ class HistoryIndexer:
     def _index_capture_inbox(self, connection: sqlite3.Connection) -> int:
         inbox_root = self.archive_root / "capture-inbox"
         if not inbox_root.is_dir():
+            self._capture_inbox_directory_states.clear()
+            self._capture_inbox_invalid_file_states.clear()
             return 0
         sessions: dict[tuple[str, str], list[InboxRecord]] = {}
         candidates: dict[tuple[str, str], list[Path]] = {}
-        for path in sorted(inbox_root.glob("*/*.fqi")):
-            path_match = INBOX_PATH_RE.fullmatch(path.name)
-            if (path_match and len(path.parent.name) <= 128
-                    and not path.parent.name.startswith(".")
-                    and INBOX_DEVICE_RE.fullmatch(path.parent.name)):
-                candidates.setdefault((path.parent.name, path_match.group(1).lower()), []).append(path)
-            record = parse_inbox_record(path)
-            if record is not None:
-                sessions.setdefault((record.device_id, record.session_id), []).append(record)
+        device_directories = {
+            str(path): path for path in sorted(inbox_root.iterdir())
+            if path.is_dir() and len(path.name) <= 128
+            and not path.name.startswith(".") and INBOX_DEVICE_RE.fullmatch(path.name)
+        }
+        database_stat = self.database.stat()
+        database_identity = (database_stat.st_dev, database_stat.st_ino)
+        schema_version = int(connection.execute("PRAGMA schema_version").fetchone()[0])
+        force_rebuild = False
+        if self._capture_inbox_database_identity != database_identity:
+            force_rebuild = self._capture_inbox_database_identity is not None
+            self._capture_inbox_database_identity = database_identity
+        if (self._capture_inbox_schema_version is not None
+                and self._capture_inbox_schema_version != schema_version):
+            force_rebuild = True
+        generation_row = connection.execute(
+            "SELECT value FROM history_projection_meta "
+            "WHERE key='capture_inbox_projection_generation'"
+        ).fetchone()
+        projection_generation = int(generation_row[0]) if generation_row else 0
+        persisted_generation = connection.execute(
+            "SELECT value FROM history_projection_meta "
+            "WHERE key='capture_inbox_projection_generation_seen'"
+        ).fetchone()
+        persisted_generation = int(persisted_generation[0]) if persisted_generation else 0
+        persisted_schema_version = connection.execute(
+            "SELECT value FROM history_projection_meta "
+            "WHERE key='capture_inbox_schema_version_seen'"
+        ).fetchone()
+        persisted_schema_version = (
+            int(persisted_schema_version[0]) if persisted_schema_version else 0
+        )
+        if (self._capture_inbox_projection_generation is not None
+                and self._capture_inbox_projection_generation != projection_generation):
+            force_rebuild = True
+        if persisted_generation != projection_generation:
+            force_rebuild = True
+        if persisted_schema_version != schema_version:
+            force_rebuild = True
+        if force_rebuild:
+            self._capture_inbox_directory_states.clear()
+            self._capture_inbox_invalid_file_states.clear()
 
+        scanned_directory_states: dict[str, tuple[int, int, int, int]] = {}
+        scanned_invalid_file_states: dict[str, tuple[int, int, int, int, int]] = {}
+        indexed_paths_by_session: dict[tuple[str, str], list[str]] = {}
+        changed_sessions: set[tuple[str, str]] = set()
+        unstable_sessions: set[tuple[str, str]] = set()
+        missing_source_paths: dict[tuple[str, str], set[str]] = {}
+        for directory_key, device_directory in device_directories.items():
+            directory_stat = device_directory.stat()
+            state = (
+                directory_stat.st_dev, directory_stat.st_ino,
+                directory_stat.st_mtime_ns, directory_stat.st_ctime_ns,
+            )
+            directory_changed = self._capture_inbox_directory_states.get(directory_key) != state
+            if not directory_changed:
+                for invalid_path, previous_state in self._capture_inbox_invalid_file_states.items():
+                    if str(Path(invalid_path).parent) != directory_key:
+                        continue
+                    try:
+                        current_state = self._capture_inbox_file_state(Path(invalid_path))
+                    except FileNotFoundError:
+                        directory_changed = True
+                        break
+                    if current_state != previous_state:
+                        directory_changed = True
+                        break
+            indexed_identities: dict[
+                tuple[str, int], tuple[str, tuple[int, int, int, int, int]]
+            ] = {}
+            if not force_rebuild:
+                indexed_identities = {
+                    (session_id.lower(), capture_sequence): (
+                        source_path,
+                        (source_dev, source_ino, source_size, source_mtime_ns, source_ctime_ns),
+                    )
+                    for (session_id, capture_sequence, source_path, source_dev, source_ino,
+                         source_size, source_mtime_ns, source_ctime_ns) in connection.execute(
+                        "SELECT session_id,capture_sequence,source_path,source_dev,source_ino,"
+                        "source_size,source_mtime_ns,source_ctime_ns "
+                        "FROM capture_inbox_record WHERE device_id=?",
+                        (device_directory.name,),
+                    )
+                }
+            for (session_id, _capture_sequence), (source_path, indexed_state) in indexed_identities.items():
+                indexed_paths_by_session.setdefault(
+                    (device_directory.name, session_id), []
+                ).append(source_path)
+                try:
+                    current_state = self._capture_inbox_file_state(Path(source_path))
+                except FileNotFoundError:
+                    # Removal does not erase already-ingested history.
+                    continue
+                if current_state != indexed_state:
+                    changed_sessions.add((device_directory.name, session_id))
+            if not directory_changed and not any(
+                    key[0] == device_directory.name for key in changed_sessions):
+                continue
+            scanned_directory_states[directory_key] = state
+            for path in sorted(device_directory.glob("*.fqi")):
+                path_match = INBOX_PATH_RE.fullmatch(path.name)
+                if not path_match:
+                    continue
+                session_id, raw_sequence = path_match.groups()
+                try:
+                    capture_sequence = int(raw_sequence)
+                except ValueError:
+                    continue
+                if capture_sequence >= UINT32_MODULUS:
+                    continue
+                session_key = (device_directory.name, session_id.lower())
+                candidates.setdefault(session_key, []).append(path)
+                indexed_entry = indexed_identities.get((session_key[1], capture_sequence))
+                same_indexed_path = indexed_entry is not None and indexed_entry[0] == str(path)
+                if (not force_rebuild and session_key not in changed_sessions
+                        and same_indexed_path):
+                    continue
+                try:
+                    file_state_before_parse = self._capture_inbox_file_state(path)
+                except FileNotFoundError:
+                    continue
+                record = parse_inbox_record(path)
+                if record is not None:
+                    if record.source_state != file_state_before_parse:
+                        changed_sessions.add(session_key)
+                        unstable_sessions.add(session_key)
+                        scanned_invalid_file_states[str(path)] = file_state_before_parse
+                        continue
+                    sessions.setdefault((record.device_id, record.session_id), []).append(record)
+                else:
+                    try:
+                        file_state_after_parse = self._capture_inbox_file_state(path)
+                    except FileNotFoundError:
+                        # Atomic rename/removal during the scan changes the
+                        # directory fingerprint and will be picked up next pass.
+                        continue
+                    scanned_invalid_file_states[str(path)] = (
+                        file_state_before_parse
+                        if file_state_before_parse != file_state_after_parse
+                        else file_state_after_parse
+                    )
+
+        for key in unstable_sessions:
+            sessions.pop(key, None)
+        for key in changed_sessions:
+            # A file disappearing during a rewrite scan is removal, which
+            # must not erase already-ingested history. Likewise, defer an
+            # unstable session until a later poll observes a stable snapshot.
+            if candidates.get(key) and key not in unstable_sessions:
+                visible_paths = {str(path) for path in candidates[key]}
+                missing_paths = set(indexed_paths_by_session.get(key, ())) - visible_paths
+                if missing_paths:
+                    missing_source_paths[key] = missing_paths
+                sessions.setdefault(key, [])
+
+        for directory_key in self._capture_inbox_directory_states.keys() - device_directories.keys():
+            self._capture_inbox_directory_states.pop(directory_key, None)
+        for invalid_path in tuple(self._capture_inbox_invalid_file_states):
+            if str(Path(invalid_path).parent) not in device_directories:
+                self._capture_inbox_invalid_file_states.pop(invalid_path, None)
+
+        # For a strictly forward sequence append, the existing trip summary
+        # and final sample are sufficient to extend the projection. Falling
+        # back to the full path remains mandatory for backfills, duplicates,
+        # sequence ambiguity, or invalidated/replaced projection state.
+        append_sessions: dict[
+            tuple[str, str], tuple[list[InboxRecord], tuple, list[str]]
+        ] = {}
+        if not force_rebuild:
+            for key, new_records in sessions.items():
+                append_state = self._inbox_append_state(connection, key, new_records)
+                if append_state is not None:
+                    append_sessions[key] = (
+                        append_state[0], append_state[1], indexed_paths_by_session.get(key, [])
+                    )
+
+        # Rehydrate only sessions that gained valid records. On idle polls the
+        # immutable inbox projection is already indexed, so avoid reading every
+        # sample field (and rebuilding the entire history in memory). Strict
+        # append-only sessions above bypass the rehydration query entirely.
+        indexed_records: dict[tuple[str, str], list[InboxRecord]] = {}
+        indexed_metadata: dict[
+            tuple[str, str, int], tuple[str, str, int, int, int, int, int, int, int, int]
+        ] = {}
+        indexed_fields: dict[tuple[str, str, int], list[tuple[str, str]]] = {}
+        session_keys = [] if force_rebuild else [
+            key for key in sessions if key not in append_sessions
+            and (key not in changed_sessions or key in missing_source_paths)
+        ]
+        for offset in range(0, len(session_keys), 300):
+            batch = session_keys[offset:offset + 300]
+            if not batch:
+                continue
+            predicate = " OR ".join("(r.device_id=? AND r.session_id=?)" for _ in batch)
+            parameters = tuple(value for key in batch for value in key)
+            rows = connection.execute(
+                f"""SELECT r.device_id,r.session_id,r.capture_sequence,r.payload_sha256,
+                      r.source_path,r.source_dev,r.source_ino,r.source_size,r.source_mtime_ns,
+                      r.source_ctime_ns,s.device_monotonic_ms,s.collector_received_ms,s.sequence,
+                      f.pid,f.text_value,f.numeric_value
+                 FROM capture_inbox_record AS r
+                 JOIN sample AS s ON s.device_id=r.device_id
+                   AND s.capture_session_id=r.session_id
+                   AND s.capture_sequence=r.capture_sequence
+                 LEFT JOIN sample_field AS f ON f.device_id=s.device_id
+                   AND f.trip_id=s.trip_id AND f.sequence=s.sequence
+                WHERE {predicate}
+                ORDER BY r.device_id,r.session_id,s.sequence,f.ordinal""",
+                parameters,
+            )
+            for row in rows:
+                (device_id, session_id, capture_sequence, payload_hash, source_path,
+                 source_dev, source_ino, source_size, source_mtime_ns, source_ctime_ns,
+                 tick, received, sample_sequence, pid, text_value, numeric_value) = row
+                key = (device_id, session_id, capture_sequence)
+                indexed_metadata.setdefault(
+                    key, (payload_hash, source_path, tick, received or 0, sample_sequence,
+                          source_dev, source_ino, source_size, source_mtime_ns, source_ctime_ns)
+                )
+                if pid is not None:
+                    # SQLite stores numeric fields as binary64 REAL; 17 digits
+                    # are required to reconstruct the exact float on rebuild.
+                    value = text_value if text_value is not None else format(numeric_value, ".17g")
+                    indexed_fields.setdefault(key, []).append(
+                        (pid.removeprefix("0x").lstrip("0") or "0", value)
+                    )
+        for (device_id, session_id, capture_sequence), metadata in indexed_metadata.items():
+            (payload_hash, source_path, tick, received, _sample_sequence, source_dev, source_ino,
+             source_size, source_mtime_ns, source_ctime_ns) = metadata
+            ordered_fields = tuple(indexed_fields.get((device_id, session_id, capture_sequence), ()))
+            fields = {pid: value for pid, value in ordered_fields}
+            key = (device_id, session_id)
+            if (key in missing_source_paths
+                    and source_path not in missing_source_paths[key]):
+                continue
+            indexed_records.setdefault(key, []).append(
+                InboxRecord(device_id, session_id, capture_sequence,
+                            Frame(tick, fields, ordered_fields), payload_hash,
+                            source_path, received,
+                            (source_dev, source_ino, source_size, source_mtime_ns, source_ctime_ns))
+            )
         indexed = 0
-        for device_id, session_id in candidates:
+        expected_generation = projection_generation
+        for device_id, session_id in sessions:
+            key = (device_id, session_id)
+            connection.execute("BEGIN IMMEDIATE")
+            transaction_generation = connection.execute(
+                "SELECT value FROM history_projection_meta "
+                "WHERE key='capture_inbox_projection_generation'"
+            ).fetchone()
+            transaction_generation = int(transaction_generation[0]) if transaction_generation else 0
+            if transaction_generation != expected_generation:
+                connection.rollback()
+                return 0
+            if key in append_sessions:
+                new_records, append_state, existing_source_paths = append_sessions[key]
+                locked_append_state = self._inbox_append_state(connection, key, new_records)
+                if locked_append_state != (new_records, append_state):
+                    connection.rollback()
+                    return 0
+                if not self._project_inbox_append(
+                    connection, device_id, session_id, marker=f"capture-inbox://{device_id}/{session_id}",
+                    records=new_records, state=append_state,
+                    candidate_paths=candidates[key], existing_source_paths=existing_source_paths,
+                ):
+                    connection.rollback()
+                    # The state can change between its optimistic read and
+                    # the write lock. A full rebuild on the next poll is safer
+                    # than acknowledging an incomplete projection.
+                    return 0
+                transaction_generation = connection.execute(
+                    "SELECT value FROM history_projection_meta "
+                    "WHERE key='capture_inbox_projection_generation'"
+                ).fetchone()
+                expected_generation = int(transaction_generation[0]) if transaction_generation else 0
+                connection.execute(
+                    "UPDATE history_projection_meta SET value=? "
+                    "WHERE key='capture_inbox_projection_generation_seen'",
+                    (str(expected_generation),),
+                )
+                connection.commit()
+                indexed += 1
+                continue
             records = sessions.get((device_id, session_id), [])
+            records = indexed_records.get(key, []) + records
             by_sequence: dict[int, InboxRecord] = {}
             conflicts: set[int] = set()
             for record in records:
@@ -692,9 +1043,22 @@ class HistoryIndexer:
             previous = connection.execute(
                 "SELECT content_sha256 FROM ingest_file WHERE archive_path=?", (marker,)
             ).fetchone()
-            if previous and previous[0] == digest:
+            if previous and previous[0] == digest and not force_rebuild:
+                connection.rollback()
                 continue
-            self._project_inbox_session(connection, device_id, session_id, marker, records)
+            old_records = indexed_records.get((device_id, session_id), [])
+            append_only = (
+                bool(old_records)
+                and len(records) > len(old_records)
+                and [(r.capture_sequence, r.payload_sha256, r.collector_received_ms) for r in records[:len(old_records)]]
+                    == [(r.capture_sequence, r.payload_sha256, r.collector_received_ms) for r in old_records]
+                and all(records[i].capture_sequence > records[i - 1].capture_sequence
+                        for i in range(1, len(records)))
+            )
+            self._project_inbox_session(
+                connection, device_id, session_id, marker, records,
+                append_from=len(old_records) if append_only else 0,
+            )
             total_bytes = sum(path.stat().st_size for path in candidates[(device_id, session_id)])
             connection.execute(
                 """INSERT INTO ingest_file(archive_path,content_sha256,byte_size,processed_bytes,
@@ -704,20 +1068,62 @@ class HistoryIndexer:
                    sealed=1,indexed_at_ms=excluded.indexed_at_ms""",
                 (marker, digest, total_bytes, total_bytes, self.now_ms()),
             )
+            transaction_generation = connection.execute(
+                "SELECT value FROM history_projection_meta "
+                "WHERE key='capture_inbox_projection_generation'"
+            ).fetchone()
+            expected_generation = int(transaction_generation[0]) if transaction_generation else 0
+            connection.execute(
+                "UPDATE history_projection_meta SET value=? "
+                "WHERE key='capture_inbox_projection_generation_seen'",
+                (str(expected_generation),),
+            )
             connection.commit()
             indexed += 1
+
+        connection.execute("BEGIN IMMEDIATE")
+        final_generation = connection.execute(
+            "SELECT value FROM history_projection_meta "
+            "WHERE key='capture_inbox_projection_generation'"
+        ).fetchone()
+        final_generation = int(final_generation[0]) if final_generation else 0
+        final_schema_version = int(connection.execute("PRAGMA schema_version").fetchone()[0])
+        if (final_generation != expected_generation
+                or final_schema_version != schema_version):
+            connection.rollback()
+            return 0
+        connection.execute(
+            "UPDATE history_projection_meta SET value=? "
+            "WHERE key='capture_inbox_projection_generation_seen'",
+            (str(final_generation),),
+        )
+        connection.execute(
+            "UPDATE history_projection_meta SET value=? "
+            "WHERE key='capture_inbox_schema_version_seen'",
+            (str(final_schema_version),),
+        )
+        connection.commit()
+        self._capture_inbox_directory_states.update(scanned_directory_states)
+        for directory_key in scanned_directory_states:
+            for invalid_path in tuple(self._capture_inbox_invalid_file_states):
+                if str(Path(invalid_path).parent) == directory_key:
+                    self._capture_inbox_invalid_file_states.pop(invalid_path, None)
+        self._capture_inbox_invalid_file_states.update(scanned_invalid_file_states)
+        self._capture_inbox_projection_generation = final_generation
+        self._capture_inbox_schema_version = final_schema_version
         return indexed
 
     def _project_inbox_session(
         self, connection: sqlite3.Connection, device_id: str, session_id: str,
-        marker: str, records: list[InboxRecord],
+        marker: str, records: list[InboxRecord], *, append_from: int = 0,
     ) -> None:
         trip_id = f"fqi-{session_id}"
-        connection.execute(
-            "DELETE FROM capture_inbox_record WHERE device_id=? AND session_id=?",
-            (device_id, session_id),
-        )
-        connection.execute("DELETE FROM trip WHERE device_id=? AND trip_id=?", (device_id, trip_id))
+        if not append_from:
+            connection.execute(
+                "DELETE FROM capture_inbox_record WHERE device_id=? AND session_id=?",
+                (device_id, session_id),
+            )
+            connection.execute("DELETE FROM trip WHERE device_id=? AND trip_id=?", (device_id, trip_id))
         if not records:
             return
         capture_times = [device_clock_capture_ms(record.frame.fields) for record in records]
@@ -738,62 +1144,239 @@ class HistoryIndexer:
         ]
         frames = [record.frame for record in records]
         trip_mtime = max(record.collector_received_ms for record in records)
-        connection.execute(
-            """INSERT INTO trip(device_id,trip_id,archive_path,collector_login_ms,
-               start_capture_ms,end_capture_ms,timeline_start_ms,timeline_end_ms,time_basis,
-               timestamp_quality,sample_count,data_bytes,gap_count,missing_capture_sequence_count,
-               over_target_interval_count,gps_fix_count,gps_poor_quality_count,
-               speed_disagreement_count,archive_mtime_ms,updated_at_ms)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (device_id, trip_id, marker, 0, known[0] if known else None,
-             known[-1] if known else None, timeline[0], timeline[-1],
-             "device_clock" if timestamp_quality == "device_clock" else "device_monotonic",
-             timestamp_quality, len(records), sum(Path(r.source_path).stat().st_size for r in records),
-             sum(delta > GAP_THRESHOLD_MS for delta in deltas), missing_sequence_count(records),
-             sum(delta > OVER_TARGET_INTERVAL_THRESHOLD_MS for delta in deltas),
-             *tracking_quality(frames), 0, self.now_ms()),
+        source_bytes = 0
+        for record in records:
+            try:
+                source_bytes += Path(record.source_path).stat().st_size
+            except FileNotFoundError:
+                # Keep the indexed projection usable if an inbox file was
+                # removed after ingestion; missing bytes are not counted.
+                continue
+        trip_values = (
+            device_id, trip_id, marker, 0, known[0] if known else None,
+            known[-1] if known else None, timeline[0], timeline[-1],
+            "device_clock" if timestamp_quality == "device_clock" else "device_monotonic",
+            timestamp_quality, len(records), source_bytes,
+            sum(delta > GAP_THRESHOLD_MS for delta in deltas), missing_sequence_count(records),
+            sum(delta > OVER_TARGET_INTERVAL_THRESHOLD_MS for delta in deltas),
+            *tracking_quality(frames), 0, self.now_ms(),
         )
+        if append_from:
+            connection.execute(
+                """UPDATE trip SET start_capture_ms=?,end_capture_ms=?,timeline_start_ms=?,
+                   timeline_end_ms=?,time_basis=?,timestamp_quality=?,sample_count=?,data_bytes=?,
+                   gap_count=?,missing_capture_sequence_count=?,over_target_interval_count=?,
+                   gps_fix_count=?,gps_poor_quality_count=?,speed_disagreement_count=?,updated_at_ms=?
+                   WHERE device_id=? AND trip_id=?""",
+                (*trip_values[4:18], trip_values[19], device_id, trip_id),
+            )
+        else:
+            connection.execute(
+                """INSERT INTO trip(device_id,trip_id,archive_path,collector_login_ms,
+                   start_capture_ms,end_capture_ms,timeline_start_ms,timeline_end_ms,time_basis,
+                   timestamp_quality,sample_count,data_bytes,gap_count,missing_capture_sequence_count,
+                   over_target_interval_count,gps_fix_count,gps_poor_quality_count,
+                   speed_disagreement_count,archive_mtime_ms,updated_at_ms)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                trip_values,
+            )
         for ordinal, (record, capture_ms) in enumerate(zip(records, capture_times)):
-            frame, fields = record.frame, record.frame.fields
-            hdop = gps_value(fields, "12")
-            connection.execute(
-                """INSERT INTO sample(device_id,trip_id,sequence,device_monotonic_ms,
-                   capture_utc_ms,timeline_ms,time_basis,collector_received_ms,archive_mtime_ms,
-                   timestamp_quality,latitude,longitude,gps_speed_kph,gps_heading_degrees,
-                   gps_hdop,gps_satellites,acceleration_x_g,acceleration_y_g,acceleration_z_g,
-                   capture_session_id,capture_sequence)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (device_id, trip_id, ordinal, frame.device_monotonic_ms, capture_ms, timeline[ordinal],
-                 "device_clock" if capture_ms is not None else "device_monotonic",
-                 record.collector_received_ms, 0,
-                 "device_clock" if capture_ms is not None else "unknown", gps_value(fields, "A"),
-                 gps_value(fields, "B"), gps_value(fields, "D"), gps_value(fields, "E"),
-                 hdop * 0.1 if hdop is not None else None,
-                 int(gps_value(fields, "F")) if gps_value(fields, "F") is not None else None,
-                 *acceleration_values(fields), session_id, record.capture_sequence),
+            if ordinal < append_from:
+                continue
+            self._insert_inbox_sample(
+                connection, device_id, session_id, trip_id, ordinal,
+                timeline[ordinal], capture_ms, record,
             )
-            for raw_pid, value in fields.items():
-                parsed = numeric(value)
-                connection.execute(
-                    "INSERT INTO sample_metric(device_id,trip_id,sequence,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?)",
-                    (device_id, trip_id, ordinal, normalise_pid(raw_pid), parsed, value if parsed is None else None),
-                )
-            for field_ordinal, (raw_pid, value) in enumerate(frame.ordered_fields):
-                parsed = numeric(value)
-                connection.execute(
-                    "INSERT INTO sample_field(device_id,trip_id,sequence,ordinal,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?,?)",
-                    (device_id, trip_id, ordinal, field_ordinal, normalise_pid(raw_pid), parsed,
-                     value if parsed is None else None),
-                )
-            for status, slot, raw_code, code, system in diagnostic_rows(fields):
-                connection.execute(
-                    "INSERT INTO diagnostic_code(device_id,trip_id,sequence,status,slot,raw_code,code,system) VALUES(?,?,?,?,?,?,?,?)",
-                    (device_id, trip_id, ordinal, status, slot, raw_code, code, system),
-                )
+
+    def _insert_inbox_sample(
+        self, connection: sqlite3.Connection, device_id: str, session_id: str,
+        trip_id: str, ordinal: int, timeline_ms: int, capture_ms: int | None,
+        record: InboxRecord,
+    ) -> None:
+        frame, fields = record.frame, record.frame.fields
+        hdop = gps_value(fields, "12")
+        connection.execute(
+            """INSERT INTO sample(device_id,trip_id,sequence,device_monotonic_ms,
+               capture_utc_ms,timeline_ms,time_basis,collector_received_ms,archive_mtime_ms,
+               timestamp_quality,latitude,longitude,gps_speed_kph,gps_heading_degrees,
+               gps_hdop,gps_satellites,acceleration_x_g,acceleration_y_g,acceleration_z_g,
+               capture_session_id,capture_sequence)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (device_id, trip_id, ordinal, frame.device_monotonic_ms, capture_ms, timeline_ms,
+             "device_clock" if capture_ms is not None else "device_monotonic",
+             record.collector_received_ms, 0,
+             "device_clock" if capture_ms is not None else "unknown", gps_value(fields, "A"),
+             gps_value(fields, "B"), gps_value(fields, "D"), gps_value(fields, "E"),
+             hdop * 0.1 if hdop is not None else None,
+             int(gps_value(fields, "F")) if gps_value(fields, "F") is not None else None,
+             *acceleration_values(fields), session_id, record.capture_sequence),
+        )
+        for raw_pid, value in fields.items():
+            parsed = numeric(value)
             connection.execute(
-                "INSERT INTO capture_inbox_record(device_id,session_id,capture_sequence,payload_sha256,source_path) VALUES(?,?,?,?,?)",
-                (device_id, session_id, record.capture_sequence, record.payload_sha256, record.source_path),
+                "INSERT INTO sample_metric(device_id,trip_id,sequence,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?)",
+                (device_id, trip_id, ordinal, normalise_pid(raw_pid), parsed,
+                 value if parsed is None else None),
             )
+        for field_ordinal, (raw_pid, value) in enumerate(frame.ordered_fields):
+            parsed = numeric(value)
+            connection.execute(
+                "INSERT INTO sample_field(device_id,trip_id,sequence,ordinal,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?,?)",
+                (device_id, trip_id, ordinal, field_ordinal, normalise_pid(raw_pid), parsed,
+                 value if parsed is None else None),
+            )
+        for status, slot, raw_code, code, system in diagnostic_rows(fields):
+            connection.execute(
+                "INSERT INTO diagnostic_code(device_id,trip_id,sequence,status,slot,raw_code,code,system) VALUES(?,?,?,?,?,?,?,?)",
+                (device_id, trip_id, ordinal, status, slot, raw_code, code, system),
+            )
+        connection.execute(
+            """INSERT INTO capture_inbox_record(device_id,session_id,capture_sequence,
+               payload_sha256,source_path,source_dev,source_ino,source_size,source_mtime_ns,
+               source_ctime_ns) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (device_id, session_id, record.capture_sequence, record.payload_sha256,
+             record.source_path, *record.source_state),
+        )
+
+    def _inbox_append_state(
+        self, connection: sqlite3.Connection, key: tuple[str, str],
+        new_records: list[InboxRecord],
+    ) -> tuple[list[InboxRecord], tuple] | None:
+        if (not new_records or any(record.source_path in self._capture_inbox_invalid_file_states
+                                   for record in new_records)):
+            return None
+        device_id, session_id = key
+        marker = f"capture-inbox://{device_id}/{session_id}"
+        row = connection.execute(
+            """SELECT t.start_capture_ms,t.end_capture_ms,t.timeline_end_ms,
+                      t.timestamp_quality,t.sample_count,t.data_bytes,t.gap_count,
+                      t.missing_capture_sequence_count,t.over_target_interval_count,
+                      t.gps_fix_count,t.gps_poor_quality_count,t.speed_disagreement_count,
+                      s.device_monotonic_ms,s.capture_sequence,r.payload_sha256,
+                      i.content_sha256
+               FROM trip AS t
+               JOIN sample AS s ON s.device_id=t.device_id AND s.trip_id=t.trip_id
+                 AND s.sequence=t.sample_count-1
+               JOIN capture_inbox_record AS r ON r.device_id=s.device_id
+                 AND r.session_id=s.capture_session_id
+                 AND r.capture_sequence=s.capture_sequence
+               JOIN ingest_file AS i ON i.archive_path=?
+               WHERE t.device_id=? AND t.trip_id=?""",
+            (marker, device_id, f"fqi-{session_id}"),
+        ).fetchone()
+        if not row or type(row[4]) is not int or row[4] < 1:
+            return None
+        if (not isinstance(row[14], str) or not re.fullmatch(r"[0-9a-f]{64}", row[14])
+                or not isinstance(row[15], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row[15])):
+            return None
+        ordered = order_wrapped_sequences(new_records)
+        if len({record.capture_sequence for record in ordered}) != len(ordered):
+            return None
+        previous_sequence = row[13]
+        for record in ordered:
+            sequence_delta = (record.capture_sequence - previous_sequence) % UINT32_MODULUS
+            if sequence_delta == 0 or sequence_delta >= UINT32_MODULUS // 2:
+                return None
+            previous_sequence = record.capture_sequence
+        return ordered, row
+
+    def _project_inbox_append(
+        self, connection: sqlite3.Connection, device_id: str, session_id: str,
+        marker: str, records: list[InboxRecord], state: tuple,
+        candidate_paths: list[Path], existing_source_paths: list[str],
+    ) -> bool:
+        (start_capture_ms, end_capture_ms, timeline_end_ms, old_quality, old_count,
+         _old_bytes, gap_count, missing_sequences, over_target_count, gps_fix_count,
+         poor_gps_count, speed_disagreement_count, previous_tick, previous_sequence,
+         _tail_payload_sha256, previous_digest) = state
+        captures = [device_clock_capture_ms(record.frame.fields) for record in records]
+        known_captures = [capture for capture in captures if capture is not None]
+        if start_capture_ms is None and known_captures:
+            start_capture_ms = known_captures[0]
+        if known_captures:
+            end_capture_ms = known_captures[-1]
+        all_new_clocked = len(known_captures) == len(records)
+        if old_count == 0:
+            timestamp_quality = (
+                "device_clock" if all_new_clocked else
+                "partial" if known_captures else "unknown"
+            )
+        elif old_quality == "device_clock" and all_new_clocked:
+            timestamp_quality = "device_clock"
+        elif old_quality == "unknown" and not known_captures:
+            timestamp_quality = "unknown"
+        else:
+            timestamp_quality = "partial"
+
+        trip_id = f"fqi-{session_id}"
+        timeline = timeline_end_ms
+        previous_tick = int(previous_tick)
+        previous_sequence = int(previous_sequence)
+        appended_missing = 0
+        added_gaps = 0
+        added_over_target = 0
+        for offset, (record, capture_ms) in enumerate(zip(records, captures)):
+            tick_delta = monotonic_delta(record.frame.device_monotonic_ms, previous_tick)
+            timeline += max(0, tick_delta)
+            if tick_delta > GAP_THRESHOLD_MS:
+                added_gaps += 1
+            if tick_delta > OVER_TARGET_INTERVAL_THRESHOLD_MS:
+                added_over_target += 1
+            sequence_delta = (record.capture_sequence - previous_sequence) % UINT32_MODULUS
+            appended_missing += sequence_delta - 1
+            self._insert_inbox_sample(
+                connection, device_id, session_id, trip_id, old_count + offset,
+                timeline, capture_ms, record,
+            )
+            previous_tick = record.frame.device_monotonic_ms
+            previous_sequence = record.capture_sequence
+
+        new_tracking = tracking_quality([record.frame for record in records])
+        connection.execute(
+            """UPDATE trip SET start_capture_ms=?,end_capture_ms=?,timeline_end_ms=?,
+               time_basis=?,timestamp_quality=?,sample_count=?,gap_count=?,
+               missing_capture_sequence_count=?,over_target_interval_count=?,gps_fix_count=?,
+               gps_poor_quality_count=?,speed_disagreement_count=?,updated_at_ms=?
+               WHERE device_id=? AND trip_id=?""",
+            (start_capture_ms, end_capture_ms, timeline,
+             "device_clock" if timestamp_quality == "device_clock" else "device_monotonic",
+             timestamp_quality, old_count + len(records),
+             gap_count + added_gaps, missing_sequences + appended_missing,
+             over_target_count + added_over_target, gps_fix_count + new_tracking[0],
+             poor_gps_count + new_tracking[1], speed_disagreement_count + new_tracking[2],
+             self.now_ms(), device_id, trip_id),
+        )
+        digest_input = "\n".join(
+            f"{record.capture_sequence}:{record.payload_sha256}:{record.collector_received_ms}"
+            for record in records
+        )
+        digest = hashlib.sha256(
+            f"capture-inbox-chain-v1:{previous_digest}\n{digest_input}".encode()
+        ).hexdigest()
+        file_sizes: dict[str, int] = {}
+        for path in candidate_paths:
+            try:
+                file_sizes[str(path)] = path.stat().st_size
+            except FileNotFoundError:
+                continue
+        total_bytes = sum(file_sizes.values())
+        source_paths = set(existing_source_paths)
+        source_paths.update(record.source_path for record in records)
+        data_bytes = sum(file_sizes.get(path, 0) for path in source_paths)
+        connection.execute(
+            """UPDATE trip SET data_bytes=? WHERE device_id=? AND trip_id=?""",
+            (data_bytes, device_id, trip_id),
+        )
+        connection.execute(
+            """INSERT INTO ingest_file(archive_path,content_sha256,byte_size,processed_bytes,
+               sealed,mutation_detected,indexed_at_ms) VALUES(?,?,?,?,1,0,?)
+               ON CONFLICT(archive_path) DO UPDATE SET content_sha256=excluded.content_sha256,
+               byte_size=excluded.byte_size,processed_bytes=excluded.processed_bytes,
+               sealed=1,indexed_at_ms=excluded.indexed_at_ms""",
+            (marker, digest, total_bytes, total_bytes, self.now_ms()),
+        )
+        return True
 
     def _index_file(self, connection: sqlite3.Connection, archive: Path) -> bool:
         trip_id = archive.stem
