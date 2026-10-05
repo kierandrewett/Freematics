@@ -215,6 +215,11 @@ bool SDLogger::init()
     for (uint8_t attempt = 0; attempt < 3 && !mounted; attempt++) {
         if (attempt) {
             SD.end();
+            // SD.end() only tears down a mounted filesystem. If card init
+            // failed before _pdrv was assigned, it is a no-op; SPI.begin()
+            // inside the next SD.begin() is also a no-op while the bus is
+            // active. Force a real host/controller restart between attempts.
+            SPI.end();
             delay(250);
         }
         const uint32_t started = millis();

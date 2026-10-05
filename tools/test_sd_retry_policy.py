@@ -34,6 +34,17 @@ class SdRetryPolicyTests(unittest.TestCase):
             recorder,
         )
 
+    def test_startup_mount_retry_restarts_spi_after_sd_cleanup(self) -> None:
+        firmware = (ROOT / "telestore.cpp").read_text(encoding="utf-8")
+        start = firmware.index("bool SDLogger::init()")
+        end = firmware.index("\nuint32_t SDLogger::begin()", start)
+        init = firmware[start:end]
+        retry_start = init.index("if (attempt) {")
+        retry_end = init.index("\n        }", retry_start)
+        retry = init[retry_start:retry_end]
+        self.assertLess(retry.index("SD.end();"), retry.index("SPI.end();"))
+        self.assertLess(retry.index("SPI.end();"), retry.index("delay(250);"))
+
 
 if __name__ == "__main__":
     unittest.main()
