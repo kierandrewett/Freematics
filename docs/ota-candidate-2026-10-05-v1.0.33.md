@@ -6,11 +6,11 @@ source commit below. It has not been published or flashed.
 | Property | Value |
 | --- | --- |
 | Firmware version | `1.0.33` |
-| Source commit | `c3276c499039509b361bb451b968fe461a8ff023` |
-| Build ID | `c3276c499039` |
+| Source commit | `6a2b226d4faccf1058a5200c9da9199df56e99d0` |
+| Build ID | `6a2b226d4fac` |
 | Image | `freematics-model-b.bin` |
-| SHA-256 | `2439286777f08852f5fa60545d06d212d8360c44317f40c0c47317c4bad524a6` |
-| Local candidate directory | `.pio/ota-release-candidate-c3276c4-v1.0.33/` |
+| SHA-256 | `eeb41a8bda6b2d4da0c2f8bed42982ea81f200f577303bfb8fa82c0581b81192` |
+| Local candidate directory | `.pio/ota-release-candidate-6a2b226-v1.0.33/` |
 
 Built with the `esp32dev-ota-test` PlatformIO environment from a clean
 worktree using the documented explicit-empty-token OTA release command. The
@@ -25,14 +25,17 @@ image, source, and boot build ID; no such attestation exists because the board
 is disconnected and the hardware tests have not passed. Earlier local v1.0.33
 packages from `f895cb284f3a71ad77d9d8161f9667d34ff61caa`,
 `8094e743f58bcabcae01ddde405b4c490b8170f4`, `878cc95bbf67d027beccbeb0dae44000b8b4ce7f`,
-`3c120f376eb0003cf4abfe99c5361ec864d52e1b`, and
-`9be2200f4730b7b347b407b599cc7c6f45dcc929` are retained unchanged; use only
+`3c120f376eb0003cf4abfe99c5361ec864d52e1b`,
+`9be2200f4730b7b347b407b599cc7c6f45dcc929`, and
+`c3276c499039509b361bb451b968fe461a8ff023` are retained unchanged; use only
 the candidate directory recorded above for any later review.
 
 On this source, all 75 firmware Python tool tests, 105 collector tests (four
-skipped), and 141 OBD workspace tests passed. The strict sanitized firmware emulator passed, including journal
-power-cut boundaries, torn-tail recovery, acknowledgement replay, and
-collector acceptance. It now also cuts power at all 88 byte positions across
+skipped), and 141 OBD workspace tests passed. The collector UI's reproducible
+`npm ci`, ESLint, and production build passed; its production dependency audit
+reported zero vulnerabilities. The strict sanitized firmware emulator passed,
+including journal power-cut boundaries, torn-tail recovery, acknowledgement
+replay, and collector acceptance. It now also cuts power at all 88 byte positions across
 a three-record append batch and verifies exact replay/acknowledgement order.
 The recorder harness verifies that an SD commit failure immediately before
 orderly wrap-up is reflected in the durable checkpoint's missed-reading count
