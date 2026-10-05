@@ -214,6 +214,16 @@ class DashboardViewsTest(unittest.TestCase):
         for panel_id, grid_pos in expected_layout.items():
             self.assertEqual(layout[panel_id], grid_pos)
 
+        visible = [panel for panel in dashboard["panels"] if panel.get("type") != "row"]
+        for index, left in enumerate(visible):
+            a = left["gridPos"]
+            self.assertLessEqual(a["x"] + a["w"], 24, left["title"])
+            for right in visible[index + 1:]:
+                b = right["gridPos"]
+                overlaps_x = a["x"] < b["x"] + b["w"] and b["x"] < a["x"] + a["w"]
+                overlaps_y = a["y"] < b["y"] + b["h"] and b["y"] < a["y"] + a["h"]
+                self.assertFalse(overlaps_x and overlaps_y, (left["title"], right["title"]))
+
         self.assertEqual(layout[47]["y"], layout[46]["y"] + layout[46]["h"])
 
         operating = next(panel for panel in dashboard["panels"] if panel["id"] == 28)
