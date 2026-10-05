@@ -106,6 +106,7 @@ static void resetCard()
     cardOnline = true;
     cardRenameFails = false;
     cardWriteBudget = -1;
+    cardPowerCutBudget = -1;
     cardReadBudget = -1;
     cardRenameBudget = -1;
     cardResetAfterRename = false;
@@ -113,6 +114,7 @@ static void resetCard()
     cardProbeFlushFails = false;
     cardProbeRemoveFails = false;
     probeDescriptors.clear();
+    sdLockDepth = 0;
     sdLockFailures = 0;
     cardClock = 0;
 }
@@ -220,6 +222,77 @@ void runJournalScenarios()
     report("torn append preserves prefix and stops at damage", okay, false, tornRestart.pendingBytes());
     okay = tornRestart.recover() && append(tornRestart, second) && peek(tornRestart) == second;
     report("torn tail repair permits a new journal append", okay, true, tornRestart.pendingBytes());
+
+    // Treat each byte boundary as a possible sudden power cut while a
+    // multi-record batch is appended. Bytes that form complete CRC-valid
+    // records must replay in order; an incomplete tail must be quarantined,
+    // never acknowledged past, and never hide the complete prefix.
+    const std::string batchFrames[] = {first, second, "0:1500,10C:920,"};
+    const char* batchData[] = {
+        batchFrames[0].c_str(), batchFrames[1].c_str(), batchFrames[2].c_str()
+    };
+    const uint16_t batchLengths[] = {
+        (uint16_t)batchFrames[0].size(),
+        (uint16_t)batchFrames[1].size(),
+        (uint16_t)batchFrames[2].size()
+    };
+    const uint32_t recordBytes = 12 + batchLengths[0];
+    const uint32_t totalBatchBytes = recordBytes * 3;
+    bool powerCutOkay = batchLengths[0] == batchLengths[1] &&
+                        batchLengths[1] == batchLengths[2];
+    uint32_t cutCount = 0;
+    for (uint32_t cut = 0; powerCutOkay && cut <= totalBatchBytes; cut++) {
+        resetCard();
+        bool began = false;
+        bool powerWasLost = false;
+        {
+            DurableQueue interruptedBatch;
+            began = interruptedBatch.begin();
+            cardPowerCutBudget = cut;
+            try {
+                (void)interruptedBatch.appendBatch(batchData, batchLengths, 3);
+            } catch (const std::runtime_error&) {
+                powerWasLost = true;
+            }
+        }
+        // A power loss restarts volatile lock/task state but preserves only
+        // the bytes already written to the simulated card.
+        cardPowerCutBudget = -1;
+        sdLockDepth = 0;
+        cutCount++;
+
+        DurableQueue restartedBatch;
+        powerCutOkay = began && powerWasLost && restartedBatch.begin();
+        std::vector<std::string> replayed;
+        const auto collectReplay = [&]() {
+            for (;;) {
+                std::string frame = peek(restartedBatch);
+                if (frame.empty()) break;
+                replayed.push_back(frame);
+            }
+        };
+        if (powerCutOkay) collectReplay();
+        const uint32_t expectedCount = std::min<uint32_t>(3, cut / recordBytes);
+        if (powerCutOkay && restartedBatch.damaged()) {
+            const auto original = *cardFiles.at("/QUEUE.BIN");
+            powerCutOkay = restartedBatch.recover();
+            bool originalPreserved = false;
+            for (const auto& entry : cardFiles) {
+                if (entry.first.find("/RECOVERY/") == 0 && *entry.second == original)
+                    originalPreserved = true;
+            }
+            powerCutOkay = powerCutOkay && originalPreserved;
+            replayed.clear();
+            if (powerCutOkay) collectReplay();
+        }
+        powerCutOkay = powerCutOkay && replayed.size() == expectedCount;
+        for (uint32_t index = 0; powerCutOkay && index < expectedCount; index++)
+            powerCutOkay = replayed[index] == batchFrames[index];
+        if (powerCutOkay && cut % recordBytes == 0)
+            powerCutOkay = restartedBatch.healthy();
+    }
+    report("power cut at every multi-record journal byte preserves complete replay prefix",
+           powerCutOkay && cutCount == totalBatchBytes + 1, true, cutCount);
 
     resetCard();
     DurableQueue corrupt;

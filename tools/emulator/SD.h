@@ -17,6 +17,9 @@ inline std::map<std::string, std::shared_ptr<std::vector<uint8_t>>> cardFiles;
 inline bool cardOnline = true;
 inline bool cardRenameFails = false;
 inline int64_t cardWriteBudget = -1;
+// Throw after this many additional journal bytes have reached simulated SD,
+// modeling a sudden process/power loss at any persisted-byte boundary.
+inline int64_t cardPowerCutBudget = -1;
 inline int64_t cardReadBudget = -1;
 inline int cardRenameBudget = -1;
 inline bool cardResetAfterRename = false;
@@ -55,10 +58,23 @@ public:
             count = std::min(count, static_cast<size_t>(cardWriteBudget));
             cardWriteBudget -= count;
         }
-        if (!count) return 0;
+        bool powerWasCut = false;
+        if (cardPowerCutBudget >= 0) {
+            count = std::min(count, static_cast<size_t>(cardPowerCutBudget));
+            cardPowerCutBudget -= count;
+            if (cardPowerCutBudget == 0) {
+                cardPowerCutBudget = -1;
+                powerWasCut = true;
+            }
+        }
+        if (!count) {
+            if (powerWasCut) throw std::runtime_error("simulated SD power cut");
+            return 0;
+        }
         bytes->resize(std::max(bytes->size(), position + count));
         memcpy(bytes->data() + position, source, count);
         position += count;
+        if (powerWasCut) throw std::runtime_error("simulated SD power cut");
         return count;
     }
     int printf(const char* format, ...)
