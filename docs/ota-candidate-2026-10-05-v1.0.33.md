@@ -6,11 +6,11 @@ source commit below. It has not been published or flashed.
 | Property | Value |
 | --- | --- |
 | Firmware version | `1.0.33` |
-| Source commit | `878cc95bbf67d027beccbeb0dae44000b8b4ce7f` |
-| Build ID | `878cc95bbf67` |
+| Source commit | `9be2200f4730b7b347b407b599cc7c6f45dcc929` |
+| Build ID | `9be2200f4730` |
 | Image | `freematics-model-b.bin` |
-| SHA-256 | `3a11f53916340130398b33feafb62ccd24bb2ba94d232aa25a98195a20753e62` |
-| Local candidate directory | `.pio/ota-release-candidate-878cc95-v1.0.33/` |
+| SHA-256 | `0debed0cf6f4028425dd4e5b50191cc573015245f234574713566f628d1af832` |
+| Local candidate directory | `.pio/ota-release-candidate-9be2200-v1.0.33/` |
 
 Built with the `esp32dev-ota-test` PlatformIO environment from a clean
 worktree using the documented explicit-empty-token OTA release command. The
@@ -19,10 +19,14 @@ embedded source/version markers, token-absent marker, configured-private-value
 scan, exact two-file allowlist, owner-only permissions, and SHA-256 sidecar.
 The candidate directory is mode `0700`; both assets are mode `0600`. No GitHub
 release is published. The separate credential-bearing USB bootstrap is a
-private local build product and is not an OTA asset. Earlier local v1.0.33
-packages from `f895cb284f3a71ad77d9d8161f9667d34ff61caa` and
-`8094e743f58bcabcae01ddde405b4c490b8170f4` are retained unchanged; use only
-the candidate directory recorded above for any later review.
+private local build product and is not an OTA asset. The OTA publisher also
+requires an owner-only hardware-acceptance attestation matching this exact
+image, source, and boot build ID; no such attestation exists because the board
+is disconnected and the hardware tests have not passed. Earlier local v1.0.33
+packages from `f895cb284f3a71ad77d9d8161f9667d34ff61caa`,
+`8094e743f58bcabcae01ddde405b4c490b8170f4`, `878cc95bbf67d027beccbeb0dae44000b8b4ce7f`,
+and `3c120f376eb0003cf4abfe99c5361ec864d52e1b` are retained unchanged; use
+only the candidate directory recorded above for any later review.
 
 On this source, all 68 firmware Python tool tests and 26 Grafana dashboard
 tests passed. The strict sanitized firmware emulator passed, including journal
