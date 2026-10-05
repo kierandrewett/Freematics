@@ -296,7 +296,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Voltage reported by the Freematics power input. It is hidden after 1 seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
+      "description": "Voltage reported by the Freematics power input. It is shown only when its sample-age metric is available and hidden after 1 seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -360,7 +360,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max((freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1)))",
+          "expr": "max(((freematics_device_battery_voltage_volts{device_id=\"$device\"} and on(device_id,trip_id) freematics_device_battery_voltage_age_seconds{device_id=\"$device\"}) unless on(device_id,trip_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1)))",
           "legendFormat": "",
           "range": false,
           "refId": "A",

@@ -100,6 +100,7 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("freematics_device_battery_voltage_volts", supply["expr"])
         self.assertIn("freematics_device_battery_voltage_age_seconds", supply["expr"])
         self.assertIn("> 1", supply["expr"])
+        self.assertIn("and on(device_id,trip_id)", supply["expr"])
         self.assertNotIn("freematics_device_data_age_seconds", supply["expr"])
         self.assertNotIn("freematics_obd_value", supply["expr"])
         self.assertNotIn("pid=", supply["expr"])

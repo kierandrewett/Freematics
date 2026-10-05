@@ -474,8 +474,9 @@ def build_dashboard(view: str = "combined") -> dict:
 
     def fresh_device_voltage(value_expression: str) -> str:
         return (
-            f"({value_expression} unless on(device_id) "
-            f"({device_voltage_age} > {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS}))"
+            f"(({value_expression} and on(device_id,trip_id) {device_voltage_age}) "
+            f"unless on(device_id,trip_id) ({device_voltage_age} > "
+            f"{DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS}))"
         )
 
     def fresh_live(value_expression: str) -> str:
@@ -591,7 +592,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 width=3,
                 unit="volt",
                 decimals=2,
-                description=f"Voltage reported by the Freematics power input. It is hidden after {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS} seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
+                description=f"Voltage reported by the Freematics power input. It is shown only when its sample-age metric is available and hidden after {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS} seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
                 no_value="Unavailable",
                 threshold_steps=((None, "red"), (11.8, "orange"), (12.2, "green"), (15.0, "red")),
             ),
@@ -979,7 +980,8 @@ def build_dashboard(view: str = "combined") -> dict:
                     "control-module voltage (PID 0x042). Each series is hidden when its own freshness "
                     f"limit is exceeded ({DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS} seconds for the supply-voltage sample; "
                     f"{OBD_FRESH_MAX_AGE_SECONDS} seconds for ECU PIDs, or {OBD_FAST_FRESH_MAX_AGE_SECONDS} "
-                    "seconds for RPM/speed); missing or stale "
+                    "seconds for RPM/speed). Supply voltage is unavailable until the collector "
+                    "provides its per-measurement age; missing or stale "
                     "samples remain gaps, and the values are never substituted for each other."
                 ),
                 overrides=[
