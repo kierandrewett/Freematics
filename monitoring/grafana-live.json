@@ -700,7 +700,7 @@
       "gridPos": {
         "h": 3,
         "w": 4,
-        "x": 20,
+        "x": 16,
         "y": 3
       },
       "id": 43,
@@ -776,7 +776,7 @@
         "h": 3,
         "w": 4,
         "x": 20,
-        "y": 6
+        "y": 3
       },
       "id": 55,
       "options": {
@@ -810,6 +810,170 @@
         }
       ],
       "title": "Supply sample age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Whether the latest reported telemetry frame says the SD journal accepted its write. This is a device-reported latest-write result, not a card self-test or a guarantee that every past sample is present. Stale telemetry is shown as unavailable.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Write failed",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Write accepted",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "noValue": "No fresh result",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 16,
+        "y": 6
+      },
+      "id": 56,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max((freematics_device_durable_queue_healthy{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)))",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "SD journal write",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
+      "description": "Appears only when a fresh supply-voltage acquisition is reported without a trusted capture-time sample in the last minute. The voltage is not plotted at upload time. No value means either the capture UTC is available or no fresh supply reading exists; check Supply sample age to distinguish those cases.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 1,
+                "result": {
+                  "text": "Capture UTC unavailable",
+                  "color": "orange"
+                }
+              }
+            }
+          ],
+          "noValue": "No fresh sample",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "orange"
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 6
+      },
+      "id": 57,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} < 1) unless on(device_id,trip_id) last_over_time(freematics_device_battery_voltage_capture_volts{device_id=\"$device\"}[1m])",
+          "legendFormat": "",
+          "range": false,
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "title": "Supply capture time",
       "type": "stat"
     },
     {
@@ -967,7 +1131,7 @@
       },
       "gridPos": {
         "h": 10,
-        "w": 20,
+        "w": 16,
         "x": 0,
         "y": 3
       },
@@ -3451,7 +3615,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Readings waiting in RAM, their encoded bytes, and the unacknowledged microSD backlog. A growing queue or backlog indicates transport back-pressure; a stale device age hides the series.",
+      "description": "Readings waiting for upload, the unacknowledged microSD backlog, and cumulative sampling cycles the firmware says it did not record. Queue growth indicates upload back-pressure; unrecorded cycles are not recoverable data. The separate SD journal write status reports the latest journal result, not proof of complete media health.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -3528,6 +3692,25 @@
                 "value": "right"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unrecorded cycles"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
@@ -3588,6 +3771,17 @@
           "legendFormat": "SD backlog",
           "range": true,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_missed_readings{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Unrecorded cycles",
+          "range": true,
+          "refId": "D"
         }
       ],
       "title": "Telemetry queue",

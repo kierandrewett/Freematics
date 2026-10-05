@@ -130,6 +130,19 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn('freematics_obd_value{device_id="$device",pid="0x042"}', ecu["expr"])
         self.assertNotIn("freematics_device_battery_voltage_capture_volts", ecu["expr"])
 
+    def test_live_view_marks_fresh_supply_without_capture_utc_without_using_upload_time(self) -> None:
+        dashboard = build_dashboard("live")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 57)
+        expression = panel["targets"][0]["expr"]
+        self.assertIn("freematics_device_battery_voltage_age_seconds", expression)
+        self.assertIn("last_over_time(freematics_device_battery_voltage_capture_volts", expression)
+        self.assertIn("unless on(device_id,trip_id)", expression)
+        self.assertNotIn("freematics_device_battery_voltage_volts", expression)
+        self.assertNotIn("time()", expression)
+        self.assertIn("not plotted at upload time", panel["description"])
+        self.assertIn("Capture UTC unavailable", json.dumps(panel["fieldConfig"]))
+        self.assertEqual(panel["fieldConfig"]["defaults"]["noValue"], "No fresh sample")
+
     def test_live_view_exposes_device_supply_sample_age_separately(self) -> None:
         dashboard = build_dashboard("live")
         panel = next(item for item in dashboard["panels"] if item["id"] == 55)
@@ -139,7 +152,7 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "s")
         self.assertEqual(panel["fieldConfig"]["defaults"]["noValue"], "Unavailable")
         self.assertIn("not upload arrival time", panel["description"])
-        self.assertEqual(panel["gridPos"], {"h": 3, "w": 4, "x": 20, "y": 6})
+        self.assertEqual(panel["gridPos"], {"h": 3, "w": 4, "x": 20, "y": 3})
         self.assertEqual(panel["fieldConfig"]["defaults"]["thresholds"]["steps"], [
             {"value": None, "color": "green"},
             {"value": 0.5, "color": "orange"},
@@ -171,6 +184,13 @@ class DashboardViewsTest(unittest.TestCase):
         queue = next(panel for panel in dashboard["panels"] if panel["id"] == 46)
         self.assertTrue(any("freematics_device_queue_readings" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_device_queue_bytes" in target["expr"] for target in queue["targets"]))
+        self.assertTrue(any("freematics_device_missed_readings" in target["expr"] for target in queue["targets"]))
+        self.assertIn("unrecorded cycles are not recoverable data", queue["description"])
+        journal = next(panel for panel in dashboard["panels"] if panel["id"] == 56)
+        self.assertEqual(journal["title"], "SD journal write")
+        self.assertIn("freematics_device_durable_queue_healthy", journal["targets"][0]["expr"])
+        self.assertIn("Write failed", json.dumps(journal["fieldConfig"]))
+        self.assertEqual(journal["fieldConfig"]["defaults"]["noValue"], "No fresh result")
         self.assertTrue(any("freematics_obd_state{" in expression for expression in expressions))
         self.assertTrue(any("freematics_obd_last_latency_milliseconds{" in expression for expression in expressions))
         self.assertEqual(quality_panel["datasource"]["uid"], "freematics-prometheus")
@@ -180,9 +200,12 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertGreaterEqual(scan["gridPos"]["y"], queue["gridPos"]["y"] + queue["gridPos"]["h"])
 
         expected_layout = {
-            21: {"h": 10, "w": 20, "x": 0, "y": 3},
-            43: {"h": 3, "w": 4, "x": 20, "y": 3},
+            21: {"h": 10, "w": 16, "x": 0, "y": 3},
+            43: {"h": 3, "w": 4, "x": 16, "y": 3},
+            55: {"h": 3, "w": 4, "x": 20, "y": 3},
             51: {"h": 7, "w": 24, "x": 0, "y": 13},
+            56: {"h": 3, "w": 4, "x": 16, "y": 6},
+            57: {"h": 3, "w": 4, "x": 20, "y": 6},
             45: {"h": 7, "w": 24, "x": 0, "y": 59},
             46: {"h": 5, "w": 24, "x": 0, "y": 66},
             47: {"h": 3, "w": 6, "x": 0, "y": 71},

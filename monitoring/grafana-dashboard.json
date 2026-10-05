@@ -4314,7 +4314,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Readings waiting in RAM, their encoded bytes, and the unacknowledged microSD backlog. A growing queue or backlog indicates transport back-pressure; a stale device age hides the series.",
+      "description": "Readings waiting for upload, the unacknowledged microSD backlog, and cumulative sampling cycles the firmware says it did not record. Queue growth indicates upload back-pressure; unrecorded cycles are not recoverable data. The separate SD journal write status reports the latest journal result, not proof of complete media health.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -4391,6 +4391,25 @@
                 "value": "right"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unrecorded cycles"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
@@ -4451,6 +4470,17 @@
           "legendFormat": "SD backlog",
           "range": true,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_missed_readings{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Unrecorded cycles",
+          "range": true,
+          "refId": "D"
         }
       ],
       "title": "Telemetry queue",

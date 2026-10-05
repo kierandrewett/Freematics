@@ -898,6 +898,59 @@ def build_dashboard(view: str = "combined") -> dict:
                                  (DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS, "red")),
             )
         )
+        panels.append(
+            stat(
+                56,
+                "SD journal write",
+                16,
+                6,
+                f"max({fresh_device(f'freematics_device_durable_queue_healthy{{{DEVICE}}}')})",
+                width=4,
+                description=(
+                    "Whether the latest reported telemetry frame says the SD journal accepted its write. "
+                    "This is a device-reported latest-write result, not a card self-test or a guarantee "
+                    "that every past sample is present. Stale telemetry is shown as unavailable."
+                ),
+                mappings=[
+                    {"type": "value", "options": {
+                        "0": {"text": "Write failed", "color": "red", "index": 0},
+                        "1": {"text": "Write accepted", "color": "green", "index": 1},
+                    }},
+                ],
+                no_value="No fresh result",
+                threshold_steps=((None, "red"), (1, "green")),
+            )
+        )
+        capture_without_utc = (
+            f'(freematics_device_battery_voltage_age_seconds{{{DEVICE}}} '
+            f'< {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS}) unless on(device_id,trip_id) '
+            f'last_over_time(freematics_device_battery_voltage_capture_volts{{{DEVICE}}}[1m])'
+        )
+        panels.append(
+            stat(
+                57,
+                "Supply capture time",
+                20,
+                9,
+                capture_without_utc,
+                width=4,
+                description=(
+                    "Appears only when a fresh supply-voltage acquisition is reported without a trusted "
+                    "capture-time sample in the last minute. The voltage is not plotted at upload time. "
+                    "No value means either the capture UTC is available or no fresh supply reading exists; "
+                    "check Supply sample age to distinguish those cases."
+                ),
+                mappings=[
+                    {"type": "range", "options": {
+                        "from": 0,
+                        "to": DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS,
+                        "result": {"text": "Capture UTC unavailable", "color": "orange"},
+                    }},
+                ],
+                no_value="No fresh sample",
+                threshold_steps=((None, "orange"),),
+            )
+        )
 
     trip_table_targets = [
         target(
@@ -1591,12 +1644,20 @@ def build_dashboard(view: str = "combined") -> dict:
                     target(fresh_device(f"freematics_device_queue_readings{{{DEVICE}}}"), "A", "Queued readings"),
                     target(fresh_device(f"freematics_device_queue_bytes{{{DEVICE}}}"), "B", "Queued bytes"),
                     target(fresh_device(f"freematics_device_durable_queue_bytes{{{DEVICE}}}"), "C", "SD backlog"),
+                    target(fresh_device(f"freematics_device_missed_readings{{{DEVICE}}}"), "D", "Unrecorded cycles"),
                 ],
                 unit="short",
-                description="Readings waiting in RAM, their encoded bytes, and the unacknowledged microSD backlog. A growing queue or backlog indicates transport back-pressure; a stale device age hides the series.",
+                description=(
+                    "Readings waiting for upload, the unacknowledged microSD backlog, and cumulative "
+                    "sampling cycles the firmware says it did not record. Queue growth indicates upload "
+                    "back-pressure; unrecorded cycles are not recoverable data. The separate SD journal "
+                    "write status reports the latest journal result, not proof of complete media health."
+                ),
                 overrides=[
                     by_name("Queued bytes", ("unit", "decbytes")),
                     by_name("SD backlog", ("unit", "decbytes"), ("custom.axisPlacement", "right")),
+                    by_name("Unrecorded cycles", ("custom.axisPlacement", "right"),
+                            ("color", {"fixedColor": "orange", "mode": "fixed"})),
                 ],
             )
         )
@@ -2192,13 +2253,15 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 51, 22, 23, 24, 25, 26, 27, 28, 30, 55,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47, 56, 57,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
         live_layout = {
-            21: (0, 3, 20, 10),
-            43: (20, 3, 4, 3),
-            55: (20, 6, 4, 3),
+            21: (0, 3, 16, 10),
+            43: (16, 3, 4, 3),
+            55: (20, 3, 4, 3),
+            56: (16, 6, 4, 3),
+            57: (20, 6, 4, 3),
             51: (0, 13, 24, 7),
             22: (0, 20, 8, 7),
             23: (8, 20, 8, 7),
