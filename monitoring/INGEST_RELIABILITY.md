@@ -31,6 +31,12 @@ This documents the capture-to-history path and the failure windows that remain.
   losses, not substitutes for absent data. A sequence hole indicates a
   journaled-ID gap but does not by itself attribute loss to ECU polling, SD
   latency, reset timing, or upload transport.
+* Entering wrap-up schedules a final checkpoint frame. It includes the
+  cumulative missed-reading count and the next capture identity, so a
+  successfully recovered journal exposes trailing capture-sequence holes
+  that previously had no later sample to reveal them. The checkpoint is retried
+  until an append is verified; if SD remains unavailable through shutdown, that
+  terminal loss evidence cannot be made durable and must not be inferred away.
 
 ## Current wire and projection contract
 

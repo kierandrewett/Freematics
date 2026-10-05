@@ -38,6 +38,7 @@
 #include "ota_parked_policy.h"
 #include "ota_first_upload_policy.h"
 #include "sdaccess.h"
+#include "recording_checkpoint_policy.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
 #endif
@@ -118,6 +119,7 @@ UsbTelemetryQueue usbTelemetryQueue;
 bool usbTelemetrySerialReady = false;
 uint64_t usbBootId = 0;
 uint32_t captureSequence = 0;
+freematics::recording::WrapUpCheckpointPolicy wrapUpCheckpointPolicy;
 OTAParkedPolicy otaParkedPolicy;
 volatile bool otaCheckRequested = false;
 volatile bool otaAttemptStarted = false;
@@ -321,6 +323,7 @@ uint8_t bootWakeReason = WAKE_POWER_ON;
 volatile uint32_t lastCollectionTime = 0;
 volatile uint32_t lastJournalCommitTime = 0;
 volatile bool journalCommitSeen = false;
+volatile uint32_t journalCommitCount = 0;
 #if STORAGE == STORAGE_SD
 volatile bool storageCheckComplete = false;
 #endif
@@ -2066,6 +2069,7 @@ void collectSample()
   if (journaled) {
     lastJournalCommitTime = millis();
     journalCommitSeen = true;
+    journalCommitCount++;
     // The journal is authoritative. Make the CSV lifecycle and sample write
     // atomic with respect to retention maintenance and recovery, but skip this
     // optional copy if the shared SD lock is busy.
@@ -2197,10 +2201,21 @@ void process()
 #if STORAGE == STORAGE_SD
   backlogBytes = durableQueue.cachedPendingBytes();
 #endif
-  const uint8_t next = nextPowerPhase(powerPhase, now, phaseSince, lastMotionTime, vehicleActivitySeen,
-                                      lastOBDResponse, readVehicleVoltage(), backlogBytes,
-                                      bufman.unpersistedReadings());
+  uint8_t next = nextPowerPhase(powerPhase, now, phaseSince, lastMotionTime, vehicleActivitySeen,
+                                lastOBDResponse, readVehicleVoltage(), backlogBytes,
+                                bufman.unpersistedReadings());
+#if STORAGE == STORAGE_SD
+  // Failed checkpoint writes have no journal backlog entry to keep wrap-up
+  // alive. Retry for the normal bounded upload window before allowing standby.
+  if (powerPhase == PHASE_WRAP_UP && next == PHASE_STANDBY &&
+      wrapUpCheckpointPolicy.keepWrapUpOpen(now, phaseSince, UPLOAD_WINDOW_MS))
+    next = PHASE_WRAP_UP;
+#endif
   if (next != powerPhase) {
+#if STORAGE == STORAGE_SD
+    if (powerPhase == PHASE_TRIP && next == PHASE_WRAP_UP)
+      wrapUpCheckpointPolicy.begin();
+#endif
     if (next == PHASE_STANDBY) {
       state.clear(STATE_WORKING);
       return;
@@ -2220,7 +2235,12 @@ void process()
     portENTER_CRITICAL(&sensorMux);
     waveformPending = sensorWaveforms.hasPending();
     portEXIT_CRITICAL(&sensorMux);
-    if (waveformPending) collectSample();
+    const bool checkpointPending = wrapUpCheckpointPolicy.pending();
+    if (waveformPending || checkpointPending) {
+      const uint32_t commitsBefore = journalCommitCount;
+      collectSample();
+      wrapUpCheckpointPolicy.observeJournalCommit(commitsBefore, journalCommitCount);
+    }
     vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
     return;
   }
