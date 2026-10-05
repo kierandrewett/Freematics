@@ -48,8 +48,10 @@ Standby motion reads share a mutex with the background sensor-acquisition task;
 lock contention is bounded and treated as a failed motion sample, so it cannot
 silently extend a quiet period or be mistaken for fresh motion evidence.
 OTA also requires a successfully persisted-and-read-back telemetry credential
-and a healthy SD journal; failed SD mount alone is not considered storage
-ready. In addition, before parked eligibility, periodically during a long
+and a healthy SD journal; the journal remains durable across an update and
+pending records continue to replay with their original capture timestamps
+after normal telemetry resumes. Failed SD mount alone is not considered
+storage ready. In addition, before parked eligibility, periodically during a long
 cellular transfer, and at final pre-activation checks, the standby owner probes
 the mounted card under the shared SD lock. The probe exclusively creates a
 uniquely named scratch file outside the journal, writes a fixed pattern, calls
@@ -193,22 +195,35 @@ The release-upload boundary is `tools/publish_ota_release.py`. It revalidates
 the exact two-file allowlist, token-free build markers, configured credentials,
 file modes, matching sidecar, and that the Git tag resolves to the firmware's
 embedded source commit and version before calling `gh`. Before upload it
-also queries the target release and fails closed if the asset inventory cannot
-be read or is not empty, then revalidates the files immediately before upload.
+also requires an empty draft release and fails closed if the asset inventory
+cannot be read, then revalidates the files immediately before upload.
 It snapshots the verified image and checksum into a private temporary directory,
 verifies that snapshot, and resolves the tag to the embedded source commit again
-immediately before upload. This prevents caller-directory changes after
-verification from changing the bytes handed to `gh`, and detects a tag move
-during preflight. It prevents safe files being appended to a release that
-already contains unknown or credential-bearing artifacts. It never uploads
-logs, source archives, or build directories. It requires an existing release
-tag and never clobbers assets. Use it instead of uploading files manually.
+immediately before upload. After upload, it checks the draft asset inventory,
+downloads both assets, verifies their exact bytes and checksum, then checks the
+inventory and source tag again. Only after those checks does it publish the
+draft release. This prevents caller-directory changes after verification from
+changing the bytes handed to `gh`, detects tag and asset changes during
+preflight/readback, and keeps unverified assets out of public releases. It
+never uploads logs, source archives, or build directories. It requires an
+existing empty draft release tag and never clobbers assets. Use it instead of
+uploading files manually.
+
 Publication also requires a private hardware-acceptance evidence file passed
-with `--hardware-evidence`. The file must be a regular non-symlink owned by the
-current user with mode exactly `0600`; it is read locally and is never staged,
-committed, or uploaded. The publisher rejects malformed JSON, missing or
-unknown keys, unsupported schema versions, and timestamps other than valid UTC
-RFC3339 (`Z`) timestamps. Its exact schema is:
+with `--hardware-evidence` and its detached GPG signature at the same path with
+`.asc` appended. The signature must verify against the primary key selected by
+Git's configured `user.signingkey`; this makes the all-passing hardware record
+an explicit signer attestation instead of trusting editable JSON booleans.
+This records the configured operator's attestation; it is not a machine-signed
+measurement or protection against that signer deliberately attesting false
+results.
+After the Model B acceptance run, create the signature with
+`gpg --detach-sign --armor --output hardware-evidence.json.asc hardware-evidence.json`.
+Both files must be regular non-symlinks owned by the current user with mode
+exactly `0600`; they are read locally and are never staged, committed, or
+uploaded. The publisher rejects malformed JSON, missing or unknown keys,
+unsupported schema versions, and timestamps other than valid UTC RFC3339 (`Z`)
+timestamps. Its exact JSON schema is:
 
 ```json
 {

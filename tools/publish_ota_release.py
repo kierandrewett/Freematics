@@ -66,6 +66,16 @@ def _validate_hardware_evidence(path: Path, image: Path, source_commit: str) -> 
             raw = evidence_file.read(65537)
         if len(raw) > 65536:
             raise ValueError("hardware evidence exceeds the 64 KiB limit")
+        signature_path = path.with_name(path.name + ".asc")
+        try:
+            signature_info = signature_path.lstat()
+        except OSError:
+            raise ValueError("hardware evidence detached signature is unavailable") from None
+        if (stat.S_ISLNK(signature_info.st_mode) or not stat.S_ISREG(signature_info.st_mode)
+                or signature_info.st_uid != os.getuid()
+                or stat.S_IMODE(signature_info.st_mode) != 0o600):
+            raise ValueError("hardware evidence signature must be an owner-only regular file (0600)")
+        _verify_hardware_evidence_signature(signature_path, raw)
 
         def unique_object(pairs):
             result = {}
@@ -122,6 +132,70 @@ def _validate_hardware_evidence(path: Path, image: Path, source_commit: str) -> 
         raise ValueError("hardware evidence reports a failed hardware acceptance test")
 
 
+def _verify_hardware_evidence_signature(signature_path: Path, evidence: bytes) -> None:
+    """Require a valid detached attestation by the configured Git signing identity."""
+    signing_key = subprocess.run(
+        ["git", "config", "--get", "user.signingkey"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    key_id = signing_key.stdout.strip()
+    if signing_key.returncode or not key_id or key_id.startswith("-"):
+        raise ValueError("configured Git signing identity is required to attest hardware evidence")
+
+    key_listing = subprocess.run(
+        ["gpg", "--batch", "--with-colons", "--fingerprint", "--list-keys", key_id],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    primary_fingerprints = []
+    trusted_fingerprints = set()
+    expect_fingerprint = False
+    current_key_is_primary = False
+    for line in key_listing.stdout.splitlines():
+        fields = line.split(":")
+        if fields[0] == "pub":
+            current_key_is_primary = True
+            expect_fingerprint = True
+        elif fields[0] == "sub":
+            current_key_is_primary = False
+            expect_fingerprint = True
+        elif fields[0] == "fpr" and expect_fingerprint and len(fields) > 9:
+            fingerprint = fields[9].upper()
+            trusted_fingerprints.add(fingerprint)
+            if current_key_is_primary:
+                primary_fingerprints.append(fingerprint)
+            expect_fingerprint = False
+    if key_listing.returncode or len(primary_fingerprints) != 1:
+        raise ValueError("configured Git signing identity could not be resolved uniquely")
+
+    verified = subprocess.run(
+        ["gpg", "--batch", "--no-tty", "--status-fd=1", "--verify",
+         str(signature_path.resolve()), "-"],
+        input=evidence,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    valid_signatures = []
+    for line in verified.stdout.decode("utf-8", errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
+            signer = fields[2].upper()
+            primary = fields[11].upper() if len(fields) > 11 else signer
+            valid_signatures.append((signer, primary))
+    if (verified.returncode or len(valid_signatures) != 1
+            or valid_signatures[0][0] not in trusted_fingerprints
+            or valid_signatures[0][1] != primary_fingerprints[0]):
+        raise ValueError("hardware evidence signature is invalid or not from the configured Git signer")
+
+
 def _tag_commit(tag: str) -> str:
     result = subprocess.run(
         ["gh", "api", f"repos/{REPOSITORY}/commits/{tag}", "--jq", ".sha"],
@@ -151,7 +225,7 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
     if _tag_commit(tag) != source_commit:
         raise ValueError("Git tag does not point to the firmware's embedded source commit")
     inspection = subprocess.run(
-        ["gh", "release", "view", tag, "--json", "assets", "--repo", REPOSITORY],
+        ["gh", "release", "view", tag, "--json", "assets,isDraft", "--repo", REPOSITORY],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -163,6 +237,7 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
     try:
         release = json.loads(inspection.stdout)
         existing_assets = release["assets"]
+        is_draft = release["isDraft"]
         if not isinstance(existing_assets, list):
             raise ValueError
         asset_names = [asset["name"] for asset in existing_assets]
@@ -170,6 +245,8 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
             raise ValueError
     except (TypeError, KeyError, json.JSONDecodeError, ValueError):
         raise RuntimeError("GitHub returned an invalid release asset list") from None
+    if is_draft is not True:
+        raise ValueError("target GitHub release must remain a draft until uploaded assets are verified")
     if asset_names:
         raise ValueError(
             "target GitHub release is not empty; refusing to append unverified assets"
@@ -207,6 +284,93 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
         )
         if result.returncode:
             raise RuntimeError(f"GitHub release upload failed (exit {result.returncode})")
+
+        # Verify GitHub's stored bytes, not only the local snapshot passed to
+        # `gh`. A successful upload command is not proof that both assets are
+        # present and intact.
+        inspection = subprocess.run(
+            ["gh", "release", "view", tag, "--json", "assets,isDraft", "--repo", REPOSITORY],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+        )
+        if inspection.returncode:
+            raise RuntimeError("could not verify uploaded GitHub release assets")
+        try:
+            uploaded_release = json.loads(inspection.stdout)
+            uploaded_assets = uploaded_release["assets"]
+            uploaded_is_draft = uploaded_release["isDraft"]
+            if (not isinstance(uploaded_assets, list)
+                    or any(not isinstance(asset, dict)
+                           or not isinstance(asset.get("name"), str)
+                           for asset in uploaded_assets)):
+                raise ValueError
+            uploaded_names = [asset["name"] for asset in uploaded_assets]
+        except (TypeError, KeyError, json.JSONDecodeError, ValueError):
+            raise RuntimeError("GitHub returned an invalid uploaded asset list") from None
+        if uploaded_is_draft is not True or sorted(uploaded_names) != sorted((image.name, sidecar.name)):
+            raise RuntimeError("uploaded GitHub release asset pair is incomplete or unexpected")
+
+        downloaded_dir = snapshot_dir / "downloaded"
+        downloaded_dir.mkdir(mode=0o700)
+        download = subprocess.run(
+            ["gh", "release", "download", tag, "--pattern", image.name,
+             "--pattern", sidecar.name, "--dir", str(downloaded_dir),
+             "--repo", REPOSITORY],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if download.returncode:
+            raise RuntimeError(f"could not download uploaded GitHub assets (exit {download.returncode})")
+        downloaded_names = {path.name for path in downloaded_dir.iterdir()}
+        if downloaded_names != {image.name, sidecar.name}:
+            raise RuntimeError("downloaded GitHub assets are incomplete or unexpected")
+        downloaded_image = downloaded_dir / image.name
+        downloaded_sidecar = downloaded_dir / sidecar.name
+        for expected, actual in zip(snapshot_paths, (downloaded_image, downloaded_sidecar)):
+            if hashlib.sha256(expected.read_bytes()).digest() != hashlib.sha256(actual.read_bytes()).digest():
+                raise RuntimeError("downloaded GitHub asset bytes differ from the verified upload")
+
+        final_inspection = subprocess.run(
+            ["gh", "release", "view", tag, "--json", "assets,isDraft", "--repo", REPOSITORY],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+        )
+        if final_inspection.returncode:
+            raise RuntimeError("could not verify final GitHub release asset inventory")
+        try:
+            final_release = json.loads(final_inspection.stdout)
+            final_assets = final_release["assets"]
+            final_is_draft = final_release["isDraft"]
+            if (not isinstance(final_assets, list)
+                    or any(not isinstance(asset, dict)
+                           or not isinstance(asset.get("name"), str)
+                           for asset in final_assets)):
+                raise ValueError
+            final_names = [asset["name"] for asset in final_assets]
+        except (TypeError, KeyError, json.JSONDecodeError, ValueError):
+            raise RuntimeError("GitHub returned an invalid final asset list") from None
+        if final_is_draft is not True or sorted(final_names) != sorted((image.name, sidecar.name)):
+            raise RuntimeError("GitHub release asset inventory changed during verification")
+        if _tag_commit(tag) != source_commit:
+            raise ValueError("Git tag changed during asset verification; refusing publication")
+        publication = subprocess.run(
+            ["gh", "release", "edit", tag, "--draft=false", "--verify-tag",
+             "--repo", REPOSITORY],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if publication.returncode:
+            raise RuntimeError(f"verified draft release could not be published (exit {publication.returncode})")
 
 
 def main(argv: list[str] | None = None) -> int:

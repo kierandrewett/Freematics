@@ -17,7 +17,7 @@ from package_ota_release import (
     package_release,
     verify_release_directory,
 )
-from publish_ota_release import publish
+from publish_ota_release import _verify_hardware_evidence_signature, publish
 
 
 REQUIRED_TESTS = (
@@ -25,6 +25,46 @@ REQUIRED_TESTS = (
     "live_usb_telemetry_capture_ages", "dashboard_disconnect_recording_continues",
     "car_off_60_minute_gate", "motion_cancellation", "first_boot_acceptance", "rollback",
 )
+
+
+class HardwareEvidenceSignatureTests(unittest.TestCase):
+    KEY_FINGERPRINT = "A" * 40
+    SIGNING_SUBKEY = "B" * 40
+
+    def key_listing(self):
+        return (f"pub:u:3072:1:{self.KEY_FINGERPRINT[-16:]}:0::::::scSC:::\n"
+                f"fpr:::::::::{self.KEY_FINGERPRINT}:\n"
+                f"sub:u:3072:1:{self.SIGNING_SUBKEY[-16:]}:0::::::s:::\n"
+                f"fpr:::::::::{self.SIGNING_SUBKEY}:\n")
+
+    def verify_status(self, primary=None):
+        primary = primary or self.KEY_FINGERPRINT
+        return ("[GNUPG:] NEWSIG\n[GNUPG:] VALIDSIG " + self.SIGNING_SUBKEY
+                + " 20261005 1791200000 0 4 0 1 10 00 " + primary + "\n").encode()
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_accepts_detached_signature_from_configured_git_signing_identity(self, run):
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout=self.KEY_FINGERPRINT[-16:] + "\n"),
+            SimpleNamespace(returncode=0, stdout=self.key_listing()),
+            SimpleNamespace(returncode=0, stdout=self.verify_status()),
+        ]
+        evidence = b'{"tests":{"rollback":true}}\n'
+        _verify_hardware_evidence_signature(Path("evidence.json.asc"), evidence)
+        verify_call = run.call_args_list[2]
+        self.assertEqual(verify_call.kwargs["input"], evidence)
+        self.assertIn("--verify", verify_call.args[0])
+        self.assertEqual(verify_call.args[0][-1], "-")
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_rejects_detached_signature_from_another_primary_key(self, run):
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout=self.KEY_FINGERPRINT[-16:]),
+            SimpleNamespace(returncode=0, stdout=self.key_listing()),
+            SimpleNamespace(returncode=0, stdout=self.verify_status("C" * 40)),
+        ]
+        with self.assertRaisesRegex(ValueError, "not from the configured Git signer"):
+            _verify_hardware_evidence_signature(Path("evidence.json.asc"), b"signed")
 
 
 class PublishOtaReleaseTests(unittest.TestCase):
@@ -54,6 +94,13 @@ class PublishOtaReleaseTests(unittest.TestCase):
         self.asset_dir = self.root / "assets"
         package_release(self.firmware, self.asset_dir)
         self.evidence = self.root / "hardware-evidence.json"
+        self.evidence_signature = self.root / "hardware-evidence.json.asc"
+        self.evidence_signature.write_bytes(b"test-only detached signature")
+        self.evidence_signature.chmod(0o600)
+        self.signature_verifier = patch(
+            "publish_ota_release._verify_hardware_evidence_signature"
+        )
+        self.signature_verifier.start()
         self.write_evidence()
 
     def evidence_object(self):
@@ -73,19 +120,46 @@ class PublishOtaReleaseTests(unittest.TestCase):
                                  encoding="utf-8")
         self.evidence.chmod(mode)
 
+    def successful_commands(self, download_transform=None, change_final_inventory=False):
+        uploaded_paths = None
+        inventory_checks = 0
+
+        def run(args, **kwargs):
+            nonlocal uploaded_paths, inventory_checks
+            if args[:2] == ["gh", "api"]:
+                return SimpleNamespace(returncode=0, stdout=self.source_commit + "\n")
+            if args[:3] == ["gh", "release", "view"]:
+                inventory_checks += 1
+                names = [] if uploaded_paths is None else [ASSET_NAME, SIDECAR_NAME]
+                if change_final_inventory and inventory_checks == 3:
+                    names.append("unexpected.bin")
+                return SimpleNamespace(returncode=0, stdout=json.dumps(
+                    {"assets": [{"name": name} for name in names], "isDraft": True}))
+            if args[:3] == ["gh", "release", "upload"]:
+                uploaded_paths = (Path(args[4]), Path(args[5]))
+                return SimpleNamespace(returncode=0, stdout="")
+            if args[:3] == ["gh", "release", "download"]:
+                target = Path(args[args.index("--dir") + 1])
+                for source in uploaded_paths:
+                    (target / source.name).write_bytes(source.read_bytes())
+                if download_transform is not None:
+                    download_transform(target)
+                return SimpleNamespace(returncode=0, stdout="")
+            if args[:3] == ["gh", "release", "edit"]:
+                return SimpleNamespace(returncode=0, stdout="")
+            raise AssertionError(f"unexpected external command: {args!r}")
+
+        return run
+
     def tearDown(self):
+        self.signature_verifier.stop()
         self.checkout_guard.stop()
         self.source_commit_check.stop()
         self.temp.cleanup()
 
     @patch("publish_ota_release.subprocess.run")
     def test_uploads_only_the_verified_allowlisted_pair(self, run):
-        run.side_effect = [
-            SimpleNamespace(returncode=0, stdout=self.source_commit + "\n"),
-            SimpleNamespace(returncode=0, stdout='{"assets":[]}'),
-            SimpleNamespace(returncode=0, stdout=self.source_commit + "\n"),
-            SimpleNamespace(returncode=0, stdout=""),
-        ]
+        run.side_effect = self.successful_commands()
         publish("v1.0.1", self.asset_dir, self.evidence)
         self.assertEqual(
             run.call_args_list[0].args[0],
@@ -93,29 +167,41 @@ class PublishOtaReleaseTests(unittest.TestCase):
         )
         self.assertEqual(
             run.call_args_list[1].args[0],
-            ["gh", "release", "view", "v1.0.1", "--json", "assets",
+            ["gh", "release", "view", "v1.0.1", "--json", "assets,isDraft",
              "--repo", "kierandrewett/Freematics"],
         )
+        upload_call = next(call for call in run.call_args_list
+                           if call.args[0][:3] == ["gh", "release", "upload"])
         self.assertEqual(
-            run.call_args_list[3].args[0],
+            upload_call.args[0],
             [
                 "gh", "release", "upload", "v1.0.1",
-                run.call_args_list[3].args[0][4],
-                run.call_args_list[3].args[0][5],
+                upload_call.args[0][4], upload_call.args[0][5],
                 "--repo", "kierandrewett/Freematics",
             ],
         )
-        self.assertNotEqual(Path(run.call_args_list[3].args[0][4]).parent, self.asset_dir)
+        self.assertNotEqual(Path(upload_call.args[0][4]).parent, self.asset_dir)
         self.assertIs(run.call_args_list[0].kwargs["stdin"], subprocess.DEVNULL)
         self.assertIs(run.call_args_list[0].kwargs["stderr"], subprocess.DEVNULL)
-        self.assertIs(run.call_args_list[3].kwargs["stdin"], subprocess.DEVNULL)
-        self.assertIs(run.call_args_list[3].kwargs["stdout"], run.call_args_list[3].kwargs["stderr"])
+        self.assertIs(upload_call.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(upload_call.kwargs["stdout"], upload_call.kwargs["stderr"])
+        download_call = next(call for call in run.call_args_list
+                             if call.args[0][:3] == ["gh", "release", "download"])
+        self.assertIn("--pattern", download_call.args[0])
+        publish_call = run.call_args_list[-1]
+        self.assertEqual(publish_call.args[0], [
+            "gh", "release", "edit", "v1.0.1", "--draft=false", "--verify-tag",
+            "--repo", "kierandrewett/Freematics",
+        ])
+        self.assertGreater(run.call_args_list.index(publish_call),
+                           run.call_args_list.index(download_call))
+        self.assertEqual(run.call_count, 9)
 
     @patch("publish_ota_release.subprocess.run")
     def test_refuses_to_append_to_a_release_with_existing_assets(self, run):
         run.side_effect = [
             SimpleNamespace(returncode=0, stdout=self.source_commit),
-            SimpleNamespace(returncode=0, stdout='{"assets":[{"name":"unexpected.bin"}]}'),
+            SimpleNamespace(returncode=0, stdout='{"assets":[{"name":"unexpected.bin"}],"isDraft":true}'),
         ]
         with self.assertRaisesRegex(ValueError, "release is not empty"):
             publish("v1.0.1", self.asset_dir, self.evidence)
@@ -168,7 +254,7 @@ class PublishOtaReleaseTests(unittest.TestCase):
     def test_refuses_tag_moved_after_release_metadata_check(self, run):
         run.side_effect = [
             SimpleNamespace(returncode=0, stdout=self.source_commit),
-            SimpleNamespace(returncode=0, stdout='{"assets":[]}'),
+            SimpleNamespace(returncode=0, stdout='{"assets":[],"isDraft":true}'),
             SimpleNamespace(returncode=0, stdout="0" * 40),
         ]
         with self.assertRaisesRegex(ValueError, "tag changed during publication"):
@@ -191,27 +277,69 @@ class PublishOtaReleaseTests(unittest.TestCase):
                     (self.asset_dir / SIDECAR_NAME).write_bytes(b"changed after validation")
                 return SimpleNamespace(returncode=0, stdout=self.source_commit)
             if args[:3] == ["gh", "release", "view"]:
-                return SimpleNamespace(returncode=0, stdout='{"assets":[]}')
+                names = [] if not uploaded else [ASSET_NAME, SIDECAR_NAME]
+                return SimpleNamespace(returncode=0, stdout=json.dumps(
+                    {"assets": [{"name": name} for name in names], "isDraft": True}))
             if args[:3] == ["gh", "release", "upload"]:
                 uploaded["image"] = Path(args[4]).read_bytes()
                 uploaded["sidecar"] = Path(args[5]).read_bytes()
+                uploaded["paths"] = (Path(args[4]), Path(args[5]))
+                return SimpleNamespace(returncode=0, stdout="")
+            if args[:3] == ["gh", "release", "download"]:
+                target = Path(args[args.index("--dir") + 1])
+                for source in uploaded["paths"]:
+                    (target / source.name).write_bytes(source.read_bytes())
+                return SimpleNamespace(returncode=0, stdout="")
+            if args[:3] == ["gh", "release", "edit"]:
                 return SimpleNamespace(returncode=0, stdout="")
             raise AssertionError(f"unexpected external command: {args!r}")
 
         run.side_effect = mutate_inputs_at_final_tag_check
         publish("v1.0.1", self.asset_dir, self.evidence)
-        self.assertEqual(uploaded, {"image": expected_image, "sidecar": expected_sidecar})
+        self.assertEqual({key: uploaded[key] for key in ("image", "sidecar")},
+                         {"image": expected_image, "sidecar": expected_sidecar})
 
     @patch("publish_ota_release.subprocess.run")
     def test_valid_hardware_evidence_allows_publication(self, run):
+        run.side_effect = self.successful_commands()
+        publish("v1.0.1", self.asset_dir, self.evidence)
+        self.assertEqual(run.call_count, 9)
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_rejects_corrupt_remote_asset_bytes(self, run):
+        def corrupt_download(target):
+            (target / ASSET_NAME).write_bytes(b"corrupted remote image")
+
+        run.side_effect = self.successful_commands(download_transform=corrupt_download)
+        with self.assertRaisesRegex(RuntimeError, "bytes differ"):
+            publish("v1.0.1", self.asset_dir, self.evidence)
+        self.assertFalse(any(call.args[0][:3] == ["gh", "release", "edit"]
+                             for call in run.call_args_list))
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_rejects_release_inventory_changed_during_download_verification(self, run):
+        run.side_effect = self.successful_commands(change_final_inventory=True)
+        with self.assertRaisesRegex(RuntimeError, "changed during verification"):
+            publish("v1.0.1", self.asset_dir, self.evidence)
+        self.assertFalse(any(call.args[0][:3] == ["gh", "release", "edit"]
+                             for call in run.call_args_list))
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_refuses_to_upload_directly_to_a_published_release(self, run):
         run.side_effect = [
             SimpleNamespace(returncode=0, stdout=self.source_commit),
-            SimpleNamespace(returncode=0, stdout='{"assets":[]}'),
-            SimpleNamespace(returncode=0, stdout=self.source_commit),
-            SimpleNamespace(returncode=0, stdout=""),
+            SimpleNamespace(returncode=0, stdout='{"assets":[],"isDraft":false}'),
         ]
-        publish("v1.0.1", self.asset_dir, self.evidence)
-        self.assertEqual(run.call_count, 4)
+        with self.assertRaisesRegex(ValueError, "must remain a draft"):
+            publish("v1.0.1", self.asset_dir, self.evidence)
+        self.assertEqual(run.call_count, 2)
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_missing_hardware_evidence_signature_fails_before_github(self, run):
+        self.evidence_signature.unlink()
+        with self.assertRaisesRegex(ValueError, "detached signature is unavailable"):
+            publish("v1.0.1", self.asset_dir, self.evidence)
+        run.assert_not_called()
 
     @patch("publish_ota_release.subprocess.run")
     def test_missing_or_unknown_top_level_and_nested_fields_fail_before_gh(self, run):
