@@ -116,12 +116,16 @@ code += '\n'.join(line for line in client_header.splitlines() if line.startswith
 code += '#define BUFFER_SLOTS 3\n'
 code += re.search(r'^#define BUFFER_LENGTH .*$', config, re.MULTILINE).group(0) + '\n'
 code += '\n'.join(line for line in config.splitlines() if line.startswith('#define SAMPLE_')) + '\n'
+code += re.search(r'^#define UPLOAD_WINDOW_MS .*$', config, re.MULTILINE).group(0) + '\n'
 code += storage_header[storage_header.index('class CStorage {'):storage_header.index('class FileLogger')]
 code += client_header[client_header.index('typedef struct {'):client_header.index('class TeleClient\n')]
 code += '#include "sensorwaveform.h"\n'
 code += '#include "usbtelemetry_metadata.h"\n'
+code += '#include "recording_checkpoint_policy.h"\n'
 code += '''
 SensorWaveforms sensorWaveforms;
+freematics::recording::WrapUpCheckpointPolicy wrapUpCheckpointPolicy;
+uint32_t journalCommitCount=0;
 bool collectionBlocked=false;
 unsigned collectionCalls=0;
 void collectSample() {
@@ -129,6 +133,7 @@ void collectSample() {
     if(!collectionBlocked) {
         uint8_t memory[BUFFER_LENGTH]; CBuffer sample(memory);
         sensorWaveforms.emit(&sample);
+        ++journalCommitCount; // deterministic successful journal commit
     }
     tick+=formattingMs;
 }
