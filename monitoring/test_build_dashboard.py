@@ -115,6 +115,23 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertNotIn("freematics_device_battery_voltage_volts", ecu["expr"])
         self.assertIn("never substituted for each other", panel["description"])
 
+    def test_live_view_exposes_device_supply_sample_age_separately(self) -> None:
+        dashboard = build_dashboard("live")
+        panel = next(item for item in dashboard["panels"] if item["id"] == 55)
+        self.assertEqual(panel["title"], "Supply sample age")
+        self.assertEqual(panel["targets"][0]["expr"],
+                         'max(freematics_device_battery_voltage_age_seconds{device_id="$device"})')
+        self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "s")
+        self.assertEqual(panel["fieldConfig"]["defaults"]["noValue"], "Unavailable")
+        self.assertIn("not upload arrival time", panel["description"])
+        self.assertEqual(panel["gridPos"], {"h": 3, "w": 4, "x": 20, "y": 6})
+        self.assertEqual(panel["fieldConfig"]["defaults"]["thresholds"]["steps"], [
+            {"value": None, "color": "green"},
+            {"value": 0.5, "color": "orange"},
+            {"value": 1, "color": "red"},
+        ])
+        self.assertNotIn(55, {item["id"] for item in build_dashboard("combined")["panels"]})
+
         combined = build_dashboard("combined")
         self.assertNotIn(51, {item["id"] for item in combined["panels"]})
 

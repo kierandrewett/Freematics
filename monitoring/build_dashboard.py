@@ -877,6 +877,26 @@ def build_dashboard(view: str = "combined") -> dict:
                 no_value="Not exposed by ECU",
             )
         )
+        panels.append(
+            stat(
+                55,
+                "Supply sample age",
+                20,
+                6,
+                f"max(freematics_device_battery_voltage_age_seconds{{{DEVICE}}})",
+                width=4,
+                unit="s",
+                decimals=2,
+                description=(
+                    "Age of the Model B input-voltage acquisition, not upload arrival time. "
+                    "This remains visible when the voltage graph masks stale samples; "
+                    "unavailable means no acquisition-age metric is being reported."
+                ),
+                no_value="Unavailable",
+                threshold_steps=((None, "green"), (0.5, "orange"),
+                                 (DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS, "red")),
+            )
+        )
 
     trip_table_targets = [
         target(
@@ -2144,13 +2164,14 @@ def build_dashboard(view: str = "combined") -> dict:
 
     if view == "live":
         live_panel_ids = {
-            1, 2, 3, 4, 5, 6, 21, 51, 22, 23, 24, 25, 26, 27, 28, 30,
+            1, 2, 3, 4, 5, 6, 21, 51, 22, 23, 24, 25, 26, 27, 28, 30, 55,
             31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
         live_layout = {
             21: (0, 3, 20, 10),
             43: (20, 3, 4, 3),
+            55: (20, 6, 4, 3),
             51: (0, 13, 24, 7),
             22: (0, 20, 8, 7),
             23: (8, 20, 8, 7),
