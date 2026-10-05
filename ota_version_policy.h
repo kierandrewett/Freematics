@@ -154,7 +154,13 @@ class FirmwareSourceCommitScanner {
 
  private:
   void consume(char byte) {
-    static const char marker[] = "FREEMATICS_SOURCE_COMMIT=";
+    // Keep the search pattern split so it does not add a bare empty
+    // FREEMATICS_SOURCE_COMMIT= marker to the binary. The package verifier
+    // requires exactly one full marker, containing the embedded commit.
+    static const char markerPrefix[] = "FREEMATICS_SOURCE_";
+    static const char markerSuffix[] = "COMMIT=";
+    static const size_t markerPrefixLength = sizeof(markerPrefix) - 1;
+    static const size_t markerLength = markerPrefixLength + sizeof(markerSuffix) - 1;
     if (m_found) {
       if (byte == '\0') {
         m_found = false;
@@ -183,14 +189,17 @@ class FirmwareSourceCommitScanner {
       m_candidate[m_length] = '\0';
       return;
     }
-    if (byte == marker[m_match]) {
-      if (marker[++m_match] == '\0') {
+    const char expected = m_match < markerPrefixLength
+        ? markerPrefix[m_match]
+        : markerSuffix[m_match - markerPrefixLength];
+    if (byte == expected) {
+      if (++m_match == markerLength) {
         m_found = true;
         m_length = 0;
         m_candidate[0] = '\0';
       }
     } else {
-      m_match = byte == marker[0] ? 1 : 0;
+      m_match = byte == markerPrefix[0] ? 1 : 0;
     }
   }
 
