@@ -3772,6 +3772,139 @@
       ],
       "title": "Unrecorded sample cycles",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Device-measured duration of the preceding SD journal append attempt, recorded in the next capture and plotted at device capture time. The 250 ms cadence is the sampling deadline; values above it can explain skipped capture slots. Null breaks preserve capture gaps.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SD append duration (ms)"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 250,
+                      "color": "orange"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.thresholdsStyle",
+                "value": {
+                  "mode": "line+area"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 125
+      },
+      "id": 59,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, m.numeric_value AS \"SD append duration (ms)\" FROM sample AS s JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND m.pid = '0x0A8' ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND next_capture_session_id IS NOT NULL AND capture_session_id <> next_capture_session_id) OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"SD append duration (ms)\" FROM gap_points ORDER BY time",
+          "rawQueryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, m.numeric_value AS \"SD append duration (ms)\" FROM sample AS s JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) AND m.pid = '0x0A8' ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND next_capture_session_id IS NOT NULL AND capture_session_id <> next_capture_session_id) OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"SD append duration (ms)\" FROM gap_points ORDER BY time",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "SD append duration — capture time",
+      "type": "timeseries"
     }
   ],
   "refresh": "1m",
@@ -3864,6 +3997,6 @@
   "timezone": "browser",
   "title": "Vehicle · Trips",
   "uid": "freematics-trips",
-  "version": 14,
+  "version": 15,
   "weekStart": "monday"
 }

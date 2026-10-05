@@ -331,6 +331,8 @@ volatile uint32_t lastCollectionTime = 0;
 volatile uint32_t lastJournalCommitTime = 0;
 volatile bool journalCommitSeen = false;
 volatile uint32_t journalCommitCount = 0;
+static uint32_t lastJournalAppendDurationMs = 0;
+static bool journalAppendDurationKnown = false;
 #if STORAGE == STORAGE_SD
 volatile bool storageCheckComplete = false;
 #endif
@@ -1859,13 +1861,20 @@ bool journalSample(CBuffer* buffer, uint64_t session, uint32_t sequence)
   if (frame.overflowed() || !frame.length()) return false;
   // An upload batch can temporarily own the SD lock. Preserve this in-flight
   // sample and retry only lock contention; actual storage errors remain fatal.
+  const uint32_t appendStartedAt = millis();
   bool lockTimedOut;
   do {
     lockTimedOut = false;
     if (durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), session,
-                                      sequence, &lockTimedOut)) return true;
+                                      sequence, &lockTimedOut)) {
+      lastJournalAppendDurationMs = millis() - appendStartedAt;
+      journalAppendDurationKnown = true;
+      return true;
+    }
     if (lockTimedOut) delay(1);
   } while (lockTimedOut && durableQueue.cachedHealthy());
+  lastJournalAppendDurationMs = millis() - appendStartedAt;
+  journalAppendDurationKnown = true;
   return false;
 }
 #endif
@@ -1970,6 +1979,10 @@ void collectSample()
   buffer->add(PID_JOURNAL_COMMIT_FAILURES, ELEMENT_UINT32, &journalCommitFailures, sizeof(journalCommitFailures));
   buffer->add(PID_SAMPLE_DEADLINE_OVERRUNS, ELEMENT_UINT32, &deadlineOverruns, sizeof(deadlineOverruns));
 #if STORAGE == STORAGE_SD
+  if (journalAppendDurationKnown) {
+    buffer->add(PID_JOURNAL_APPEND_DURATION_MS, ELEMENT_UINT32,
+                &lastJournalAppendDurationMs, sizeof(lastJournalAppendDurationMs));
+  }
   uint32_t durableBytes = durableQueue.cachedPendingBytes();
   buffer->add(PID_DURABLE_QUEUE_BYTES, ELEMENT_UINT32, &durableBytes, sizeof(durableBytes));
   uint8_t queueHealthy = durableQueue.cachedHealthy() ? 1 : 0;

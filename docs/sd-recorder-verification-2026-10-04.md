@@ -15,16 +15,18 @@ counted, and no completed samples wait in a RAM queue.
 Recorded output:
 
 ```text
-PASS: slow SD blocks sampling; one in-flight frame, skipped intervals counted, committed bytes verified; missed=80, journaled=40, opens=84
+PASS: SD lock contention retried; slow SD blocks sampling; one in-flight frame, skipped intervals counted, append duration captured in next durable sample; measured_append_ms=650, missed=81, journaled=39, opens=86
 PASS: unavailable SD produces counted misses, no retained samples or upload candidates
 PASS: SD recovery records new samples only; failed samples remain counted, never replayed
 ```
 
 The test checks one-slot working memory, sample accounting, the deliberate
-cadence loss under a 650 ms append, timestamp/order agreement between committed
-journal frames and the CSV convenience logger, and no replay of samples from a
-card-failure window. Recovery only records new samples. This is host simulation
-evidence, not a physical-card endurance or warm-reset test. The recorded
+cadence loss under a 650 ms append, serialization of that measured append
+duration (`PID 0x0A8`) into the next durable frame, timestamp/order agreement
+between committed journal frames and the CSV convenience logger, and no replay
+of samples from a card-failure window. Recovery only records new samples. This
+is host simulation evidence, not a physical-card endurance or warm-reset test.
+The recorded
 device-side `FR_NOT_READY`/card-select failures occurred during mount and remain
 unresolved; that points to card initialization or electrical response, not
 evidence that this append/readback path failed.
@@ -83,3 +85,16 @@ reset before they are committed, and a slow journal write may appear in both
 the commit-failure and deadline-overrun counts. These signals improve future
 attribution but do not recover the missing samples or guarantee gap-free
 recording.
+
+## Follow-up — SD append latency visibility
+
+`PID_JOURNAL_APPEND_DURATION_MS` (`0x0A8`) now records the preceding journal
+append attempt duration on the next sample, including SD-lock wait and the
+existing read-back verification. The live Grafana view plots the current
+reported value; the Trips view plots the durable sample at device capture time
+and inserts nulls for known capture gaps. Thresholds mark 250 ms (the capture
+cadence) and 500 ms. The repeatable host test injects 650 ms, checks that value
+is serialized in a later SD record, and still observes skipped sample slots.
+This adds causal evidence; it does not remove the synchronous SD bottleneck or
+recover samples lost during a slow/unavailable-card interval. Device/card
+measurements remain necessary before choosing a write-path optimization.

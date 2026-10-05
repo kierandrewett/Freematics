@@ -476,6 +476,7 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_device_sd_unavailable_readings", pld->devid, pld->tripid, pld->data + PID_SD_UNAVAILABLE_READINGS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_journal_commit_failures", pld->devid, pld->tripid, pld->data + PID_JOURNAL_COMMIT_FAILURES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_sample_deadline_overruns", pld->devid, pld->tripid, pld->data + PID_SAMPLE_DEADLINE_OVERRUNS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_journal_append_duration_ms", pld->devid, pld->tripid, pld->data + PID_JOURNAL_APPEND_DURATION_MS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_healthy", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_HEALTH, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_rejected_readings", pld->devid, pld->tripid, pld->data + PID_REJECTED_READINGS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_power_phase", pld->devid, pld->tripid, pld->data + PID_POWER_PHASE, 1);

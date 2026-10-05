@@ -1642,6 +1642,39 @@ def build_dashboard(view: str = "combined") -> dict:
             )
         )
     if view in {"combined", "live"}:
+        append_panel = timeseries(
+            58,
+            "SD journal append duration",
+            0,
+            81 if view == "combined" else 74,
+            24,
+            4,
+            [target(
+                fresh_device(f"freematics_device_journal_append_duration_ms{{{DEVICE}}}"),
+                "A",
+                "Previous append attempt",
+            )],
+            unit="ms",
+            description=(
+                "Device-measured duration of the preceding SD journal append attempt, including lock wait "
+                "and read-back verification; it is captured in the next journaled sample. Compare with the "
+                "250 ms capture cadence: longer appends can explain missed sampling deadlines. This is not "
+                "upload arrival latency. This live Prometheus trend is timestamped at scrape time, not device "
+                "capture time; use the Trips history panel for capture-time alignment. Samples lost during "
+                "total SD failure cannot report their own duration."
+            ),
+            overrides=[by_name(
+                "Previous append attempt",
+                ("thresholds", thresholds((None, "green"), (250, "orange"), (500, "red"))),
+                ("custom.thresholdsStyle", {"mode": "line+area"}),
+            )],
+        )
+        append_panel["fieldConfig"]["defaults"]["custom"].update({
+            "spanNulls": False,
+            "insertNulls": False,
+        })
+        panels.append(append_panel)
+    if view in {"combined", "live"}:
         panels.append(
             timeseries(
                 46,
@@ -2270,7 +2303,7 @@ def build_dashboard(view: str = "combined") -> dict:
     if view == "live":
         live_panel_ids = {
             1, 2, 3, 4, 5, 6, 21, 51, 22, 23, 24, 25, 26, 27, 28, 30, 55,
-            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47, 56, 57,
+            31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 45, 46, 47, 56, 57, 58,
         }
         panels = [panel for panel in panels if panel["id"] in live_panel_ids]
         live_layout = {
@@ -2299,6 +2332,7 @@ def build_dashboard(view: str = "combined") -> dict:
             45: (0, 59, 24, 7),
             46: (0, 66, 24, 5),
             47: (0, 71, 6, 3),
+            58: (0, 74, 24, 5),
         }
         for panel in panels:
             layout = live_layout.get(panel["id"])
@@ -2493,6 +2527,42 @@ def build_dashboard(view: str = "combined") -> dict:
             "insertNulls": False,
         })
         panels.append(missed_readings_panel)
+        append_latency_sql = (
+            "SELECT s.timeline_ms / 1000.0 AS time, m.numeric_value AS \"SD append duration (ms)\" "
+            "FROM sample AS s JOIN sample_metric AS m ON m.device_id = s.device_id "
+            "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+            "WHERE " + sample_trip_where + f" AND s.{historical_range} "
+            "AND m.pid = '0x0A8' ORDER BY time"
+        )
+        append_latency_panel = timeseries(
+            59,
+            "SD append duration — capture time",
+            0,
+            125,
+            24,
+            6,
+            [history_target(historical_series_with_gap_breaks(
+                append_latency_sql, ("SD append duration (ms)",)
+            ), format="time_series")],
+            unit="ms",
+            description=(
+                "Device-measured duration of the preceding SD journal append attempt, recorded in the next "
+                "capture and plotted at device capture time. The 250 ms cadence is the sampling deadline; "
+                "values above it can explain skipped capture slots. Null breaks preserve capture gaps."
+            ),
+            overrides=[by_name(
+                "SD append duration (ms)",
+                ("thresholds", thresholds((None, "green"), (250, "orange"), (500, "red"))),
+                ("custom.thresholdsStyle", {"mode": "line+area"}),
+            )],
+        )
+        append_latency_panel["datasource"] = HISTORY_DS
+        append_latency_panel["fieldConfig"]["defaults"]["custom"].update({
+            "showPoints": "always",
+            "spanNulls": False,
+            "insertNulls": False,
+        })
+        panels.append(append_latency_panel)
     else:
         combined_scan = next(panel for panel in panels if panel["id"] == 47)
         combined_scan["gridPos"] = {"h": 3, "w": 6, "x": 0, "y": 76}
@@ -2660,7 +2730,7 @@ def build_dashboard(view: str = "combined") -> dict:
         "timezone": "browser",
         "title": dashboard_title,
         "uid": dashboard_uid,
-        "version": 14,
+        "version": 15,
         "weekStart": "monday",
     }
 

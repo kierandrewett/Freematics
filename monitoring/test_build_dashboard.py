@@ -20,7 +20,7 @@ from package_ota_release import (  # noqa: E402
 
 class DashboardViewsTest(unittest.TestCase):
     def test_dashboard_schema_change_increments_grafana_version(self) -> None:
-        self.assertEqual(build_dashboard("combined")["version"], 14)
+        self.assertEqual(build_dashboard("combined")["version"], 15)
 
     def test_generated_and_checked_in_exports_exclude_configured_private_values(self) -> None:
         if not (REPOSITORY / "local_config.h").exists():
@@ -208,6 +208,7 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("Write failed", json.dumps(journal["fieldConfig"]))
         self.assertEqual(journal["fieldConfig"]["defaults"]["noValue"], "No fresh result")
         self.assertTrue(any("freematics_obd_state{" in expression for expression in expressions))
+
         self.assertTrue(any("freematics_obd_last_latency_milliseconds{" in expression for expression in expressions))
         self.assertEqual(quality_panel["datasource"]["uid"], "freematics-prometheus")
         scan = next(panel for panel in dashboard["panels"] if panel["id"] == 47)
@@ -254,6 +255,63 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertTrue(all("freematics_device_data_age_seconds" in target["expr"] for target in health["targets"][:2]))
         self.assertIn("Degraded", json.dumps(quality_panel))
         self.assertIn("ISO 15765 11-bit 500 kbps", json.dumps(quality_panel))
+
+    def test_sd_append_duration_is_visible_live_and_in_capture_time_history(self) -> None:
+        live = build_dashboard("live")
+        live_panel = next(panel for panel in live["panels"] if panel["id"] == 58)
+        self.assertEqual(live_panel["title"], "SD journal append duration")
+        self.assertIn("freematics_device_journal_append_duration_ms", live_panel["targets"][0]["expr"])
+        self.assertEqual(live_panel["fieldConfig"]["defaults"]["unit"], "ms")
+        self.assertIn("scrape time, not device capture time", live_panel["description"])
+
+        trips = build_dashboard("trips")
+        history_panel = next(panel for panel in trips["panels"] if panel["id"] == 59)
+        self.assertIn("m.pid = '0x0A8'", history_panel["targets"][0]["queryText"])
+        self.assertIn("sequence", history_panel["targets"][0]["queryText"])
+        self.assertFalse(history_panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript(
+                (REPOSITORY / "collector" / "history_schema.sql").read_text(encoding="utf-8")
+            )
+            connection.execute(
+                "INSERT INTO trip(device_id,trip_id,archive_path,collector_login_ms,"
+                "timestamp_quality,archive_mtime_ms,updated_at_ms) "
+                "VALUES ('CAR','TRIP','/data/CAR/TRIP.txt',1000,'device',2000,2000)"
+            )
+            for sequence, capture_ms, capture_id, duration in (
+                (0, 1000, 0, 90),
+                (1, 1250, 1, 180),
+                (2, 2000, 4, 650),
+            ):
+                connection.execute(
+                    "INSERT INTO sample(device_id,trip_id,sequence,device_monotonic_ms,"
+                    "timeline_ms,archive_mtime_ms,timestamp_quality,capture_session_id,capture_sequence) "
+                    "VALUES ('CAR','TRIP',?,?,?,2000,'device','BOOT',?)",
+                    (sequence, capture_ms, capture_ms, capture_id),
+                )
+                connection.execute(
+                    "INSERT INTO sample_metric(device_id,trip_id,sequence,pid,numeric_value) "
+                    "VALUES ('CAR','TRIP',?,'0x0A8',?)",
+                    (sequence, duration),
+                )
+            sql = history_panel["targets"][0]["queryText"]
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            self.assertEqual(connection.execute(sql).fetchall(), [
+                (1.0, 90.0),
+                (1.25, 180.0),
+                (1.625, None),
+                (2.0, 650.0),
+            ])
+        finally:
+            connection.close()
 
     def test_combined_view_keeps_historical_device_series(self) -> None:
         dashboard = build_dashboard("combined")

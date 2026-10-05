@@ -3617,6 +3617,137 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
+      "description": "Device-measured duration of the preceding SD journal append attempt, including lock wait and read-back verification; it is captured in the next journaled sample. Compare with the 250 ms capture cadence: longer appends can explain missed sampling deadlines. This is not upload arrival latency. This live Prometheus trend is timestamped at scrape time, not device capture time; use the Trips history panel for capture-time alignment. Samples lost during total SD failure cannot report their own duration.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Previous append attempt"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "green"
+                    },
+                    {
+                      "value": 250,
+                      "color": "orange"
+                    },
+                    {
+                      "value": 500,
+                      "color": "red"
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.thresholdsStyle",
+                "value": {
+                  "mode": "line+area"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "id": 58,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_journal_append_duration_ms{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Previous append attempt",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "SD journal append duration",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "freematics-prometheus"
+      },
       "description": "Upload queue and unacknowledged microSD backlog, plus cumulative unrecorded capture cycles and their last durably reported causes: no working frame, SD unavailable, journal commit failure, or sampling deadline overrun. Cause counters are bounded diagnostic state, not buffered readings; they are included in the next successful journaled capture and can be lost on reboot before that commit. Categories can overlap (for example, slow SD writes can also cause deadline overruns). A gap during a total storage outage cannot be reported until SD recovers.",
       "fieldConfig": {
         "defaults": {
@@ -4001,6 +4132,6 @@
   "timezone": "browser",
   "title": "Vehicle · Live",
   "uid": "freematics-live",
-  "version": 14,
+  "version": 15,
   "weekStart": "monday"
 }

@@ -12,11 +12,13 @@ class RecordingGapMetricsTests(unittest.TestCase):
             0x9F: "sd_unavailable_readings",
             0xA6: "journal_commit_failures",
             0xA7: "sample_deadline_overruns",
+            0xA8: "journal_append_duration_ms",
         }
         for pid, key in expected.items():
             with self.subTest(pid=hex(pid)):
                 self.assertEqual(catalog[pid].key, key)
-                self.assertEqual(catalog[pid].unit, "count")
+                expected_unit = "millisecond" if pid == 0xA8 else "count"
+                self.assertEqual(catalog[pid].unit, expected_unit)
                 self.assertEqual(catalog[pid].decoder, "integer")
 
     def test_collector_protocol_ids_match_the_firmware(self) -> None:
@@ -28,6 +30,7 @@ class RecordingGapMetricsTests(unittest.TestCase):
             ("PID_SD_UNAVAILABLE_READINGS", "0x9F"),
             ("PID_JOURNAL_COMMIT_FAILURES", "0xA6"),
             ("PID_SAMPLE_DEADLINE_OVERRUNS", "0xA7"),
+            ("PID_JOURNAL_APPEND_DURATION_MS", "0xA8"),
         ):
             with self.subTest(name=name):
                 self.assertIn(f"#define {name} {value}", firmware)
@@ -41,6 +44,7 @@ class RecordingGapMetricsTests(unittest.TestCase):
             ("sd_unavailable_readings", "PID_SD_UNAVAILABLE_READINGS"),
             ("journal_commit_failures", "PID_JOURNAL_COMMIT_FAILURES"),
             ("sample_deadline_overruns", "PID_SAMPLE_DEADLINE_OVERRUNS"),
+            ("journal_append_duration_ms", "PID_JOURNAL_APPEND_DURATION_MS"),
         ):
             with self.subTest(name=name):
                 self.assertIn(f"freematics_device_{name}", exporter)

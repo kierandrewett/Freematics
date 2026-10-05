@@ -90,6 +90,11 @@ assert sequence_capture < missed_snapshot < missed_serialization < sample_commit
     "capture sequence and missed-count snapshot must be serialized before commit; "
     "failed commits must increment the count for a later checkpoint"
 )
+assert "journalAppendDurationKnown" in collect_sample
+assert "buffer->add(PID_JOURNAL_APPEND_DURATION_MS, ELEMENT_UINT32" in collect_sample
+assert collect_sample.index("buffer->add(PID_JOURNAL_APPEND_DURATION_MS") < sample_commit, (
+    "sample must capture the preceding SD append duration before its own commit"
+)
 wrap_up = extract(firmware, "void process()")
 checkpoint_capture = wrap_up.index("const bool checkpointPending = wrapUpCheckpointPolicy.pending();")
 checkpoint_collect = wrap_up.index("collectSample();", checkpoint_capture)
@@ -104,6 +109,7 @@ assert "durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), 
 assert "do {" in journal_sample and "while (lockTimedOut && durableQueue.cachedHealthy())" in journal_sample
 assert "frame.timestamp(buffer->timestamp)" in journal_sample
 assert "lastJournalCommitTime" in firmware
+assert "lastJournalAppendDurationMs = millis() - appendStartedAt;" in journal_sample
 assert "const uint32_t progressAt = haveJournalCommit ? journaledAt : recordingMonitorSince;" in firmware
 csv_sample = sd_commit_path.split("// The journal is authoritative.", 1)[1]
 assert "SDGuard csvGuard;" in csv_sample
@@ -126,8 +132,8 @@ setup = extract(firmware, "void setup()")
 assert "otaStorageReady = durableQueue.probeStorage();" in setup
 # The SD retry path powers the bus down and back up. The fake card has no bus.
 journal_sample = journal_sample.replace(
-    "if (durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), session,\n                                      sequence, &lockTimedOut)) return true;",
-    "if (simulatedJournalAppend(frame.buffer(), (uint16_t)frame.length(), session, sequence, &lockTimedOut)) return true;")
+    "durableQueue.appendIdentified(", "simulatedJournalAppend(")
+journal_sample = "static uint32_t lastJournalAppendDurationMs = 0;\nstatic bool journalAppendDurationKnown = false;\n" + journal_sample
 
 code = r'''
 #include <cassert>
@@ -253,6 +259,9 @@ static void sampleOnce()
     buffer->add(0x100, ELEMENT_FLOAT_D2, (void*)&value, sizeof(value));
     uint32_t missedReadings = bufman.missedReadings();
     buffer->add(0x8E, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));
+    if (journalAppendDurationKnown)
+      buffer->add(0xA8, ELEMENT_UINT32, &lastJournalAppendDurationMs,
+                  sizeof(lastJournalAppendDurationMs));
     buffer->timestamp = nextSampleAt;
     const bool journaled = durableQueue.cachedHealthy() && journalSample(buffer, 1, sampleSequence);
     if (journaled) logger.timestamp(buffer->timestamp);
@@ -322,6 +331,20 @@ static bool journalHasCheckpoint(uint32_t expectedSequence, uint32_t expectedMis
     return found;
 }
 
+static bool journalHasAppendDuration(uint32_t expectedDurationMs)
+{
+    DurableQueue reader;
+    if (!reader.begin()) return false;
+    static char frame[8192];
+    const std::string expected = "A8:" + std::to_string(expectedDurationMs) + ",";
+    for (;;) {
+        uint16_t length = 0;
+        if (!reader.peek(frame, sizeof(frame), &length)) break;
+        if (std::string(frame, length).find(expected) != std::string::npos) return true;
+    }
+    return false;
+}
+
 int main()
 {
     bufman.init();
@@ -338,10 +361,12 @@ int main()
     bool okay = BUFFER_SLOTS == 1 && peakHeld <= 1 && heldAtEnd == 0 &&
       totalSamples == logger.lines + bufman.missedReadings() + heldAtEnd && accountingBalanced();
     okay = okay && bufman.missedReadings() > 0 && journalMatchesLogger();
-    okay = okay && simulatedLockTimeouts == 0;
+    okay = okay && simulatedLockTimeouts == 0 && journalAppendDurationKnown &&
+      lastJournalAppendDurationMs == 650 && journalHasAppendDuration(650);
     appendLatencyMs = 0;
     const unsigned opens = cardOpens;
-    std::cout << (okay ? "PASS" : "FAIL") << ": SD lock contention retried; slow SD blocks sampling; one in-flight frame, skipped intervals counted, committed bytes verified; missed="
+    std::cout << (okay ? "PASS" : "FAIL") << ": SD lock contention retried; slow SD blocks sampling; one in-flight frame, skipped intervals counted, append duration captured in next durable sample; measured_append_ms="
+              << lastJournalAppendDurationMs << ", missed="
               << bufman.missedReadings()
               << ", journaled=" << logger.lines << ", opens=" << opens << "\n";
     if (!okay) return 1;
