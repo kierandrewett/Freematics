@@ -139,6 +139,7 @@ void collectSample() {
 }
 '''
 code += "#define DTC_STATUS_NO_RESPONSE 0\n#define PID_SPEED 0x0D\n#define PID_RPM 0x0C\n"
+code += '#include "recording_gap_counters.h"\n'
 code += source[source.index('typedef struct {'):source.index('CBufferManager bufman;')]
 code += source[source.index('struct OBDSnapshot {'):source.index('OBDSnapshot obdSnapshot = {};')+len('OBDSnapshot obdSnapshot = {};')]
 code += '''\nint sensorMux; uint32_t lastMotionTime=0; void updateOBDDistance(float) {}\n'''
@@ -164,6 +165,7 @@ code += extract(client, 'void CBufferManager::recordMissedReading(uint32_t count
 code += extract(client, 'uint32_t CBufferManager::missedReadings() const') + '\n'
 code += extract(client, 'uint16_t CBufferManager::unpersistedReadings() const') + '\n'
 code += 'CBufferManager bufman;\n'
+code += 'RecordingGapCounters recordingGapCounters;\n'
 code += function('void emitOBDSnapshot(CBuffer* buffer)') + '\n'
 # The real standby decision is covered by tools/check-device-lifecycle.py.
 # Here the car is always in use, so every deadline must produce a sample.
@@ -214,7 +216,9 @@ int main(int argc, char** argv) {
   for(uint16_t pid: {PID_GPS_DATE,PID_GPS_TIME,PID_GPS_LATITUDE,PID_GPS_LONGITUDE,PID_GPS_ALTITUDE,
       PID_GPS_SPEED,PID_GPS_HEADING,PID_GPS_SAT_COUNT,PID_GPS_HDOP,PID_GPS_AGE,PID_CSQ,PID_CSQ_AGE,
       PID_NETWORK_TRANSPORT,PID_BATTERY_VOLTAGE,PID_VOLTAGE_AGE,PID_MEMS_AGE,PID_TRIP_DISTANCE,
-      PID_DEVICE_TEMP,PID_QUEUE_READINGS,PID_QUEUE_BYTES,PID_MISSED_READINGS,PID_DURABLE_QUEUE_BYTES,PID_DURABLE_QUEUE_HEALTH})
+      PID_DEVICE_TEMP,PID_QUEUE_READINGS,PID_QUEUE_BYTES,PID_MISSED_READINGS,PID_BUFFER_EXHAUSTION_READINGS,
+      PID_SD_UNAVAILABLE_READINGS,PID_JOURNAL_COMMIT_FAILURES,PID_SAMPLE_DEADLINE_OVERRUNS,
+      PID_DURABLE_QUEUE_BYTES,PID_DURABLE_QUEUE_HEALTH})
       assert(rich.add(pid,ELEMENT_UINT32,&scalar,sizeof(scalar)));
   assert(rich.total>255); // validates widened element count
   // Waveform failure cases: preserve short excursions between frame times,
@@ -340,6 +344,7 @@ int main(int argc, char** argv) {
   for(int i=0;i<2400;i++){uint32_t before=tick;process();assert(tick-before==250);}
   std::cout<<"PASS: 2400 fixed 250ms deadlines without accumulated 17ms formatting drift\n";
   formattingMs=600;process();assert(bufman.missedReadings()==2);
+  assert(recordingGapCounters.get(RecordingGapCounters::kDeadlineOverrun)==2);
   std::cout<<"PASS: sampling overload records skipped deadlines rather than fabricating catch-up readings\n";
   formattingMs=17;
   for(unsigned i=0;i<32;++i) assert(sensorWaveforms.recordVoltage(tick+i,14));

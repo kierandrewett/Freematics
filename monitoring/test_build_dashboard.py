@@ -19,6 +19,9 @@ from package_ota_release import (  # noqa: E402
 
 
 class DashboardViewsTest(unittest.TestCase):
+    def test_dashboard_schema_change_increments_grafana_version(self) -> None:
+        self.assertEqual(build_dashboard("combined")["version"], 14)
+
     def test_generated_and_checked_in_exports_exclude_configured_private_values(self) -> None:
         if not (REPOSITORY / "local_config.h").exists():
             self.skipTest("private firmware configuration is unavailable for local-value scan")
@@ -97,6 +100,8 @@ class DashboardViewsTest(unittest.TestCase):
         supply, ecu = panel["targets"]
         self.assertEqual(supply["legendFormat"], "Vehicle supply (Model B input)")
         self.assertEqual(ecu["legendFormat"], "ECU control-module voltage (PID 0x042)")
+        self.assertEqual(supply["interval"], "250ms")
+        self.assertEqual(ecu["interval"], "1s")
         self.assertIn("freematics_device_battery_voltage_capture_volts", supply["expr"])
         self.assertIn("freematics_device_battery_voltage_age_seconds", supply["expr"])
         self.assertIn("> 1", supply["expr"])
@@ -119,6 +124,8 @@ class DashboardViewsTest(unittest.TestCase):
         dashboard = build_dashboard("live")
         panel = next(panel for panel in dashboard["panels"] if panel["id"] == 51)
         supply, ecu = panel["targets"]
+        self.assertEqual(supply["interval"], "250ms")
+        self.assertEqual(ecu["interval"], "1s")
         self.assertIn("freematics_device_battery_voltage_capture_volts", supply["expr"])
         self.assertIn("freematics_device_battery_voltage_age_seconds", supply["expr"])
         self.assertIn("> 1", supply["expr"])
@@ -185,7 +192,16 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertTrue(any("freematics_device_queue_readings" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_device_queue_bytes" in target["expr"] for target in queue["targets"]))
         self.assertTrue(any("freematics_device_missed_readings" in target["expr"] for target in queue["targets"]))
-        self.assertIn("unrecorded cycles are not recoverable data", queue["description"])
+        queue_metrics = " ".join(target["expr"] for target in queue["targets"])
+        for metric in (
+            "freematics_device_buffer_exhaustion_readings",
+            "freematics_device_sd_unavailable_readings",
+            "freematics_device_journal_commit_failures",
+            "freematics_device_sample_deadline_overruns",
+        ):
+            self.assertIn(metric, queue_metrics)
+        self.assertIn("next successful", queue["description"])
+        self.assertIn("not buffered readings", queue["description"])
         journal = next(panel for panel in dashboard["panels"] if panel["id"] == 56)
         self.assertEqual(journal["title"], "SD journal write")
         self.assertIn("freematics_device_durable_queue_healthy", journal["targets"][0]["expr"])
@@ -768,7 +784,11 @@ class DashboardViewsTest(unittest.TestCase):
     def test_historical_missed_cycle_chart_shows_wrap_up_total_and_capture_gap(self) -> None:
         panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 54)
         self.assertEqual(panel["title"], "Unrecorded sample cycles")
-        self.assertIn("does not identify whether timing", panel["description"])
+        self.assertIn("buffer exhaustion", panel["description"])
+        self.assertIn("SD unavailable", panel["description"])
+        query = panel["targets"][0]["queryText"]
+        for pid in ("0x09E", "0x09F", "0x0A6", "0x0A7"):
+            self.assertIn(pid, query)
         custom = panel["fieldConfig"]["defaults"]["custom"]
         self.assertEqual(custom["lineInterpolation"], "stepAfter")
         self.assertFalse(custom["spanNulls"])
@@ -781,17 +801,30 @@ class DashboardViewsTest(unittest.TestCase):
                 "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
                 "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 2000, 'device', 4, 2000, 2000)"
             )
-            for sequence, timeline, capture_sequence, missed in (
-                (0, 1000, 0, 0), (1, 1250, 1, 0), (2, 1500, 2, 1), (3, 2000, 5, 4),
+            for sequence, timeline, session, capture_sequence, missed, buffer_miss, sd_miss, commit_fail, overrun in (
+                (0, 1000, "BOOT", 0, 0, 0, 0, 0, 0),
+                (1, 1250, "BOOT", 1, 0, 0, 0, 0, 0),
+                (2, 1500, "BOOT", 2, 1, 0, 1, 0, 0),
+                (3, 2000, "BOOT", 5, 4, 1, 2, 1, 1),
+                (4, 2250, "BOOT2", 0, 0, 0, 0, 0, 0),
             ):
                 connection.execute(
                     "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, archive_mtime_ms, timestamp_quality, capture_session_id, capture_sequence) "
-                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 2000, 'device', 'BOOT', ?)",
-                    (sequence, timeline - 1000, timeline, capture_sequence),
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 2000, 'device', ?, ?)",
+                    (sequence, timeline - 1000, timeline, session, capture_sequence),
                 )
                 connection.execute(
                     "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, '0x08E', ?)",
                     (sequence, missed),
+                )
+                connection.executemany(
+                    "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
+                    (
+                        (sequence, "0x09E", buffer_miss),
+                        (sequence, "0x09F", sd_miss),
+                        (sequence, "0x0A6", commit_fail),
+                        (sequence, "0x0A7", overrun),
+                    ),
                 )
             sql = panel["targets"][0]["queryText"]
             for variable, value in {
@@ -802,7 +835,13 @@ class DashboardViewsTest(unittest.TestCase):
             }.items():
                 sql = sql.replace(variable, value)
             self.assertEqual(connection.execute(sql).fetchall(), [
-                (1.0, 0), (1.25, 0), (1.5, 1), (1.75, None), (2.0, 4),
+                (1.0, 0, 0, 0, 0, 0),
+                (1.25, 0, 0, 0, 0, 0),
+                (1.5, 1, 0, 1, 0, 0),
+                (1.75, None, None, None, None, None),
+                (2.0, 4, 1, 2, 1, 1),
+                (2.125, None, None, None, None, None),
+                (2.25, 0, 0, 0, 0, 0),
             ])
         finally:
             connection.close()

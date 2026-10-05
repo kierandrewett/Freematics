@@ -1312,7 +1312,8 @@
           "expr": "((freematics_device_battery_voltage_capture_volts{device_id=\"$device\"} and on(device_id,trip_id) freematics_device_battery_voltage_age_seconds{device_id=\"$device\"}) unless on(device_id,trip_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1))",
           "legendFormat": "Vehicle supply (Model B input)",
           "range": true,
-          "refId": "A"
+          "refId": "A",
+          "interval": "250ms"
         },
         {
           "datasource": {
@@ -1323,7 +1324,8 @@
           "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x042\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "ECU control-module voltage (PID 0x042)",
           "range": true,
-          "refId": "B"
+          "refId": "B",
+          "interval": "1s"
         }
       ],
       "title": "Vehicle supply and ECU voltage",
@@ -3615,7 +3617,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Readings waiting for upload, the unacknowledged microSD backlog, and cumulative sampling cycles the firmware says it did not record. Queue growth indicates upload back-pressure; unrecorded cycles are not recoverable data. The separate SD journal write status reports the latest journal result, not proof of complete media health.",
+      "description": "Upload queue and unacknowledged microSD backlog, plus cumulative unrecorded capture cycles and their last durably reported causes: no working frame, SD unavailable, journal commit failure, or sampling deadline overrun. Cause counters are bounded diagnostic state, not buffered readings; they are included in the next successful journaled capture and can be lost on reboot before that commit. Categories can overlap (for example, slow SD writes can also cause deadline overruns). A gap during a total storage outage cannot be reported until SD recovers.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -3782,6 +3784,50 @@
           "legendFormat": "Unrecorded cycles",
           "range": true,
           "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_buffer_exhaustion_readings{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Buffer exhausted",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_sd_unavailable_readings{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "SD unavailable",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_journal_commit_failures{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Journal commit failed",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "freematics-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(freematics_device_sample_deadline_overruns{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "legendFormat": "Sampling overruns",
+          "range": true,
+          "refId": "H"
         }
       ],
       "title": "Telemetry queue",
@@ -3955,6 +4001,6 @@
   "timezone": "browser",
   "title": "Vehicle · Live",
   "uid": "freematics-live",
-  "version": 13,
+  "version": 14,
   "weekStart": "monday"
 }

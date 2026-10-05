@@ -61,6 +61,7 @@ def target(
     *,
     instant: bool = False,
     table: bool = False,
+    min_step: str | None = None,
 ) -> dict:
     result = {
         "datasource": DS,
@@ -74,6 +75,11 @@ def target(
         result["instant"] = True
     if table:
         result["format"] = "table"
+    if min_step:
+        # Grafana persists the Prometheus query's Min step as `interval`.
+        # Bound live query resolution to the acquisition cadence so short RPM
+        # and voltage events are less flattened onto coarse evaluation steps.
+        result["interval"] = min_step
     return result
 
 
@@ -176,6 +182,8 @@ def historical_series_with_gap_breaks(sql: str, value_columns: tuple[str, ...]) 
         "SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time "
         "FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > "
         f"{HISTORICAL_CAPTURE_GAP_THRESHOLD_MS} OR "
+        "(capture_session_id IS NOT NULL AND next_capture_session_id IS NOT NULL "
+        "AND capture_session_id <> next_capture_session_id) OR "
         "(capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id "
         "AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL "
         "AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 "
@@ -1115,11 +1123,13 @@ def build_dashboard(view: str = "combined") -> dict:
                         ),
                         "A",
                         "Vehicle supply (Model B input)",
+                        min_step="250ms",
                     ),
                     target(
                         fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x042"}}'),
                         "B",
                         "ECU control-module voltage (PID 0x042)",
+                        min_step="1s",
                     ),
                 ],
                 unit="volt",
@@ -1645,13 +1655,20 @@ def build_dashboard(view: str = "combined") -> dict:
                     target(fresh_device(f"freematics_device_queue_bytes{{{DEVICE}}}"), "B", "Queued bytes"),
                     target(fresh_device(f"freematics_device_durable_queue_bytes{{{DEVICE}}}"), "C", "SD backlog"),
                     target(fresh_device(f"freematics_device_missed_readings{{{DEVICE}}}"), "D", "Unrecorded cycles"),
+                    target(fresh_device(f"freematics_device_buffer_exhaustion_readings{{{DEVICE}}}"), "E", "Buffer exhausted"),
+                    target(fresh_device(f"freematics_device_sd_unavailable_readings{{{DEVICE}}}"), "F", "SD unavailable"),
+                    target(fresh_device(f"freematics_device_journal_commit_failures{{{DEVICE}}}"), "G", "Journal commit failed"),
+                    target(fresh_device(f"freematics_device_sample_deadline_overruns{{{DEVICE}}}"), "H", "Sampling overruns"),
                 ],
                 unit="short",
                 description=(
-                    "Readings waiting for upload, the unacknowledged microSD backlog, and cumulative "
-                    "sampling cycles the firmware says it did not record. Queue growth indicates upload "
-                    "back-pressure; unrecorded cycles are not recoverable data. The separate SD journal "
-                    "write status reports the latest journal result, not proof of complete media health."
+                    "Upload queue and unacknowledged microSD backlog, plus cumulative unrecorded capture "
+                    "cycles and their last durably reported causes: no working frame, SD unavailable, "
+                    "journal commit failure, or sampling deadline overrun. Cause counters are bounded "
+                    "diagnostic state, not buffered readings; they are included in the next successful "
+                    "journaled capture and can be lost on reboot before that commit. Categories can overlap "
+                    "(for example, slow SD writes can also cause deadline overruns). A gap during a total "
+                    "storage outage cannot be reported until SD recovers."
                 ),
                 overrides=[
                     by_name("Queued bytes", ("unit", "decbytes")),
@@ -2426,7 +2443,11 @@ def build_dashboard(view: str = "combined") -> dict:
         panels.append(idle_correlation_panel)
         missed_readings_sql = (
             "SELECT s.timeline_ms / 1000.0 AS time, "
-            "MAX(CASE WHEN m.pid = '0x08E' THEN m.numeric_value END) AS \"Missed collection cycles\" "
+            "MAX(CASE WHEN m.pid = '0x08E' THEN m.numeric_value END) AS \"Missed collection cycles\", "
+            "MAX(CASE WHEN m.pid = '0x09E' THEN m.numeric_value END) AS \"Buffer exhausted\", "
+            "MAX(CASE WHEN m.pid = '0x09F' THEN m.numeric_value END) AS \"SD unavailable\", "
+            "MAX(CASE WHEN m.pid = '0x0A6' THEN m.numeric_value END) AS \"Journal commit failed\", "
+            "MAX(CASE WHEN m.pid = '0x0A7' THEN m.numeric_value END) AS \"Sampling overruns\" "
             "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
             "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
             f"WHERE {sample_trip_where} AND s.{historical_range} "
@@ -2439,21 +2460,29 @@ def build_dashboard(view: str = "combined") -> dict:
             104,
             24,
             6,
-            [history_target(
-                historical_series_with_gap_breaks(missed_readings_sql, ("Missed collection cycles",)),
-                format="time_series",
-            )],
+            [history_target(historical_series_with_gap_breaks(missed_readings_sql, (
+                "Missed collection cycles", "Buffer exhausted", "SD unavailable",
+                "Journal commit failed", "Sampling overruns",
+            )), format="time_series")],
             unit="short",
             description=(
-                "Cumulative firmware-reported sampling cycles that were not journaled, including the final "
-                "wrap-up checkpoint when it commits successfully. A rising step proves the device counted "
-                "lost cycles, but does not identify whether timing, buffer availability, or SD caused them. "
-                "A flat line is not proof that no loss occurred; missing checkpoint data means the final "
-                "counter could not be durably reported. Capture-sequence gaps remain separately visible "
-                "in the evidence table."
+                "Cumulative unrecorded cycles and bounded per-boot cause counters committed in later SD "
+                "frames: buffer exhaustion, SD unavailable, journal commit failure, and absolute sampling "
+                "deadline overrun. Cause counters are not a RAM reading backlog and cannot be committed "
+                "while the card is unavailable; a later recovered frame reports them unless power loss or "
+                "reboot occurs first. Categories can overlap. Flat or missing "
+                "series do not prove no loss. Capture-sequence gaps remain separately visible in the evidence table."
             ),
             overrides=[
                 by_name("Missed collection cycles", ("color", {"fixedColor": "orange", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
+                by_name("Buffer exhausted", ("color", {"fixedColor": "purple", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
+                by_name("SD unavailable", ("color", {"fixedColor": "red", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
+                by_name("Journal commit failed", ("color", {"fixedColor": "yellow", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
+                by_name("Sampling overruns", ("color", {"fixedColor": "blue", "mode": "fixed"}),
                         ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
             ],
         )
@@ -2631,7 +2660,7 @@ def build_dashboard(view: str = "combined") -> dict:
         "timezone": "browser",
         "title": dashboard_title,
         "uid": dashboard_uid,
-        "version": 13,
+        "version": 14,
         "weekStart": "monday",
     }
 

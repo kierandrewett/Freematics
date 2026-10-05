@@ -76,6 +76,8 @@ void freematicsMarkSystemTimeTrusted();
 #define PID_ACC_PEAK_VECTOR 0x9B
 #define PID_VOLTAGE_MIN 0x9C
 #define PID_VOLTAGE_MAX 0x9D
+#define PID_BUFFER_EXHAUSTION_READINGS 0x9E
+#define PID_SD_UNAVAILABLE_READINGS 0x9F
 // Condition-monitoring waveform format 1. Repeated fields retain raw sensor
 // acquisitions in source order inside an ordinary telemetry frame.
 #define PID_WAVEFORM_VOLTAGE 0xA0
@@ -84,6 +86,8 @@ void freematicsMarkSystemTimeTrusted();
 #define PID_WAVEFORM_GYRO 0xA3
 #define PID_WAVEFORM_LOSSES 0xA4
 #define PID_WAVEFORM_FORMAT 0xA5
+#define PID_JOURNAL_COMMIT_FAILURES 0xA6
+#define PID_SAMPLE_DEADLINE_OVERRUNS 0xA7
 #define PID_OBD_AGE_BASE 0x400
 #define PID_DTC_AGE_BASE 0x360
 #define DTC_CODE_SLOTS 15

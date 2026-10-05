@@ -356,6 +356,14 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_durable_queue_bytes gauge\n"
 		"# HELP freematics_device_missed_readings Cumulative unrecorded sampling cycles since boot; does not identify the cause or recover missing measurements.\n"
 		"# TYPE freematics_device_missed_readings gauge\n"
+		"# HELP freematics_device_buffer_exhaustion_readings Captures skipped because no working telemetry frame was available; cumulative since boot.\n"
+		"# TYPE freematics_device_buffer_exhaustion_readings gauge\n"
+		"# HELP freematics_device_sd_unavailable_readings Captures that could not be journaled because SD was unavailable; cumulative since boot.\n"
+		"# TYPE freematics_device_sd_unavailable_readings gauge\n"
+		"# HELP freematics_device_journal_commit_failures Captures whose SD journal commit failed while storage was considered available; cumulative since boot.\n"
+		"# TYPE freematics_device_journal_commit_failures gauge\n"
+		"# HELP freematics_device_sample_deadline_overruns Sampling slots skipped after collection missed its absolute deadline; cumulative since boot.\n"
+		"# TYPE freematics_device_sample_deadline_overruns gauge\n"
 		"# HELP freematics_device_durable_queue_healthy Whether the microSD journal accepted its latest write.\n"
 		"# TYPE freematics_device_durable_queue_healthy gauge\n"
 		"# HELP freematics_device_rejected_readings Journal records refused by the collector since boot, kept on the card.\n"
@@ -464,6 +472,10 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_device_queue_bytes", pld->devid, pld->tripid, pld->data + PID_QUEUE_BYTES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_bytes", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_BYTES, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_missed_readings", pld->devid, pld->tripid, pld->data + PID_MISSED_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_buffer_exhaustion_readings", pld->devid, pld->tripid, pld->data + PID_BUFFER_EXHAUSTION_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_sd_unavailable_readings", pld->devid, pld->tripid, pld->data + PID_SD_UNAVAILABLE_READINGS, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_journal_commit_failures", pld->devid, pld->tripid, pld->data + PID_JOURNAL_COMMIT_FAILURES, 1);
+		l = appendScalarMetric(buf, bs, l, "freematics_device_sample_deadline_overruns", pld->devid, pld->tripid, pld->data + PID_SAMPLE_DEADLINE_OVERRUNS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_durable_queue_healthy", pld->devid, pld->tripid, pld->data + PID_DURABLE_QUEUE_HEALTH, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_rejected_readings", pld->devid, pld->tripid, pld->data + PID_REJECTED_READINGS, 1);
 		l = appendScalarMetric(buf, bs, l, "freematics_device_power_phase", pld->devid, pld->tripid, pld->data + PID_POWER_PHASE, 1);

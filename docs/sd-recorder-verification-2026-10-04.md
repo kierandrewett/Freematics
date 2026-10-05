@@ -62,3 +62,24 @@ and (4) a known-good compatible card on this device. Capture the existing
 the card supply during startup if mount still fails. Do not format the card or
 interpret USB bench voltage as vehicle supply. No test in this follow-up has
 been performed on physical hardware.
+
+## Follow-up — 2026-10-05
+
+Startup mount retries now call `SD.end()` and then `SPI.end()` before the
+250 ms retry delay. In the installed ESP32 Arduino core, a failed card init
+does not assign the SD drive ID, making `SD.end()` a no-op; `SPI.begin()` also
+returns early if the SPI host remains initialized. A full host teardown makes
+the next `SD.begin()` reinitialize SPI. The change matches the existing runtime
+recovery sequence and passed the mount-retry regression test, but is a
+source-based recovery mitigation only; it has not yet been observed on the
+physical card.
+
+The updated firmware sample schema adds cumulative per-boot counters for capture
+buffer exhaustion (`0x09E`), SD-unavailable captures (`0x09F`), journal commit
+failures (`0x0A6`), and fixed-cadence overruns (`0x0A7`). They distinguish
+several gap mechanisms in the following successfully journaled frame. They
+are bounded diagnostic counters, not a RAM sample spool: they can be lost on a
+reset before they are committed, and a slow journal write may appear in both
+the commit-failure and deadline-overrun counts. These signals improve future
+attribution but do not recover the missing samples or guarantee gap-free
+recording.

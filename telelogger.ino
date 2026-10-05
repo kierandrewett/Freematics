@@ -41,6 +41,7 @@
 #include "sdaccess.h"
 #include "sd_retry_policy.h"
 #include "recording_checkpoint_policy.h"
+#include "recording_gap_counters.h"
 #if BOARD_HAS_PSRAM
 #include "esp32/himem.h"
 #endif
@@ -107,6 +108,8 @@ DTC_POLLING_INFO dtcData[] = {
 };
 
 CBufferManager bufman;
+// Compact cause counters only; completed captures are never kept in RAM.
+RecordingGapCounters recordingGapCounters;
 #if STORAGE == STORAGE_SD
 DurableQueue durableQueue;
 #endif
@@ -1894,6 +1897,7 @@ void collectSample()
 
   CBuffer* buffer = bufman.getFree();
   if (!buffer) {
+    recordingGapCounters.add(RecordingGapCounters::kBufferExhaustion);
     bufman.recordMissedReading();
     delay(50);
     return;
@@ -1957,6 +1961,14 @@ void collectSample()
   buffer->add(PID_QUEUE_BYTES, ELEMENT_UINT32, &queuedBytes, sizeof(queuedBytes));
   uint32_t missedReadings = bufman.missedReadings();
   buffer->add(PID_MISSED_READINGS, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));
+  uint32_t bufferExhaustion = recordingGapCounters.get(RecordingGapCounters::kBufferExhaustion);
+  uint32_t sdUnavailable = recordingGapCounters.get(RecordingGapCounters::kSdUnavailable);
+  uint32_t journalCommitFailures = recordingGapCounters.get(RecordingGapCounters::kJournalCommitFailure);
+  uint32_t deadlineOverruns = recordingGapCounters.get(RecordingGapCounters::kDeadlineOverrun);
+  buffer->add(PID_BUFFER_EXHAUSTION_READINGS, ELEMENT_UINT32, &bufferExhaustion, sizeof(bufferExhaustion));
+  buffer->add(PID_SD_UNAVAILABLE_READINGS, ELEMENT_UINT32, &sdUnavailable, sizeof(sdUnavailable));
+  buffer->add(PID_JOURNAL_COMMIT_FAILURES, ELEMENT_UINT32, &journalCommitFailures, sizeof(journalCommitFailures));
+  buffer->add(PID_SAMPLE_DEADLINE_OVERRUNS, ELEMENT_UINT32, &deadlineOverruns, sizeof(deadlineOverruns));
 #if STORAGE == STORAGE_SD
   uint32_t durableBytes = durableQueue.cachedPendingBytes();
   buffer->add(PID_DURABLE_QUEUE_BYTES, ELEMENT_UINT32, &durableBytes, sizeof(durableBytes));
@@ -2118,6 +2130,8 @@ void collectSample()
     // The live USB frame may have been emitted, but failed SD writes are not
     // replay candidates. Account its waveform points and expose the gap.
     accountUnjournaledWaveforms(buffer);
+    recordingGapCounters.add(durableAvailable ? RecordingGapCounters::kJournalCommitFailure :
+                             RecordingGapCounters::kSdUnavailable);
     bufman.recordMissedReading();
   }
   bufman.free(buffer);
@@ -2272,7 +2286,9 @@ void process()
   // If overloaded, skip expired slots rather than inventing catch-up samples.
   const uint32_t elapsed = xTaskGetTickCount() - deadline;
   if (elapsed >= pdMS_TO_TICKS(SAMPLE_INTERVAL_MS)) {
-    bufman.recordMissedReading(elapsed / pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
+    const uint32_t missedSlots = elapsed / pdMS_TO_TICKS(SAMPLE_INTERVAL_MS);
+    recordingGapCounters.add(RecordingGapCounters::kDeadlineOverrun, missedSlots);
+    bufman.recordMissedReading(missedSlots);
     deadline = xTaskGetTickCount();
   }
   vTaskDelayUntil(&deadline, pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
