@@ -202,11 +202,52 @@ verification from changing the bytes handed to `gh`, and detects a tag move
 during preflight. It prevents safe files being appended to a release that
 already contains unknown or credential-bearing artifacts. It never uploads
 logs, source archives, or build directories. It requires an existing release
-tag and never clobbers assets. Use it instead of uploading files manually:
+tag and never clobbers assets. Use it instead of uploading files manually.
+Publication also requires a private hardware-acceptance evidence file passed
+with `--hardware-evidence`. The file must be a regular non-symlink owned by the
+current user with mode exactly `0600`; it is read locally and is never staged,
+committed, or uploaded. The publisher rejects malformed JSON, missing or
+unknown keys, unsupported schema versions, and timestamps other than valid UTC
+RFC3339 (`Z`) timestamps. Its exact schema is:
+
+```json
+{
+  "schema_version": 1,
+  "tested_at": "2026-10-05T12:30:00Z",
+  "firmware_sha256": "<64 lowercase hex characters>",
+  "source_commit": "<40 lowercase hex characters>",
+  "build_id": "<1-32 safe characters>",
+  "device": {"model": "Model B", "flash_bytes": 16777216},
+  "tests": {
+    "boot_identity": true,
+    "sd_journal_readback_replay": true,
+    "upload_continuity": true,
+    "live_usb_telemetry_capture_ages": true,
+    "dashboard_disconnect_recording_continues": true,
+    "car_off_60_minute_gate": true,
+    "motion_cancellation": true,
+    "first_boot_acceptance": true,
+    "rollback": true
+  }
+}
+```
+
+The angle-bracket values are placeholders, not literal JSON values. The SHA-256,
+source commit, and boot build ID must match the exact packaged firmware image.
+Every listed test must be the JSON boolean `true`, and the connected board must
+be verified as a 16 MB Model B. This is an explicit owner attestation, not
+cryptographic proof that tests occurred: retain underlying logs separately and
+never mark a test true without its hardware evidence. Validation completes
+before the publisher invokes `gh`, including tag lookup. Example:
 
 ```sh
-python3 tools/publish_ota_release.py v1.0.1 .pio/ota-release-v1.0.1
+python3 tools/publish_ota_release.py v1.0.1 .pio/ota-release-v1.0.1 \
+  --hardware-evidence /private/path/model-b-acceptance.json
 ```
+
+Create the evidence file outside the repository with restrictive permissions;
+do not commit or upload it. The normal release preflight still runs after this
+gate and can independently refuse publication.
 
 For production releases, enable GitHub release immutability for this repository
 and use a draft release: GitHub locks its tag and assets when the draft is
