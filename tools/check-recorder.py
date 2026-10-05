@@ -32,6 +32,11 @@ storage = (ROOT / "telestore.cpp").read_text()
 storage_header = (ROOT / "telestore.h").read_text()
 queue_source = (ROOT / "telequeue.cpp").read_text()
 config = (ROOT / "config.h").read_text()
+logdata = (ROOT / "collector/logdata.h").read_text()
+missed_pid_match = re.search(r"^#define PID_MISSED_READINGS (0x[0-9A-Fa-f]+)\b", logdata, re.MULTILINE)
+assert missed_pid_match and int(missed_pid_match.group(1), 16) == 0x8E, (
+    "host checkpoint assertion must track the production PID_MISSED_READINGS identity"
+)
 settings = "\n".join(line for line in config.splitlines() if re.match(
     r"#define (LOG_FLUSH_INTERVAL_MS|SAMPLE_FRAME_SIZE|SAMPLE_INTERVAL_MS) ", line))
 slot_match = re.search(r"#if STORAGE == STORAGE_SD\s+#define BUFFER_SLOTS (\d+)\b", config)
@@ -76,6 +81,22 @@ collect_sample = extract(firmware, "void collectSample()")
 assert "const bool durableAvailable = durableQueue.cachedHealthy();" in collect_sample
 assert collect_sample.index("usbTelemetryQueue.publish(record") < collect_sample.index("if (durableAvailable)")
 assert "durableAvailable && journalSample(buffer, usbBootId, sampleSequence)" in collect_sample
+sequence_capture = collect_sample.index("const uint32_t sampleSequence = ++captureSequence;")
+missed_snapshot = collect_sample.index("uint32_t missedReadings = bufman.missedReadings();")
+missed_serialization = collect_sample.index("buffer->add(PID_MISSED_READINGS, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));")
+sample_commit = collect_sample.index("const bool journaled = durableAvailable && journalSample(buffer, usbBootId, sampleSequence);")
+missed_increment = collect_sample.index("bufman.recordMissedReading();", sample_commit)
+assert sequence_capture < missed_snapshot < missed_serialization < sample_commit < missed_increment, (
+    "capture sequence and missed-count snapshot must be serialized before commit; "
+    "failed commits must increment the count for a later checkpoint"
+)
+wrap_up = extract(firmware, "void process()")
+checkpoint_capture = wrap_up.index("const bool checkpointPending = wrapUpCheckpointPolicy.pending();")
+checkpoint_collect = wrap_up.index("collectSample();", checkpoint_capture)
+checkpoint_observe = wrap_up.index("wrapUpCheckpointPolicy.observeJournalCommit(commitsBefore, journalCommitCount);", checkpoint_collect)
+assert checkpoint_capture < checkpoint_collect < checkpoint_observe, (
+    "wrap-up must collect the pending checkpoint before observing its durable commit"
+)
 sd_commit_path = collect_sample.rsplit("#if STORAGE == STORAGE_SD", 1)[-1].split("#else", 1)[0]
 assert "bufman.publish(buffer);" not in sd_commit_path
 journal_sample = extract(firmware, "bool journalSample(CBuffer* buffer, uint64_t session, uint32_t sequence)")
@@ -210,6 +231,7 @@ uint16_t lastSizeKB = 0;
 static constexpr uint32_t SAMPLE_MS = SAMPLE_INTERVAL_MS;
 static uint32_t nextSampleAt = SAMPLE_MS;
 static uint32_t totalSamples = 0;
+static uint32_t captureSequence = 0;
 static uint32_t peakHeld = 0;
 static uint32_t appendLatencyMs = 0;
 bool simulatedJournalAppend(const char* frame, uint16_t length, uint64_t session, uint32_t sequence, bool* lockTimedOut);
@@ -223,13 +245,16 @@ bool simulatedJournalAppend(const char* frame, uint16_t length, uint64_t session
 
 static void sampleOnce()
 {
+    const uint32_t sampleSequence = ++captureSequence;
     CBuffer* buffer = bufman.getFree();
     totalSamples++;
     if (!buffer) { bufman.recordMissedReading(); return; }
     const float value = (float)totalSamples;
     buffer->add(0x100, ELEMENT_FLOAT_D2, (void*)&value, sizeof(value));
+    uint32_t missedReadings = bufman.missedReadings();
+    buffer->add(0x8E, ELEMENT_UINT32, &missedReadings, sizeof(missedReadings));
     buffer->timestamp = nextSampleAt;
-    const bool journaled = durableQueue.cachedHealthy() && journalSample(buffer, 1, totalSamples);
+    const bool journaled = durableQueue.cachedHealthy() && journalSample(buffer, 1, sampleSequence);
     if (journaled) logger.timestamp(buffer->timestamp);
     else bufman.recordMissedReading();
     bufman.free(buffer);
@@ -279,6 +304,24 @@ static bool journalMatchesLogger()
     return !reader.peek(frame, sizeof(frame), &length);
 }
 
+static bool journalHasCheckpoint(uint32_t expectedSequence, uint32_t expectedMissed)
+{
+    DurableQueue reader;
+    if (!reader.begin()) return false;
+    static char frame[8192];
+    bool found = false;
+    for (;;) {
+        uint16_t length = 0;
+        JournalCaptureIdentity identity;
+        if (!reader.peekIdentified(frame, sizeof(frame), &length, &identity)) break;
+        const std::string record(frame, length);
+        const std::string missedField = "8E:" + std::to_string(expectedMissed) + ",";
+        if (identity.session == 1 && identity.sequence == expectedSequence &&
+            record.find(missedField) != std::string::npos) found = true;
+    }
+    return found;
+}
+
 int main()
 {
     bufman.init();
@@ -301,6 +344,29 @@ int main()
     std::cout << (okay ? "PASS" : "FAIL") << ": SD lock contention retried; slow SD blocks sampling; one in-flight frame, skipped intervals counted, committed bytes verified; missed="
               << bufman.missedReadings()
               << ", journaled=" << logger.lines << ", opens=" << opens << "\n";
+    if (!okay) return 1;
+
+    // Model the terminal capture failing at the SD commit boundary immediately
+    // before orderly wrap-up. The following wrap-up checkpoint must be a real
+    // identified journal record containing both the next sequence and updated
+    // PID_MISSED_READINGS. The policy/task ordering is source-checked above;
+    // this host test exercises the actual serializer and DurableQueue, not the
+    // complete FreeRTOS process() scheduler.
+    const uint32_t missedBeforeFailure = bufman.missedReadings();
+    const uint32_t sequenceBeforeFailure = captureSequence;
+    cardOnline = false;
+    sampleOnce();
+    const uint32_t missedAfterFailure = bufman.missedReadings();
+    const bool failureCounted = missedAfterFailure == missedBeforeFailure + 1 &&
+      captureSequence == sequenceBeforeFailure + 1;
+    cardOnline = true;
+    const bool recoveredForWrapUp = durableQueue.begin();
+    sampleOnce(); // orderly wrap-up checkpoint after journal recovery
+    okay = failureCounted && recoveredForWrapUp &&
+      captureSequence == sequenceBeforeFailure + 2 &&
+      journalHasCheckpoint(sequenceBeforeFailure + 2, missedAfterFailure);
+    std::cout << (okay ? "PASS" : "FAIL")
+              << ": failed pre-wrap-up capture is followed by durable checkpoint with updated missed count and capture sequence\n";
     if (!okay) return 1;
 
     // Unavailable media never creates a RAM queue or replay candidate.

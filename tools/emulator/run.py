@@ -474,6 +474,17 @@ public:
                           "bool CStorageRAM::appendRaw(const char* data, unsigned int length)",
                           "void CStorageRAM::checkpoint()", "void CStorageRAM::rollback()"):
             wire += extract_function(storage, signature) + "\n"
+        # Inject the appendBatch reset/reopen regression into the existing
+        # journal scenario translation unit. The test body has access to the
+        # real queue methods and the same fake SD that the rest of the suite
+        # uses, while keeping production sources byte-identical.
+        journal_source = (HERE / "journal_scenarios.cpp").read_text()
+        insertion = "    resetCard();\n    DurableQueue corrupt;"
+        batch_powercut_test = (HERE / "batch_powercut_scenarios.inc").read_text()
+        if journal_source.count(insertion) != 1:
+            raise RuntimeError("could not find unique journal power-cut test insertion point")
+        journal_source = journal_source.replace(insertion, batch_powercut_test + "\n" + insertion)
+        (build / "journal_scenarios.cpp").write_text(journal_source)
         # The production replay batch builder and acknowledgement policy.
         firmware = (ROOT / "telelogger.ino").read_text()
         wire += '#include "sdaccess.h"\n#include "telequeue.h"\n'
@@ -509,14 +520,17 @@ class MEMS_I2C {};
         command = [compiler, "-std=c++17", "-Wall", "-Wextra", "-Wno-unused-parameter", "-O1",
                    "-I", str(HERE), "-I", str(ROOT / "lib/FreematicsPlus"), "-I", str(build),
                    str(HERE / "scenarios.cpp"), str(ROOT / "lib/FreematicsPlus/FreematicsOBD.cpp"),
-                   str(HERE / "journal_scenarios.cpp"), str(build / "telequeue.cpp"),
+                   str(build / "journal_scenarios.cpp"), str(build / "telequeue.cpp"),
                    str(HERE / "mems_scenarios.cpp"),
                    "-Wl,--wrap=open,--wrap=write,--wrap=fsync,--wrap=pread,--wrap=unlink,--wrap=close,--wrap=time",
                    "-o", str(executable)]
         if args.sanitize:
             command[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
-        output = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=15).stdout
+        execution = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=15)
+        if execution.stderr:
+            print(execution.stderr, file=sys.stderr, end="")
+        output = execution.stdout
         drive_results, packets, collector_log = drive(executable, args.collector)
         if args.collector:
             drive_results += drive_reboot(executable)
@@ -534,7 +548,8 @@ class MEMS_I2C {};
                ROOT / "telestore.cpp", HERE / "SD.h",
                ROOT / "lib/FreematicsPlus/FreematicsMEMS.cpp", ROOT / "lib/FreematicsPlus/FreematicsMEMS.h",
                ROOT / "lib/FreematicsPlus/utility/ICM_42627.h", HERE / "mems_scenarios.cpp",
-               HERE / "journal_scenarios.cpp", HERE / "scenarios.cpp", Path(__file__).resolve()]
+               HERE / "journal_scenarios.cpp", HERE / "batch_powercut_scenarios.inc",
+               HERE / "scenarios.cpp", Path(__file__).resolve()]
     if args.waveform_fixture:
         sources.append(args.waveform_fixture)
     if args.collector:

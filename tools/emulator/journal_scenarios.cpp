@@ -57,7 +57,7 @@ extern "C" ssize_t __wrap_write(int descriptor, const void* data, size_t length)
         cardWriteBudget -= count;
     }
     bytes->resize(std::max(bytes->size(), found->second.position + count));
-    memcpy(bytes->data() + found->second.position, data, count);
+    if (count) memcpy(bytes->data() + found->second.position, data, count);
     found->second.position += count;
     return count;
 }
@@ -78,7 +78,7 @@ extern "C" ssize_t __wrap_pread(int descriptor, void* data, size_t length, off_t
         count = std::min(count, static_cast<size_t>(cardReadBudget));
         cardReadBudget -= count;
     }
-    memcpy(data, bytes->data() + offset, count);
+    if (count) memcpy(data, bytes->data() + offset, count);
     return count;
 }
 extern "C" int __wrap_unlink(const char* path)
