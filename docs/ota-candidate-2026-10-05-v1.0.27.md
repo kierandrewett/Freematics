@@ -5,6 +5,10 @@ trailing capture losses. It was built from signed source commit
 `4a9facf1db8761bc82bb0f06cc8bec6b4a5e5a3a` and has not been published or
 flashed.
 
+This candidate was superseded for publication by v1.0.28 after later
+non-documentation changes advanced the repository source. The packager
+correctly requires an image rebuilt against that newer source commit.
+
 | Property | Value |
 | --- | --- |
 | Firmware version | `1.0.27` |
