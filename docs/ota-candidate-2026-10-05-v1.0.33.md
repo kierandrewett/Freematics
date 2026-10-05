@@ -6,11 +6,11 @@ source commit below. It has not been published or flashed.
 | Property | Value |
 | --- | --- |
 | Firmware version | `1.0.33` |
-| Source commit | `9be2200f4730b7b347b407b599cc7c6f45dcc929` |
-| Build ID | `9be2200f4730` |
+| Source commit | `c3276c499039509b361bb451b968fe461a8ff023` |
+| Build ID | `c3276c499039` |
 | Image | `freematics-model-b.bin` |
-| SHA-256 | `0debed0cf6f4028425dd4e5b50191cc573015245f234574713566f628d1af832` |
-| Local candidate directory | `.pio/ota-release-candidate-9be2200-v1.0.33/` |
+| SHA-256 | `2439286777f08852f5fa60545d06d212d8360c44317f40c0c47317c4bad524a6` |
+| Local candidate directory | `.pio/ota-release-candidate-c3276c4-v1.0.33/` |
 
 Built with the `esp32dev-ota-test` PlatformIO environment from a clean
 worktree using the documented explicit-empty-token OTA release command. The
@@ -25,11 +25,12 @@ image, source, and boot build ID; no such attestation exists because the board
 is disconnected and the hardware tests have not passed. Earlier local v1.0.33
 packages from `f895cb284f3a71ad77d9d8161f9667d34ff61caa`,
 `8094e743f58bcabcae01ddde405b4c490b8170f4`, `878cc95bbf67d027beccbeb0dae44000b8b4ce7f`,
-and `3c120f376eb0003cf4abfe99c5361ec864d52e1b` are retained unchanged; use
-only the candidate directory recorded above for any later review.
+`3c120f376eb0003cf4abfe99c5361ec864d52e1b`, and
+`9be2200f4730b7b347b407b599cc7c6f45dcc929` are retained unchanged; use only
+the candidate directory recorded above for any later review.
 
-On this source, all 68 firmware Python tool tests and 26 Grafana dashboard
-tests passed. The strict sanitized firmware emulator passed, including journal
+On this source, all 75 firmware Python tool tests, 105 collector tests (four
+skipped), and 141 OBD workspace tests passed. The strict sanitized firmware emulator passed, including journal
 power-cut boundaries, torn-tail recovery, acknowledgement replay, and
 collector acceptance. It now also cuts power at all 88 byte positions across
 a three-record append batch and verifies exact replay/acknowledgement order.
