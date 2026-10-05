@@ -605,6 +605,48 @@ class DashboardViewsTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_historical_pid_acquisition_age_chart_preserves_stale_and_missing_ages(self) -> None:
+        dashboard = build_dashboard("trips")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 56)
+        self.assertEqual(panel["title"], "ECU acquisition age by PID")
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+        sql = panel["targets"][0]["queryText"]
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 1250, 'device', 2, 1250, 1250)"
+            )
+            for sequence, timeline in enumerate((1000, 1250)):
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, time_basis, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 'device_monotonic', 1250, 'device')",
+                    (sequence, sequence * 250, timeline),
+                )
+            connection.executemany(
+                "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
+                [
+                    (0, "0x40C", 100), (0, "0x40D", 250), (0, "0x405", 1800),
+                    (0, "0x411", 500), (0, "0x40B", 2400),
+                    (1, "0x40C", 900), (1, "0x40D", 750), (1, "0x405", 4200),
+                    (1, "0x411", 3200),
+                ],
+            )
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual([row[0] for row in rows], [1.0, 1.25])
+            self.assertEqual(rows[0][1:], (0.1, 0.25, 1.8, 0.5, 2.4))
+            self.assertEqual(rows[1][1:], (0.9, 0.75, 4.2, 3.2, None))
+        finally:
+            connection.close()
+
     def test_historical_missed_cycle_chart_shows_wrap_up_total_and_capture_gap(self) -> None:
         panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 54)
         self.assertEqual(panel["title"], "Unrecorded sample cycles")

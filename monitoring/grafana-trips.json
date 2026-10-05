@@ -3202,6 +3202,200 @@
     },
     {
       "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Device-reported age of each ECU value at sample capture, not time since upload. Rising values show a PID was already stale on-device; blank values mean that age was not recorded, and sample/sequence gaps remain chart gaps. RPM and speed target 0.5s freshness; other shown PIDs target 2s.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RPM acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Speed acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Coolant acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Throttle acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Manifold pressure acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 110
+      },
+      "id": 56,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x40C' THEN m.numeric_value / 1000.0 END) AS \"RPM acquisition age (s)\", MAX(CASE WHEN m.pid = '0x40D' THEN m.numeric_value / 1000.0 END) AS \"Speed acquisition age (s)\", MAX(CASE WHEN m.pid = '0x405' THEN m.numeric_value / 1000.0 END) AS \"Coolant acquisition age (s)\", MAX(CASE WHEN m.pid = '0x411' THEN m.numeric_value / 1000.0 END) AS \"Throttle acquisition age (s)\", MAX(CASE WHEN m.pid = '0x40B' THEN m.numeric_value / 1000.0 END) AS \"Manifold pressure acquisition age (s)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"RPM acquisition age (s)\", NULL AS \"Speed acquisition age (s)\", NULL AS \"Coolant acquisition age (s)\", NULL AS \"Throttle acquisition age (s)\", NULL AS \"Manifold pressure acquisition age (s)\" FROM gap_points ORDER BY time",
+          "rawQueryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x40C' THEN m.numeric_value / 1000.0 END) AS \"RPM acquisition age (s)\", MAX(CASE WHEN m.pid = '0x40D' THEN m.numeric_value / 1000.0 END) AS \"Speed acquisition age (s)\", MAX(CASE WHEN m.pid = '0x405' THEN m.numeric_value / 1000.0 END) AS \"Coolant acquisition age (s)\", MAX(CASE WHEN m.pid = '0x411' THEN m.numeric_value / 1000.0 END) AS \"Throttle acquisition age (s)\", MAX(CASE WHEN m.pid = '0x40B' THEN m.numeric_value / 1000.0 END) AS \"Manifold pressure acquisition age (s)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"RPM acquisition age (s)\", NULL AS \"Speed acquisition age (s)\", NULL AS \"Coolant acquisition age (s)\", NULL AS \"Throttle acquisition age (s)\", NULL AS \"Manifold pressure acquisition age (s)\" FROM gap_points ORDER BY time",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "ECU acquisition age by PID",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },

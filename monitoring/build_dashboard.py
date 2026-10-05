@@ -2226,6 +2226,61 @@ def build_dashboard(view: str = "combined") -> dict:
             if layout is not None:
                 x, y, width, height = layout
                 panel["gridPos"] = {"h": height, "w": width, "x": x, "y": y}
+        pid_age_columns = (
+            ("0x40C", "RPM acquisition age (s)"),
+            ("0x40D", "Speed acquisition age (s)"),
+            ("0x405", "Coolant acquisition age (s)"),
+            ("0x411", "Throttle acquisition age (s)"),
+            ("0x40B", "Manifold pressure acquisition age (s)"),
+        )
+        pid_age_sql = (
+            "SELECT s.timeline_ms / 1000.0 AS time, "
+            + ", ".join(
+                f"MAX(CASE WHEN m.pid = '{pid}' THEN m.numeric_value / 1000.0 END) AS \"{name}\""
+                for pid, name in pid_age_columns
+            )
+            + " FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
+            "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+            f"WHERE {sample_trip_where} AND s.{historical_range} "
+            "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time"
+        )
+        pid_age_panel = timeseries(
+            56,
+            "ECU acquisition age by PID",
+            0,
+            110,
+            24,
+            7,
+            [history_target(
+                historical_series_with_gap_breaks(
+                    pid_age_sql,
+                    tuple(name for _, name in pid_age_columns),
+                ),
+                format="time_series",
+            )],
+            unit="s",
+            description=(
+                "Device-reported age of each ECU value at sample capture, not time since upload. "
+                "Rising values show a PID was already stale on-device; blank values mean that "
+                "age was not recorded, and sample/sequence gaps remain chart gaps. RPM and speed "
+                f"target {OBD_FAST_FRESH_MAX_AGE_SECONDS}s freshness; other shown PIDs target "
+                f"{OBD_FRESH_MAX_AGE_SECONDS}s."
+            ),
+            overrides=[
+                by_name(name, ("unit", "s"), ("color", {"fixedColor": color, "mode": "fixed"}))
+                for (_, name), color in zip(
+                    pid_age_columns,
+                    ("orange", "blue", "yellow", "green", "purple"),
+                )
+            ],
+        )
+        pid_age_panel["fieldConfig"]["defaults"]["custom"].update({
+            "showPoints": "always",
+            "spanNulls": False,
+            "insertNulls": False,
+        })
+        pid_age_panel["datasource"] = HISTORY_DS
+        panels.append(pid_age_panel)
         missed_readings_sql = (
             "SELECT s.timeline_ms / 1000.0 AS time, "
             "MAX(CASE WHEN m.pid = '0x08E' THEN m.numeric_value END) AS \"Missed collection cycles\" "
