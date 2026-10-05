@@ -39,7 +39,7 @@ class PublishOtaReleaseTests(unittest.TestCase):
             b"FREEMATICS_OTA_RELEASE_BUILD=1"
             b"FREEMATICS_RELEASE_VERSION=1.0.1\0"
             b"FREEMATICS_SOURCE_COMMIT=" + source_commit + b"\0"
-            b"[BOOT] Build: test-build-123\0"
+            b"[BOOT] Build: \0test-build-123\0"
             b"token-free-fixture-image"
         )
         self.source_commit_check = patch(

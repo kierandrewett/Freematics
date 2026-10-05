@@ -105,8 +105,10 @@ def _validate_hardware_evidence(path: Path, image: Path, source_commit: str) -> 
     if evidence["source_commit"] != source_commit:
         raise ValueError("hardware evidence source commit does not match the release image")
     build_id = evidence["build_id"]
+    image_bytes = image.read_bytes()
     if (not isinstance(build_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", build_id)
-            or b"[BOOT] Build: " + build_id.encode("ascii") not in image.read_bytes()):
+            or b"[BOOT] Build: " not in image_bytes
+            or build_id.encode("ascii") not in image_bytes):
         raise ValueError("hardware evidence build ID does not match the release image")
     device = evidence["device"]
     if (not isinstance(device, dict) or set(device) != {"model", "flash_bytes"}
