@@ -176,6 +176,19 @@ class OTAParkedPolicy {
         fresh(rpm, nowMs) && rpm.value == 0.0f;
   }
 
+  // Transfer callbacks run outside the standby sampling owner. Keep this
+  // classifier pure; the standby task consumes a latched activity signal and
+  // resets the quiet proof itself, avoiding concurrent policy mutation.
+  static Denial transferSignalDenial(uint32_t nowMs,
+                                     const Signal& speedKph,
+                                     const Signal& rpm) {
+    if (!fresh(speedKph, nowMs)) return kSpeedUnavailable;
+    if (speedKph.value != 0.0f) return kSpeedNotZero;
+    if (!fresh(rpm, nowMs)) return kRpmUnavailable;
+    if (rpm.value != 0.0f) return kRpmNotZero;
+    return kEligible;
+  }
+
   uint32_t quietDurationMs(uint32_t nowMs) const {
     return m_started && m_motionProofValid
         ? static_cast<uint32_t>(nowMs - m_quietSinceMs) : 0;

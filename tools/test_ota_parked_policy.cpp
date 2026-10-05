@@ -160,6 +160,36 @@ static void testTransferVehicleCheckRequiresFreshZeroSpeedAndRpm() {
   assert(!Policy::signalsConfirmStationary(at, speed, rpm));
 }
 
+static void testTransferActivityRestartsTheOneHourProof() {
+  const uint32_t start = 70000;
+  const uint32_t checkAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, checkAt);
+  assert(policy.quietPeriodComplete(checkAt));
+
+  Policy::Signal speed = signal(0.0f, checkAt, 1000);
+  Policy::Signal rpm = signal(850.0f, checkAt, 1000);
+  assert(Policy::transferSignalDenial(checkAt, speed, rpm) == Policy::kRpmNotZero);
+  speed.value = 2.0f;
+  assert(Policy::transferSignalDenial(checkAt, speed, rpm) == Policy::kSpeedNotZero);
+  speed.value = 0.0f;
+  Policy::Observation activity = parked(checkAt);
+  activity.activity = true;
+  assert(policy.observe(checkAt, activity) == Policy::kActivity);
+  assert(!policy.motionProofCurrent(checkAt));
+  assert(!policy.quietPeriodComplete(checkAt));
+  assert(policy.quietDurationMs(checkAt) == 0);
+
+  const uint32_t restartedAt = checkAt + 250;
+  quietSamples(policy, restartedAt, restartedAt + Policy::kRequiredQuietMs - 1);
+  speed = signal(0.0f, restartedAt + Policy::kRequiredQuietMs - 1, 1000);
+  rpm = signal(0.0f, restartedAt + Policy::kRequiredQuietMs - 1, 1000);
+  assert(Policy::transferSignalDenial(restartedAt + Policy::kRequiredQuietMs - 1,
+                                      speed, rpm) == Policy::kEligible);
+  assert(!policy.quietPeriodComplete(restartedAt + Policy::kRequiredQuietMs - 1));
+}
+
 static void testParkedSignalsAreRecheckedAfterDownload() {
   const uint32_t start = 9000;
   const uint32_t checkAt = start + Policy::kRequiredQuietMs;
@@ -300,6 +330,7 @@ int main() {
   testActivityAndRebootResetTimer();
   testVehicleSignalsAndReadinessRemainFailClosed();
   testTransferVehicleCheckRequiresFreshZeroSpeedAndRpm();
+  testTransferActivityRestartsTheOneHourProof();
   testParkedSignalsAreRecheckedAfterDownload();
   testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();

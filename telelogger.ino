@@ -123,6 +123,8 @@ volatile bool otaCheckRequested = false;
 volatile bool otaAttemptStarted = false;
 volatile bool otaAttemptDone = false;
 volatile bool otaCancelRequested = false;
+volatile bool otaVehicleActivityObserved = false;
+portMUX_TYPE otaActivityMux = portMUX_INITIALIZER_UNLOCKED;
 volatile OtaAttemptResult otaAttemptResult = OTA_ATTEMPT_FAILED;
 volatile bool otaCurrentBootUploadAccepted = false;
 OTAFirstUploadPolicy otaFirstUploadPolicy;
@@ -1528,6 +1530,18 @@ void noteOtaResetEvent(uint32_t now, bool motion)
   otaParkedPolicy.observe(now, observation);
 }
 
+bool consumeOtaVehicleActivity()
+{
+  portENTER_CRITICAL(&otaActivityMux);
+  const bool observed = otaVehicleActivityObserved;
+  otaVehicleActivityObserved = false;
+  portEXIT_CRITICAL(&otaActivityMux);
+  if (!observed) return false;
+  noteOtaResetEvent(millis(), false);
+  Serial.println("[OTA] Observed OBD activity; 60-minute parked proof restarted");
+  return true;
+}
+
 #if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
 bool passiveCanCaptureComplete = false;
 
@@ -2515,9 +2529,18 @@ bool otaContinueRequested(void* context)
         speedSupported, speedValid, speedAt, 1000UL, speed};
     const OTAParkedPolicy::Signal rpmSignal = {
         rpmSupported, rpmValid, rpmAt, 1000UL, rpm};
-    if (!OTAParkedPolicy::signalsConfirmStationary(millis(), speedSignal, rpmSignal)) {
+    const OTAParkedPolicy::Denial vehicleDenial =
+        OTAParkedPolicy::transferSignalDenial(millis(), speedSignal, rpmSignal);
+    if (vehicleDenial != OTAParkedPolicy::kEligible) {
       if (context) *static_cast<volatile bool*>(context) = true;
-      Serial.println("[OTA] Transfer cancelled: fresh OBD speed/RPM no longer confirms stationary engine-off state");
+      if (vehicleDenial == OTAParkedPolicy::kSpeedNotZero ||
+          vehicleDenial == OTAParkedPolicy::kRpmNotZero) {
+        portENTER_CRITICAL(&otaActivityMux);
+        otaVehicleActivityObserved = true;
+        portEXIT_CRITICAL(&otaActivityMux);
+      } else {
+        Serial.println("[OTA] Transfer cancelled: fresh OBD speed/RPM no longer confirms stationary engine-off state");
+      }
       return false;
     }
   }
@@ -3316,17 +3339,26 @@ void standby()
     uint32_t otaNextStorageProbeAt = millis();
     bool motionWake = false;
     bool sensorFailure = false;
+    bool vehicleActivity = false;
     bool supplyUnsafe = false;
     bool storageUnsafe = false;
     bool endpointUnavailable = false;
     bool credentialUnavailable = false;
     float otaSupplyVoltage = 0;
     while (state.check(STATE_STANDBY) && !otaAttemptDone) {
+      if (consumeOtaVehicleActivity()) {
+        vehicleActivity = true;
+        break;
+      }
       bool failedThisPoll = false;
       if (waitMotion(250, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                      &failedThisPoll)) {
         motionWake = true;
         otaCancelRequested = true;
+        break;
+      }
+      if (consumeOtaVehicleActivity()) {
+        vehicleActivity = true;
         break;
       }
       // A single motion-threshold sample resets the one-hour quiet timer even
@@ -3379,7 +3411,7 @@ void standby()
         break;
       }
     }
-    if (motionWake || sensorFailure || supplyUnsafe || storageUnsafe ||
+    if (motionWake || sensorFailure || vehicleActivity || supplyUnsafe || storageUnsafe ||
         endpointUnavailable || credentialUnavailable) {
       // Let the modem owner close its socket before standby resumes OBD access.
       otaCancelRequested = true;
@@ -3388,6 +3420,7 @@ void standby()
         xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
         otaCoprocessorMutexReleased = false;
       }
+      vehicleActivity = consumeOtaVehicleActivity() || vehicleActivity;
       if (otaAttemptResult == OTA_ATTEMPT_READY) discardVerifiedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
       if (storageUnsafe) Serial.println("[OTA] Attempt cancelled: durable storage became unhealthy");
@@ -3398,7 +3431,7 @@ void standby()
         wakeRecord = WAKE_MAGIC | (otaSupplyVoltage >= IGNITION_WAKE_VOLTAGE ? WAKE_CHARGING : WAKE_MOTION);
         Serial.println("[OTA] Attempt cancelled: Model B supply is missing, low, or above the resting threshold");
       }
-      if (motionWake || sensorFailure || supplyUnsafe) break;
+      if (motionWake || sensorFailure || vehicleActivity || supplyUnsafe) break;
       // Storage/configuration failures invalidate OTA eligibility, not the parked
       // state. Continue monitoring while parked; the next attempt must pass
       // the full safety gate again.
@@ -3408,6 +3441,12 @@ void standby()
       if (otaCoprocessorMutexReleased) {
         xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
         otaCoprocessorMutexReleased = false;
+      }
+      vehicleActivity = consumeOtaVehicleActivity() || vehicleActivity;
+      if (vehicleActivity && otaAttemptResult == OTA_ATTEMPT_READY) {
+        discardVerifiedOtaUpdate();
+        otaAttemptResult = OTA_ATTEMPT_CANCELLED;
+        otaAttemptDone = false;
       }
       if (otaAttemptResult == OTA_ATTEMPT_READY) {
         // The transfer task never selects a boot slot. Revalidate vehicle
