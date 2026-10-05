@@ -35,7 +35,14 @@ Source inspection of the pinned PlatformIO `espressif32@7.0.1` Arduino SD
 implementation narrows, but does not settle, the mount fault:
 
 - `SD.begin()` invokes `SPI.begin()` itself; the recorder's explicit
-  `SPI.begin()` is redundant, but no evidence yet shows it causes the failure.
+  `SPI.begin()` is redundant. In the pinned Arduino `SPIClass::begin()`, an
+  already initialized `_spi` returns immediately, so the recorder call followed
+  by the library call does not initialize the bus twice.
+- When `sdcard_init()` has allocated a card object but `sdcard_mount()` fails,
+  `SDFS::begin()` calls `sdcard_unmount()` and `sdcard_uninit()` before resetting
+  its drive ID. `sdcard_uninit()` deregisters the FatFS disk driver and frees
+  that card object. Thus the observed three-attempt path does not accumulate
+  registered card objects between retries in this framework version.
 - Card identification runs with a fixed 400 kHz SPI transaction, even though
   the configured post-initialization `SPI_FREQ` is 1 MHz. A lower configured
   transfer rate alone is therefore not a supported fix for the reported
