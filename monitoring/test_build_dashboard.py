@@ -564,6 +564,12 @@ class DashboardViewsTest(unittest.TestCase):
     def test_historical_trends_mask_stale_cached_values_using_measurement_age(self) -> None:
         dashboard = build_dashboard("trips")
         panel = next(panel for panel in dashboard["panels"] if panel["id"] == 21)
+        age_override = next(
+            override for override in panel["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "RPM acquisition age (s)"
+        )
+        self.assertEqual(age_override["properties"][0]["value"], "s")
+        self.assertEqual(age_override["properties"][1]["value"], "right")
         sql = panel["targets"][0]["queryText"]
         connection = sqlite3.connect(":memory:")
         try:
@@ -572,16 +578,19 @@ class DashboardViewsTest(unittest.TestCase):
                 "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
                 "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 2000, 'gnss', 4, 2000, 2000)"
             )
-            rpm = ((0, 750, 0), (1, 760, 250), (2, 780, 501), (3, 790, 100))
+            rpm = ((0, 750, 0), (1, 760, 250), (2, 780, 501), (3, 790, None))
             for sequence, value, age in rpm:
                 connection.execute(
                     "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, time_basis, archive_mtime_ms, timestamp_quality) "
                     "VALUES ('CAR', 'TRIP', ?, ?, ?, 'device_monotonic', 2000, 'device')",
                     (sequence, sequence * 250, 1000 + sequence * 250),
                 )
+                values = [(sequence, "0x10C", value)]
+                if age is not None:
+                    values.append((sequence, "0x40C", age))
                 connection.executemany(
                     "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
-                    ((sequence, "0x10C", value), (sequence, "0x40C", age)),
+                    values,
                 )
             for variable, value in {
                 "${device:sqlstring}": "'CAR'",
@@ -591,7 +600,8 @@ class DashboardViewsTest(unittest.TestCase):
             }.items():
                 sql = sql.replace(variable, value)
             rows = connection.execute(sql).fetchall()
-            self.assertEqual([row[2] for row in rows], [750.0, 760.0, None, 790.0])
+            self.assertEqual([row[2] for row in rows], [750.0, 760.0, None, None])
+            self.assertEqual([row[3] for row in rows], [0.0, 0.25, 0.501, None])
         finally:
             connection.close()
 

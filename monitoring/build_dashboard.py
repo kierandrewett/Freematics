@@ -1035,9 +1035,10 @@ def build_dashboard(view: str = "combined") -> dict:
                 target(rpm, "C", "Engine RPM"),
             ],
             unit="suffix: mph",
-            description="UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
+            description="UK display units: OBD and GPS speed are shown in mph; RPM and its per-reading acquisition age use the right axis. Age is the device-reported age at capture, not time since upload; missing and stale readings remain explicit gaps.",
             overrides=[
                 by_name("Engine RPM", ("unit", "rpm"), ("custom.axisPlacement", "right"), ("color", {"fixedColor": "orange", "mode": "fixed"})),
+                by_name("RPM acquisition age (s)", ("unit", "s"), ("custom.axisPlacement", "right"), ("color", {"fixedColor": "purple", "mode": "fixed"}), ("custom.lineStyle", {"dash": [4, 4], "fill": "dash"})),
                 by_name("OBD speed (mph)", ("color", {"fixedColor": "blue", "mode": "fixed"})),
                 by_name("GPS speed (mph)", ("color", {"fixedColor": "light-blue", "mode": "fixed"}), ("custom.lineStyle", {"dash": [8, 6], "fill": "dash"})),
             ],
@@ -1744,6 +1745,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "SELECT s.timeline_ms / 1000.0 AS time, "
                 f"{history_mode01_case('0x10D', f'm.numeric_value * {KM_TO_MI}')} AS \"OBD speed (mph)\", "
                 f"{history_mode01_case('0x10C')} AS \"Engine RPM\", "
+                "MAX(CASE WHEN m.pid = '0x40C' THEN m.numeric_value / 1000.0 END) AS \"RPM acquisition age (s)\", "
                 f"MAX(CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN s.gps_speed_kph * {KM_TO_MI} END) AS \"GPS speed (mph)\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
@@ -1874,7 +1876,7 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
         }
         historical_gap_columns = {
-            21: ("OBD speed (mph)", "Engine RPM", "GPS speed (mph)"),
+            21: ("OBD speed (mph)", "Engine RPM", "RPM acquisition age (s)", "GPS speed (mph)"),
             22: ("X axis (g)", "Y axis (g)", "Z axis (g)"),
             23: ("Engine load", "Throttle"),
             24: ("Coolant", "Intake temperature"),

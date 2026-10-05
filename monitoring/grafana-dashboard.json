@@ -1739,7 +1739,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "UK display units: OBD and GPS speed are shown in mph; RPM uses the right axis. Gaps remain visible instead of being invented.",
+      "description": "UK display units: OBD and GPS speed are shown in mph; RPM and its per-reading acquisition age use the right axis. Age is the device-reported age at capture, not time since upload; missing and stale readings remain explicit gaps.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1808,6 +1808,39 @@
                 "value": {
                   "fixedColor": "orange",
                   "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RPM acquisition age (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    4,
+                    4
+                  ],
+                  "fill": "dash"
                 }
               }
             ]
