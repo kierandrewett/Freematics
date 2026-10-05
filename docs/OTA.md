@@ -10,13 +10,14 @@ are refused.
 
 No wall-clock window is used. The 60-minute timer starts only after a valid
 MEMS sample and is earned by continuous successful samples; movement, an
-invalid sample, or a sampling gap over 1.5 seconds restarts or invalidates the
+invalid sample, or a sampling gap over 500 ms restarts or invalidates the
 proof. The passive Model B input-voltage sample must also remain present and
 within the 12.2–12.9 V resting range throughout the same hour; a missing or
-weak sample, long gap, or elevated voltage restarts that proof. Loss of either
-proof during a download cancels the transfer. Downloading and validating the
-inactive image never changes the boot selection. In standby, the firmware verifies the exact
-inactive partition and image digest, journals and reads back a pending identity
+weak sample, a sampling gap over 500 ms, or elevated voltage restarts that
+proof. Loss of either proof during a download cancels the transfer. Downloading
+and validating the inactive image never changes the boot selection. In standby,
+the firmware verifies the exact inactive partition and image digest, journals
+and reads back a pending identity
 containing its partition address/type/subtype, size, and digest, repeats the
 fresh motion, OBD speed/RPM, Model B supply, storage, and credential checks,
 then selects it for boot immediately after those checks pass. First-boot
@@ -264,12 +265,14 @@ Create the evidence file outside the repository with restrictive permissions;
 do not commit or upload it. The normal release preflight still runs after this
 gate and can independently refuse publication.
 
-For production releases, enable GitHub release immutability for this repository
-and use a draft release: GitHub locks its tag and assets when the draft is
-published. Before publishing the draft, confirm its tag still resolves to the
-embedded source commit. The local publisher checks the tag immediately before
-upload, but GitHub does not offer an atomic compare-and-upload operation through
-`gh release upload`.
+Before creating a release, enable **release immutability** in this repository's
+GitHub settings. The publisher checks that setting before any release operation
+and again immediately before publishing; it refuses to upload or publish when
+GitHub reports it disabled or cannot verify it. With immutability enabled,
+GitHub locks a release's assets and associated tag when the draft is published.
+Use a draft release and confirm its tag still resolves to the embedded source
+commit. The publisher rechecks the tag immediately before publishing, though
+GitHub does not provide an atomic compare-and-publish operation through `gh`.
 
 The device downloads the firmware and its SHA-256 sidecar from the same GitHub
 release over HTTPS. The checksum detects transfer corruption or a mismatched

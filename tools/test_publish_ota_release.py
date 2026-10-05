@@ -17,7 +17,11 @@ from package_ota_release import (
     package_release,
     verify_release_directory,
 )
-from publish_ota_release import _verify_hardware_evidence_signature, publish
+from publish_ota_release import (
+    _require_immutable_releases,
+    _verify_hardware_evidence_signature,
+    publish,
+)
 
 
 REQUIRED_TESTS = (
@@ -101,6 +105,8 @@ class PublishOtaReleaseTests(unittest.TestCase):
             "publish_ota_release._verify_hardware_evidence_signature"
         )
         self.signature_verifier.start()
+        self.immutable_release_guard = patch("publish_ota_release._require_immutable_releases")
+        self.immutable_release_guard_mock = self.immutable_release_guard.start()
         self.write_evidence()
 
     def evidence_object(self):
@@ -153,6 +159,7 @@ class PublishOtaReleaseTests(unittest.TestCase):
 
     def tearDown(self):
         self.signature_verifier.stop()
+        self.immutable_release_guard.stop()
         self.checkout_guard.stop()
         self.source_commit_check.stop()
         self.temp.cleanup()
@@ -196,6 +203,34 @@ class PublishOtaReleaseTests(unittest.TestCase):
         self.assertGreater(run.call_args_list.index(publish_call),
                            run.call_args_list.index(download_call))
         self.assertEqual(run.call_count, 9)
+        self.assertEqual(self.immutable_release_guard_mock.call_count, 2)
+
+    @patch("publish_ota_release.subprocess.run")
+    def test_immutable_release_preflight_requires_true_from_github(self, run):
+        run.return_value = SimpleNamespace(returncode=0, stdout="true\n")
+        _require_immutable_releases()
+        self.assertEqual(run.call_args.args[0], [
+            "gh", "api", "repos/kierandrewett/Freematics/immutable-releases", "--jq", ".enabled",
+        ])
+
+        for response in (
+            SimpleNamespace(returncode=0, stdout="false\n"),
+            SimpleNamespace(returncode=1, stdout=""),
+            SimpleNamespace(returncode=0, stdout=""),
+        ):
+            with self.subTest(response=response), patch(
+                    "publish_ota_release.subprocess.run", return_value=response):
+                with self.assertRaisesRegex(ValueError, "immutable releases must be enabled"):
+                    _require_immutable_releases()
+
+    def test_publish_checks_immutable_setting_before_other_github_operations(self):
+        self.immutable_release_guard_mock.side_effect = ValueError(
+            "GitHub immutable releases must be enabled for the Freematics repository"
+        )
+        with patch("publish_ota_release.subprocess.run") as run:
+            with self.assertRaisesRegex(ValueError, "immutable releases must be enabled"):
+                publish("v1.0.1", self.asset_dir, self.evidence)
+            run.assert_not_called()
 
     @patch("publish_ota_release.subprocess.run")
     def test_refuses_to_append_to_a_release_with_existing_assets(self, run):

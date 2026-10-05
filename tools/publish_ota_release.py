@@ -211,6 +211,22 @@ def _tag_commit(tag: str) -> str:
     return commit
 
 
+def _require_immutable_releases() -> None:
+    """Fail closed unless GitHub will lock release assets and their tag."""
+    result = subprocess.run(
+        ["gh", "api", f"repos/{REPOSITORY}/immutable-releases", "--jq", ".enabled"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    if result.returncode or result.stdout.strip() != "true":
+        raise ValueError(
+            "GitHub immutable releases must be enabled for the Freematics repository"
+        )
+
+
 def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", tag):
         raise ValueError("release tag has an invalid format")
@@ -222,6 +238,7 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
     if source_commit is None:
         raise ValueError("firmware has no valid source commit; refusing publication")
     _validate_hardware_evidence(hardware_evidence, image, source_commit)
+    _require_immutable_releases()
     if _tag_commit(tag) != source_commit:
         raise ValueError("Git tag does not point to the firmware's embedded source commit")
     inspection = subprocess.run(
@@ -361,6 +378,7 @@ def publish(tag: str, asset_dir: Path, hardware_evidence: Path) -> None:
             raise RuntimeError("GitHub release asset inventory changed during verification")
         if _tag_commit(tag) != source_commit:
             raise ValueError("Git tag changed during asset verification; refusing publication")
+        _require_immutable_releases()
         publication = subprocess.run(
             ["gh", "release", "edit", tag, "--draft=false", "--verify-tag",
              "--repo", REPOSITORY],
