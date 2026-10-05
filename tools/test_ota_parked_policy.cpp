@@ -140,6 +140,26 @@ static void testVehicleSignalsAndReadinessRemainFailClosed() {
   assert(policy.observe(checkAt, state) == Policy::kEligible);
 }
 
+static void testTransferVehicleCheckRequiresFreshZeroSpeedAndRpm() {
+  const uint32_t at = 50000;
+  Policy::Signal speed = signal(0.0f, at, 1000);
+  Policy::Signal rpm = signal(0.0f, at, 1000);
+  assert(Policy::signalsConfirmStationary(at, speed, rpm));
+
+  speed.value = 1.0f;
+  assert(!Policy::signalsConfirmStationary(at, speed, rpm));
+  speed = signal(0.0f, at - 1001, 1000);
+  assert(!Policy::signalsConfirmStationary(at, speed, rpm));
+  speed = signal(0.0f, at, 1000);
+  rpm.value = 750.0f;
+  assert(!Policy::signalsConfirmStationary(at, speed, rpm));
+  rpm = signal(0.0f, at - 1001, 1000);
+  assert(!Policy::signalsConfirmStationary(at, speed, rpm));
+  rpm = signal(0.0f, at, 1000);
+  rpm.supported = false;
+  assert(!Policy::signalsConfirmStationary(at, speed, rpm));
+}
+
 static void testParkedSignalsAreRecheckedAfterDownload() {
   const uint32_t start = 9000;
   const uint32_t checkAt = start + Policy::kRequiredQuietMs;
@@ -279,6 +299,7 @@ int main() {
   testMotionInvalidSampleAndLongGapRestartTimer();
   testActivityAndRebootResetTimer();
   testVehicleSignalsAndReadinessRemainFailClosed();
+  testTransferVehicleCheckRequiresFreshZeroSpeedAndRpm();
   testParkedSignalsAreRecheckedAfterDownload();
   testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();

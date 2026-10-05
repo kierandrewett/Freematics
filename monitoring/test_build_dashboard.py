@@ -164,6 +164,7 @@ class DashboardViewsTest(unittest.TestCase):
     def test_trips_view_has_historical_selector_and_route_evidence(self) -> None:
         dashboard = build_dashboard("trips")
         self.assertEqual(dashboard["uid"], "freematics-trips")
+        self.assertEqual(dashboard["graphTooltip"], 2)
         self.assertEqual(dashboard["time"], {"from": "now-90d", "to": "now"})
         self.assertFalse(dashboard["liveNow"])
         self.assertEqual(dashboard["timepicker"]["refresh_intervals"], ["30s", "1m", "5m", "15m"])
@@ -193,6 +194,13 @@ class DashboardViewsTest(unittest.TestCase):
         trip_index = next(panel for panel in dashboard["panels"] if panel["id"] == 19)
         trip_index_sql = trip_index["targets"][0]["queryText"]
         self.assertIn("ORDER BY trip_id DESC", trip_index_sql)
+        self.assertIn('over_target_interval_count AS "Observed intervals >250 ms"', trip_index_sql)
+        capture_evidence = next(panel for panel in dashboard["panels"] if panel["id"] == 42)
+        self.assertIn("Observed intervals over 250 ms", capture_evidence["description"])
+        self.assertIn('"Trip observed intervals >250 ms"', capture_evidence["targets"][0]["queryText"])
+        self.assertIn("sample_over_target_intervals AS g", capture_evidence["targets"][0]["queryText"])
+        self.assertIn('"Missing IDs before sample"', capture_evidence["targets"][0]["queryText"])
+        self.assertIn("sample_capture_sequence_gaps AS cg", capture_evidence["targets"][0]["queryText"])
         route = next(panel for panel in dashboard["panels"] if panel["title"] == "Trip route")
         self.assertEqual(route["datasource"]["uid"], "freematics-history")
         self.assertTrue(all("${trip:sqlstring}" in target["queryText"] for target in route["targets"]))
@@ -235,6 +243,24 @@ class DashboardViewsTest(unittest.TestCase):
         fuel_rate = next(panel for panel in dashboard["panels"] if panel["id"] == 38)
         self.assertIn("Mass airflow", json.dumps(fuel_rate["fieldConfig"]["overrides"]))
 
+    def test_historical_timeseries_do_not_bridge_missing_measurements(self) -> None:
+        dashboard = build_dashboard("trips")
+        historical_series = [
+            panel for panel in dashboard["panels"]
+            if panel["type"] == "timeseries"
+            and panel.get("datasource", {}).get("uid") == "freematics-history"
+        ]
+        self.assertTrue(historical_series)
+        for panel in historical_series:
+            with self.subTest(panel=panel["title"]):
+                custom = panel["fieldConfig"]["defaults"]["custom"]
+                self.assertFalse(custom["spanNulls"])
+                self.assertFalse(custom["insertNulls"])
+
+    def test_live_views_keep_their_existing_hover_behavior(self) -> None:
+        for view in ("live", "combined"):
+            with self.subTest(view=view):
+                self.assertEqual(build_dashboard(view)["graphTooltip"], 1)
 
     def test_live_view_is_prometheus_only(self) -> None:
         dashboard = build_dashboard("live")

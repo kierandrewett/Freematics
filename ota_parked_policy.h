@@ -167,6 +167,15 @@ class OTAParkedPolicy {
     return kEligible;
   }
 
+  // Repeated checks during a cellular transfer use this pure predicate so
+  // they cannot mutate the standby task's continuous quiet-period state.
+  static bool signalsConfirmStationary(uint32_t nowMs,
+                                       const Signal& speedKph,
+                                       const Signal& rpm) {
+    return fresh(speedKph, nowMs) && speedKph.value == 0.0f &&
+        fresh(rpm, nowMs) && rpm.value == 0.0f;
+  }
+
   uint32_t quietDurationMs(uint32_t nowMs) const {
     return m_started && m_motionProofValid
         ? static_cast<uint32_t>(nowMs - m_quietSinceMs) : 0;

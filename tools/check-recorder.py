@@ -72,11 +72,11 @@ assert "[STORAGE] SD journal unavailable; unjournaled readings are being discard
 collect_sample = extract(firmware, "void collectSample()")
 assert "const bool durableAvailable = durableQueue.cachedHealthy();" in collect_sample
 assert collect_sample.index("usbTelemetryQueue.publish(record") < collect_sample.index("if (durableAvailable)")
-assert "durableAvailable && journalSample(buffer)" in collect_sample
+assert "durableAvailable && journalSample(buffer, usbBootId, sampleSequence)" in collect_sample
 sd_commit_path = collect_sample.rsplit("#if STORAGE == STORAGE_SD", 1)[-1].split("#else", 1)[0]
 assert "bufman.publish(buffer);" not in sd_commit_path
-journal_sample = extract(firmware, "bool journalSample(CBuffer* buffer)")
-assert "durableQueue.append(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)" in journal_sample
+journal_sample = extract(firmware, "bool journalSample(CBuffer* buffer, uint64_t session, uint32_t sequence)")
+assert "durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), session," in journal_sample
 assert "do {" in journal_sample and "while (lockTimedOut && durableQueue.cachedHealthy())" in journal_sample
 assert "frame.timestamp(buffer->timestamp)" in journal_sample
 assert "lastJournalCommitTime" in firmware
@@ -102,8 +102,8 @@ setup = extract(firmware, "void setup()")
 assert "otaStorageReady = durableQueue.probeStorage();" in setup
 # The SD retry path powers the bus down and back up. The fake card has no bus.
 journal_sample = journal_sample.replace(
-    "if (durableQueue.append(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)) return true;",
-    "if (simulatedJournalAppend(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)) return true;")
+    "if (durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), session,\n                                      sequence, &lockTimedOut)) return true;",
+    "if (simulatedJournalAppend(frame.buffer(), (uint16_t)frame.length(), session, sequence, &lockTimedOut)) return true;")
 
 code = r'''
 #include <cassert>
@@ -209,13 +209,13 @@ static uint32_t nextSampleAt = SAMPLE_MS;
 static uint32_t totalSamples = 0;
 static uint32_t peakHeld = 0;
 static uint32_t appendLatencyMs = 0;
-bool simulatedJournalAppend(const char* frame, uint16_t length, bool* lockTimedOut);
+bool simulatedJournalAppend(const char* frame, uint16_t length, uint64_t session, uint32_t sequence, bool* lockTimedOut);
 ''' + journal_sample + r'''
 
-bool simulatedJournalAppend(const char* frame, uint16_t length, bool* lockTimedOut)
+bool simulatedJournalAppend(const char* frame, uint16_t length, uint64_t session, uint32_t sequence, bool* lockTimedOut)
 {
     simulationTime += appendLatencyMs;
-    return durableQueue.append(frame, length, lockTimedOut);
+    return durableQueue.appendIdentified(frame, length, session, sequence, lockTimedOut);
 }
 
 static void sampleOnce()
@@ -226,7 +226,7 @@ static void sampleOnce()
     const float value = (float)totalSamples;
     buffer->add(0x100, ELEMENT_FLOAT_D2, (void*)&value, sizeof(value));
     buffer->timestamp = nextSampleAt;
-    const bool journaled = durableQueue.cachedHealthy() && journalSample(buffer);
+    const bool journaled = durableQueue.cachedHealthy() && journalSample(buffer, 1, totalSamples);
     if (journaled) logger.timestamp(buffer->timestamp);
     else bufman.recordMissedReading();
     bufman.free(buffer);

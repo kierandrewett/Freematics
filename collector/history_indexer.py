@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import time
+import zlib
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,11 +32,15 @@ FIELD_RE = re.compile(r"(?:^|,)([0-9A-Fa-f]{1,4})[:=]([^,\r\n]*)")
 FRAME_RE = re.compile(r"(?:^|,)0[:=](\d{1,10})(?=,|$)", re.MULTILINE)
 MAX_ARCHIVE_RECORD_SIZE = 64 * 1024
 MAX_ARCHIVE_FILE_SIZE = 64 * 1024 * 1024
+MAX_INBOX_RECORD_SIZE = 8 * 1024 + 160
 CATALOGUE_RE = re.compile(
     r'OBD_PID\(0x([0-9A-Fa-f]+),\s*([A-Za-z0-9_]+),\s*"([^"]*)",\s*"([^"]*)",\s*(\d+)\)'
 )
 SEAL_AFTER_SECONDS = 60
+# Preserve the established quality-gate definition of a material capture gap.
 GAP_THRESHOLD_MS = 3_000
+# Separately expose every interval that exceeds the nominal 250 ms cadence.
+OVER_TARGET_INTERVAL_THRESHOLD_MS = 250
 GPS_HDOP_POOR_THRESHOLD = 5.0
 SPEED_DISAGREEMENT_THRESHOLD_KPH = 10.0
 DTC_CODE_SLOTS = 15
@@ -46,11 +51,15 @@ DTC_GROUPS = (
 )
 DTC_PREFIXES = "PCBU"
 DTC_SYSTEMS = ("powertrain", "chassis", "body", "network")
+INBOX_PATH_RE = re.compile(r"^([0-9A-Fa-f]{16})-([0-9]+)\.fqi$")
+INBOX_DEVICE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+UINT32_MODULUS = 1 << 32
 _REQUIRED_COLUMNS = {
     "trip": {
         "device_id", "trip_id", "archive_path", "collector_login_ms",
         "start_capture_ms", "end_capture_ms", "timeline_start_ms", "timeline_end_ms",
         "time_basis", "timestamp_quality", "sample_count", "data_bytes", "gap_count",
+        "over_target_interval_count",
         "archive_mtime_ms", "updated_at_ms",
     },
     "sample": {
@@ -73,6 +82,97 @@ class Frame:
     device_monotonic_ms: int
     fields: dict[str, str]
     ordered_fields: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class InboxRecord:
+    device_id: str
+    session_id: str
+    capture_sequence: int
+    frame: Frame
+    payload_sha256: str
+    source_path: str
+    collector_received_ms: int
+
+
+def parse_inbox_record(path: Path) -> InboxRecord | None:
+    """Validate an immutable FQI1 record; invalid files remain on disk."""
+    match = INBOX_PATH_RE.fullmatch(path.name)
+    device_id = path.parent.name
+    if (not match or len(device_id) > 128 or device_id.startswith(".")
+            or not INBOX_DEVICE_RE.fullmatch(device_id)):
+        return None
+    session_id, raw_sequence = match.groups()
+    try:
+        sequence = int(raw_sequence)
+    except ValueError:
+        return None
+    if sequence >= UINT32_MODULUS:
+        return None
+    try:
+        if path.stat().st_size > MAX_INBOX_RECORD_SIZE:
+            return None
+        raw = path.read_bytes()
+        header, payload = raw.split(b"\n", 1)
+        fields = header.decode("ascii").split(",")
+        if len(fields) != 5 or fields[0] != "FQI1":
+            return None
+        header_session = fields[1]
+        header_sequence, payload_length = int(fields[2]), int(fields[3])
+        checksum = fields[4]
+        if (not re.fullmatch(r"[0-9A-Fa-f]{16}", header_session)
+                or header_session.lower() != session_id.lower()
+                or header_sequence != sequence
+                or str(header_sequence) != raw_sequence
+                or payload_length != len(payload)
+                or not re.fullmatch(r"[0-9a-f]{8}", checksum)
+                or int(checksum, 16) != zlib.crc32(payload)):
+            return None
+        text = payload.decode("utf-8")
+        if not re.match(r"\A0[:=][0-9]{1,10}(?:,|$)", text):
+            return None
+        # The FQI payload is one PID-0-delimited telemetry sample. A synthetic
+        # next delimiter lets the archive parser apply its established rules.
+        frames = parse_frames(text.rstrip(",") + ",0:0", include_final=False)
+        if len(frames) != 1:
+            return None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    stat = path.stat()
+    return InboxRecord(
+        device_id, session_id.lower(), sequence, frames[0],
+        hashlib.sha256(payload).hexdigest(), str(path), int(stat.st_mtime * 1_000),
+    )
+
+
+def order_wrapped_sequences(records: list[InboxRecord]) -> list[InboxRecord]:
+    """Order uint32 sequence values from the largest missing arc's successor."""
+    ordered = sorted(records, key=lambda record: record.capture_sequence)
+    if len(ordered) < 2:
+        return ordered
+    gaps = [
+        (ordered[(index + 1) % len(ordered)].capture_sequence - record.capture_sequence - 1)
+        % UINT32_MODULUS
+        for index, record in enumerate(ordered)
+    ]
+    # Starting after the largest absent arc yields the unique compact run
+    # ordering even when the device counter rolls from UINT32_MAX to zero.
+    start = (gaps.index(max(gaps)) + 1) % len(ordered)
+    return ordered[start:] + ordered[:start]
+
+
+def missing_sequence_count(records: list[InboxRecord]) -> int:
+    ordered = order_wrapped_sequences(records)
+    if len(ordered) < 2:
+        return 0
+    gaps = [
+        (ordered[(index + 1) % len(ordered)].capture_sequence - record.capture_sequence - 1)
+        % UINT32_MODULUS
+        for index, record in enumerate(ordered)
+    ]
+    # The largest absent arc is outside the observed session span; count only
+    # holes between its endpoints, including actual uint32 rollover holes.
+    return sum(gaps) - max(gaps)
 
 
 def trip_start_ms(trip_id: str) -> int:
@@ -437,9 +537,36 @@ class HistoryIndexer:
             self._ensure_sample_columns(connection)
             self._ensure_trip_columns(connection)
             connection.executescript((Path(__file__).with_name("history_schema.sql")).read_text())
+            self._refresh_interval_count_projections(connection)
             self._populate_catalogue(connection)
             connection.commit()
         self._initialized = True
+
+    @staticmethod
+    def _refresh_interval_count_projections(connection: sqlite3.Connection) -> None:
+        """Recompute cached interval counts when either threshold changes."""
+        projections = (
+            ("gap_threshold_ms", GAP_THRESHOLD_MS, "gap_count", "sample_gaps"),
+            ("over_target_interval_threshold_ms", OVER_TARGET_INTERVAL_THRESHOLD_MS,
+             "over_target_interval_count", "sample_over_target_intervals"),
+        )
+        for key, threshold, column, view in projections:
+            current = connection.execute(
+                "SELECT value FROM history_projection_meta WHERE key=?", (key,)
+            ).fetchone()
+            if current and current[0] == str(threshold):
+                continue
+            connection.execute(
+                f"""UPDATE trip SET {column}=(
+                       SELECT COUNT(*) FROM {view} AS intervals
+                       WHERE intervals.device_id=trip.device_id AND intervals.trip_id=trip.trip_id
+                   )"""
+            )
+            connection.execute(
+                """INSERT INTO history_projection_meta(key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, str(threshold)),
+            )
 
     @staticmethod
     def _ensure_sample_columns(connection: sqlite3.Connection) -> None:
@@ -450,6 +577,12 @@ class HistoryIndexer:
         for name in ("acceleration_x_g", "acceleration_y_g", "acceleration_z_g"):
             if name not in columns:
                 connection.execute(f"ALTER TABLE sample ADD COLUMN {name} REAL")
+        for name, declaration in (
+            ("capture_session_id", "TEXT"),
+            ("capture_sequence", "INTEGER"),
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE sample ADD COLUMN {name} {declaration}")
 
     @staticmethod
     def _ensure_trip_columns(connection: sqlite3.Connection) -> None:
@@ -458,7 +591,14 @@ class HistoryIndexer:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(trip)")}
         if not columns:
             return
-        for name in ("gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count"):
+        if "missing_capture_sequence_count" not in columns:
+            connection.execute(
+                "ALTER TABLE trip ADD COLUMN missing_capture_sequence_count INTEGER NOT NULL DEFAULT 0"
+            )
+        for name in (
+            "gps_fix_count", "gps_poor_quality_count", "speed_disagreement_count",
+            "over_target_interval_count",
+        ):
             if name not in columns:
                 connection.execute(f"ALTER TABLE trip ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0")
 
@@ -508,7 +648,152 @@ class HistoryIndexer:
                     # and MCP clients are blocked for the shortest interval.
                     connection.commit()
                     indexed += 1
+            indexed += self._index_capture_inbox(connection)
         return indexed
+
+    def _index_capture_inbox(self, connection: sqlite3.Connection) -> int:
+        inbox_root = self.archive_root / "capture-inbox"
+        if not inbox_root.is_dir():
+            return 0
+        sessions: dict[tuple[str, str], list[InboxRecord]] = {}
+        candidates: dict[tuple[str, str], list[Path]] = {}
+        for path in sorted(inbox_root.glob("*/*.fqi")):
+            path_match = INBOX_PATH_RE.fullmatch(path.name)
+            if (path_match and len(path.parent.name) <= 128
+                    and not path.parent.name.startswith(".")
+                    and INBOX_DEVICE_RE.fullmatch(path.parent.name)):
+                candidates.setdefault((path.parent.name, path_match.group(1).lower()), []).append(path)
+            record = parse_inbox_record(path)
+            if record is not None:
+                sessions.setdefault((record.device_id, record.session_id), []).append(record)
+
+        indexed = 0
+        for device_id, session_id in candidates:
+            records = sessions.get((device_id, session_id), [])
+            by_sequence: dict[int, InboxRecord] = {}
+            conflicts: set[int] = set()
+            for record in records:
+                if record.capture_sequence in conflicts:
+                    continue
+                incumbent = by_sequence.get(record.capture_sequence)
+                if incumbent is None:
+                    by_sequence[record.capture_sequence] = record
+                elif incumbent.payload_sha256 != record.payload_sha256:
+                    # Conflicting bytes for a durable identity invalidate that
+                    # identity; neither version is projected.
+                    by_sequence.pop(record.capture_sequence)
+                    conflicts.add(record.capture_sequence)
+            records = order_wrapped_sequences(list(by_sequence.values()))
+            digest = hashlib.sha256("\n".join(
+                f"{record.capture_sequence}:{record.payload_sha256}:{record.collector_received_ms}"
+                for record in records
+            ).encode()).hexdigest()
+            marker = f"capture-inbox://{device_id}/{session_id}"
+            previous = connection.execute(
+                "SELECT content_sha256 FROM ingest_file WHERE archive_path=?", (marker,)
+            ).fetchone()
+            if previous and previous[0] == digest:
+                continue
+            self._project_inbox_session(connection, device_id, session_id, marker, records)
+            total_bytes = sum(path.stat().st_size for path in candidates[(device_id, session_id)])
+            connection.execute(
+                """INSERT INTO ingest_file(archive_path,content_sha256,byte_size,processed_bytes,
+                   sealed,mutation_detected,indexed_at_ms) VALUES(?,?,?,?,1,0,?)
+                   ON CONFLICT(archive_path) DO UPDATE SET content_sha256=excluded.content_sha256,
+                   byte_size=excluded.byte_size,processed_bytes=excluded.processed_bytes,
+                   sealed=1,indexed_at_ms=excluded.indexed_at_ms""",
+                (marker, digest, total_bytes, total_bytes, self.now_ms()),
+            )
+            connection.commit()
+            indexed += 1
+        return indexed
+
+    def _project_inbox_session(
+        self, connection: sqlite3.Connection, device_id: str, session_id: str,
+        marker: str, records: list[InboxRecord],
+    ) -> None:
+        trip_id = f"fqi-{session_id}"
+        connection.execute(
+            "DELETE FROM capture_inbox_record WHERE device_id=? AND session_id=?",
+            (device_id, session_id),
+        )
+        connection.execute("DELETE FROM trip WHERE device_id=? AND trip_id=?", (device_id, trip_id))
+        if not records:
+            return
+        capture_times = [device_clock_capture_ms(record.frame.fields) for record in records]
+        known = [value for value in capture_times if value is not None]
+        timestamp_quality = "unknown" if not known else "device_clock" if len(known) == len(records) else "partial"
+        timeline: list[int] = []
+        elapsed = 0
+        for index, record in enumerate(records):
+            if index:
+                elapsed += max(0, monotonic_delta(
+                    record.frame.device_monotonic_ms, records[index - 1].frame.device_monotonic_ms
+                ))
+            timeline.append(elapsed)
+        deltas = [
+            monotonic_delta(records[index].frame.device_monotonic_ms,
+                            records[index - 1].frame.device_monotonic_ms)
+            for index in range(1, len(records))
+        ]
+        frames = [record.frame for record in records]
+        trip_mtime = max(record.collector_received_ms for record in records)
+        connection.execute(
+            """INSERT INTO trip(device_id,trip_id,archive_path,collector_login_ms,
+               start_capture_ms,end_capture_ms,timeline_start_ms,timeline_end_ms,time_basis,
+               timestamp_quality,sample_count,data_bytes,gap_count,missing_capture_sequence_count,
+               over_target_interval_count,gps_fix_count,gps_poor_quality_count,
+               speed_disagreement_count,archive_mtime_ms,updated_at_ms)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (device_id, trip_id, marker, 0, known[0] if known else None,
+             known[-1] if known else None, timeline[0], timeline[-1],
+             "device_clock" if timestamp_quality == "device_clock" else "device_monotonic",
+             timestamp_quality, len(records), sum(Path(r.source_path).stat().st_size for r in records),
+             sum(delta > GAP_THRESHOLD_MS for delta in deltas), missing_sequence_count(records),
+             sum(delta > OVER_TARGET_INTERVAL_THRESHOLD_MS for delta in deltas),
+             *tracking_quality(frames), 0, self.now_ms()),
+        )
+        for ordinal, (record, capture_ms) in enumerate(zip(records, capture_times)):
+            frame, fields = record.frame, record.frame.fields
+            hdop = gps_value(fields, "12")
+            connection.execute(
+                """INSERT INTO sample(device_id,trip_id,sequence,device_monotonic_ms,
+                   capture_utc_ms,timeline_ms,time_basis,collector_received_ms,archive_mtime_ms,
+                   timestamp_quality,latitude,longitude,gps_speed_kph,gps_heading_degrees,
+                   gps_hdop,gps_satellites,acceleration_x_g,acceleration_y_g,acceleration_z_g,
+                   capture_session_id,capture_sequence)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (device_id, trip_id, ordinal, frame.device_monotonic_ms, capture_ms, timeline[ordinal],
+                 "device_clock" if capture_ms is not None else "device_monotonic",
+                 record.collector_received_ms, 0,
+                 "device_clock" if capture_ms is not None else "unknown", gps_value(fields, "A"),
+                 gps_value(fields, "B"), gps_value(fields, "D"), gps_value(fields, "E"),
+                 hdop * 0.1 if hdop is not None else None,
+                 int(gps_value(fields, "F")) if gps_value(fields, "F") is not None else None,
+                 *acceleration_values(fields), session_id, record.capture_sequence),
+            )
+            for raw_pid, value in fields.items():
+                parsed = numeric(value)
+                connection.execute(
+                    "INSERT INTO sample_metric(device_id,trip_id,sequence,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?)",
+                    (device_id, trip_id, ordinal, normalise_pid(raw_pid), parsed, value if parsed is None else None),
+                )
+            for field_ordinal, (raw_pid, value) in enumerate(frame.ordered_fields):
+                parsed = numeric(value)
+                connection.execute(
+                    "INSERT INTO sample_field(device_id,trip_id,sequence,ordinal,pid,numeric_value,text_value) VALUES(?,?,?,?,?,?,?)",
+                    (device_id, trip_id, ordinal, field_ordinal, normalise_pid(raw_pid), parsed,
+                     value if parsed is None else None),
+                )
+            for status, slot, raw_code, code, system in diagnostic_rows(fields):
+                connection.execute(
+                    "INSERT INTO diagnostic_code(device_id,trip_id,sequence,status,slot,raw_code,code,system) VALUES(?,?,?,?,?,?,?,?)",
+                    (device_id, trip_id, ordinal, status, slot, raw_code, code, system),
+                )
+            connection.execute(
+                "INSERT INTO capture_inbox_record(device_id,session_id,capture_sequence,payload_sha256,source_path) VALUES(?,?,?,?,?)",
+                (device_id, session_id, record.capture_sequence, record.payload_sha256, record.source_path),
+            )
 
     def _index_file(self, connection: sqlite3.Connection, archive: Path) -> bool:
         trip_id = archive.stem
@@ -542,9 +827,14 @@ class HistoryIndexer:
             else "partial"
         )
         timelines, time_bases = display_timestamps(frames, captures, qualities, login_ms)
-        gap_count = sum(
-            1 for previous_frame, frame in zip(frames, frames[1:])
-            if monotonic_delta(frame.device_monotonic_ms, previous_frame.device_monotonic_ms) > GAP_THRESHOLD_MS
+        deltas = (
+            monotonic_delta(frame.device_monotonic_ms, previous_frame.device_monotonic_ms)
+            for previous_frame, frame in zip(frames, frames[1:])
+        )
+        interval_deltas = list(deltas)
+        gap_count = sum(delta > GAP_THRESHOLD_MS for delta in interval_deltas)
+        over_target_interval_count = sum(
+            delta > OVER_TARGET_INTERVAL_THRESHOLD_MS for delta in interval_deltas
         )
         gps_fix_count, gps_poor_quality_count, speed_disagreement_count = tracking_quality(frames)
 
@@ -559,10 +849,10 @@ class HistoryIndexer:
             """INSERT INTO trip(
                 device_id, trip_id, archive_path, collector_login_ms,
                 start_capture_ms, end_capture_ms, timestamp_quality,
-                sample_count, data_bytes, gap_count, gps_fix_count,
+                sample_count, data_bytes, gap_count, over_target_interval_count, gps_fix_count,
                 gps_poor_quality_count, speed_disagreement_count, timeline_start_ms,
                 timeline_end_ms, time_basis, archive_mtime_ms, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(device_id, trip_id) DO UPDATE SET
                 archive_path=excluded.archive_path,
                 collector_login_ms=excluded.collector_login_ms,
@@ -570,7 +860,9 @@ class HistoryIndexer:
                 end_capture_ms=excluded.end_capture_ms,
                 timestamp_quality=excluded.timestamp_quality,
                 sample_count=excluded.sample_count, data_bytes=excluded.data_bytes,
-                gap_count=excluded.gap_count, gps_fix_count=excluded.gps_fix_count,
+                gap_count=excluded.gap_count,
+                over_target_interval_count=excluded.over_target_interval_count,
+                gps_fix_count=excluded.gps_fix_count,
                 gps_poor_quality_count=excluded.gps_poor_quality_count,
                 speed_disagreement_count=excluded.speed_disagreement_count,
                 timeline_start_ms=excluded.timeline_start_ms,
@@ -589,6 +881,7 @@ class HistoryIndexer:
                 len(frames),
                 stat.st_size,
                 gap_count,
+                over_target_interval_count,
                 gps_fix_count,
                 gps_poor_quality_count,
                 speed_disagreement_count,

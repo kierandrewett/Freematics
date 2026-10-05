@@ -73,6 +73,7 @@ typedef struct {
 PID_POLLING_INFO obdData[]= {
 #define OBD_PID(pid, name, description, unit, priority) {pid, priority, 0, 0},
 #include "obd_pids.h"
+#undef OBD_PID
 };
 
 // Read Mode 02 only after a stored DTC has been observed and the normal
@@ -116,6 +117,7 @@ Task usbTelemetryTask;
 UsbTelemetryQueue usbTelemetryQueue;
 bool usbTelemetrySerialReady = false;
 uint64_t usbBootId = 0;
+uint32_t captureSequence = 0;
 OTAParkedPolicy otaParkedPolicy;
 volatile bool otaCheckRequested = false;
 volatile bool otaAttemptStarted = false;
@@ -126,6 +128,7 @@ volatile bool otaCurrentBootUploadAccepted = false;
 OTAFirstUploadPolicy otaFirstUploadPolicy;
 Task otaBootValidationTask;
 uint32_t otaNextCheckTime = 0;
+uint32_t otaNextVehicleCheckAt = 0;
 SemaphoreHandle_t coprocessorMutex = nullptr;
 portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
 GPS_DATA gpsSnapshot = {};
@@ -182,6 +185,7 @@ OBDSnapshot obdSnapshot = {};
 static const uint8_t usbRawMode01Pids[USB_TELEMETRY_RAW_PID_COUNT] = {
 #define OBD_PID(pid, name, description, unit, priority) pid,
 #include "obd_pids.h"
+#undef OBD_PID
 };
 // The few OBD values other tasks decide on. Copying the full 1.2 KB snapshot
 // every 25 ms in the 3 KB status task risked its stack and kept interrupts
@@ -1802,7 +1806,7 @@ void accountUnjournaledWaveforms(const CBuffer* buffer);
 // Serialization needs one bounded working frame, but completed readings are
 // never queued here: append() verifies the SD bytes before this scratch space
 // is reused for the next capture.
-bool journalSample(CBuffer* buffer)
+bool journalSample(CBuffer* buffer, uint64_t session, uint32_t sequence)
 {
   static char* frameBytes = (char*)heap_caps_malloc(SAMPLE_FRAME_SIZE, MALLOC_CAP_SPIRAM);
   if (!buffer || !frameBytes || !durableQueue.healthy()) return false;
@@ -1816,7 +1820,8 @@ bool journalSample(CBuffer* buffer)
   bool lockTimedOut;
   do {
     lockTimedOut = false;
-    if (durableQueue.append(frame.buffer(), (uint16_t)frame.length(), &lockTimedOut)) return true;
+    if (durableQueue.appendIdentified(frame.buffer(), (uint16_t)frame.length(), session,
+                                      sequence, &lockTimedOut)) return true;
     if (lockTimedOut) delay(1);
   } while (lockTimedOut && durableQueue.cachedHealthy());
   return false;
@@ -1826,6 +1831,9 @@ bool journalSample(CBuffer* buffer)
 void collectSample()
 {
   uint32_t startTime = millis();
+  // Sequence is assigned at capture boundary, including failed/in-flight
+  // captures. Session is the random per-boot ID already carried by FT2.
+  const uint32_t sampleSequence = ++captureSequence;
   const bool clockTrustedAtCapture = freematicsSystemTimeTrusted();
   struct timeval captureTime = {};
   gettimeofday(&captureTime, nullptr);
@@ -1941,6 +1949,7 @@ void collectSample()
     if (record) {
       record->captureMs = startTime;
       record->bootId = usbBootId;
+      record->captureSequence = sampleSequence;
       record->utcValid = captureUtcValid ? 1 : 0;
       record->captureUtcMs = record->utcValid ?
         (uint64_t)captureTime.tv_sec * 1000ULL + captureTime.tv_usec / 1000 : 0;
@@ -1976,6 +1985,14 @@ void collectSample()
       if (metadataOkay) metadataOkay = appendRawMode01Metadata(record->supported,
         sizeof(record->supported), supportedLength, snapshot.rawMode01,
         USB_TELEMETRY_RAW_PID_COUNT);
+      if (metadataOkay && supportedLength < sizeof(record->supported)) {
+        const int added = snprintf(record->supported + supportedLength,
+          sizeof(record->supported) - supportedLength, ";seq=%lu",
+          (unsigned long)sampleSequence);
+        if (added > 0 && (size_t)added < sizeof(record->supported) - supportedLength)
+          supportedLength += (size_t)added;
+        else metadataOkay = false;
+      }
 
       if (!metadataOkay) {
         usbTelemetryQueue.publish(record, 0);
@@ -2031,7 +2048,7 @@ void collectSample()
   // That makes SD the sole source for subsequent upload and prevents a RAM
   // backlog from masquerading as durable recording. Slow SD writes therefore
   // delay sampling; the absolute-deadline logic records skipped intervals.
-  const bool journaled = durableAvailable && journalSample(buffer);
+  const bool journaled = durableAvailable && journalSample(buffer, usbBootId, sampleSequence);
   if (journaled) {
     lastJournalCommitTime = millis();
     journalCommitSeen = true;
@@ -2471,6 +2488,40 @@ void acquireMEMS(void*)
 
 bool otaContinueRequested(void* context)
 {
+  if (context && *static_cast<volatile bool*>(context)) return false;
+#if ENABLE_OTA && ENABLE_OBD
+  const uint32_t now = millis();
+  if ((int32_t)(now - otaNextVehicleCheckAt) >= 0) {
+    otaNextVehicleCheckAt = now + OTA_VEHICLE_RECHECK_INTERVAL_MS;
+    if (xSemaphoreTake(coprocessorMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+      if (context) *static_cast<volatile bool*>(context) = true;
+      Serial.println("[OTA] Transfer cancelled: OBD link unavailable for parked-state recheck");
+      return false;
+    }
+
+    float speed = 0;
+    float rpm = 0;
+    const bool bridgeReady = sys.devType > 12 && obd.init(PROTO_AUTO, true);
+    const bool speedSupported = bridgeReady && obd.isValidPID(PID_SPEED);
+    const bool speedValid = speedSupported && obd.readPID(PID_SPEED, speed);
+    const uint32_t speedAt = millis();
+    const bool rpmSupported = bridgeReady && obd.isValidPID(PID_RPM);
+    const bool rpmValid = rpmSupported && obd.readPID(PID_RPM, rpm);
+    const uint32_t rpmAt = millis();
+    obd.enterLowPowerMode();
+    xSemaphoreGive(coprocessorMutex);
+
+    const OTAParkedPolicy::Signal speedSignal = {
+        speedSupported, speedValid, speedAt, 1000UL, speed};
+    const OTAParkedPolicy::Signal rpmSignal = {
+        rpmSupported, rpmValid, rpmAt, 1000UL, rpm};
+    if (!OTAParkedPolicy::signalsConfirmStationary(millis(), speedSignal, rpmSignal)) {
+      if (context) *static_cast<volatile bool*>(context) = true;
+      Serial.println("[OTA] Transfer cancelled: fresh OBD speed/RPM no longer confirms stationary engine-off state");
+      return false;
+    }
+  }
+#endif
   return !context || !*static_cast<volatile bool*>(context);
 }
 
@@ -2563,11 +2614,18 @@ bool initCell(bool quick = false, CFreematics::ContinueCheck continueCheck = nul
 // reset always starts a new batch.
 uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,
                          uint8_t limit, uint16_t* lastLength,
-                         bool* includesCurrentBootRecord)
+                         bool* includesCurrentBootRecord,
+                         uint32_t* captureSequences = nullptr,
+                         uint64_t* captureSession = nullptr,
+                         bool wrapIdentified = false)
 {
   uint8_t count = 0;
   if (includesCurrentBootRecord) *includesCurrentBootRecord = false;
+  if (captureSession) *captureSession = 0;
   uint32_t previousTick = 0;
+  bool firstIdentityKnown = false;
+  uint64_t session = 0;
+  bool identifiedBatch = false;
   const uint32_t started = millis();
   // Hold the (recursive) SD lock for the whole batch. Each peek() then
   // re-enters it instead of queueing behind the recorder up to 40 times; on
@@ -2576,7 +2634,8 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
   while (count < limit) {
     const uint32_t position = queue.readPosition();
     uint16_t length = 0;
-    if (!queue.peek(frame, capacity, &length)) {
+    JournalCaptureIdentity identity;
+    if (!queue.peekIdentified(frame, capacity, &length, &identity)) {
       if (count && millis() - started < HTTP_BATCH_MAX_WAIT_MS) {
         // Let the recorder journal the readings we are waiting for.
         if (locked) unlockSD();
@@ -2584,6 +2643,15 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
         if (locked) lockSD();
         continue;
       }
+      break;
+    }
+    if (!firstIdentityKnown) {
+      firstIdentityKnown = true;
+      session = identity.session;
+      identifiedBatch = identity.session != 0;
+      if (captureSession) *captureSession = session;
+    } else if ((identity.session != 0) != identifiedBatch || identity.session != session) {
+      queue.rewind(position);
       break;
     }
     const bool timed = length > 2 && frame[0] == '0' && frame[1] == ':';
@@ -2596,17 +2664,32 @@ uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, u
     const bool currentBootRecord =
       includesCurrentBootRecord && queue.isCurrentBootPosition(position);
     store.checkpoint();
-    if (!store.appendRaw(frame, length)) {
+    bool appended = false;
+    if (identifiedBatch && wrapIdentified) {
+      const uint16_t payloadLength = length && frame[length - 1] == ',' ? length - 1 : length;
+      const uint32_t checksum = usbTelemetryCrc32((const uint8_t*)frame, payloadLength);
+      char envelope[80];
+      const int envelopeLength = snprintf(envelope, sizeof(envelope),
+        "FQI1,%016llx,%lu,%u,%08lx\n", (unsigned long long)identity.session,
+        (unsigned long)identity.sequence, (unsigned int)payloadLength, (unsigned long)checksum);
+      appended = envelopeLength > 0 && (size_t)envelopeLength < sizeof(envelope) &&
+        store.appendRaw(envelope, (unsigned int)envelopeLength) &&
+        store.appendRaw(frame, payloadLength) && store.appendRaw("\n", 1);
+    } else {
+      appended = store.appendRaw(frame, length);
+    }
+    if (!appended) {
       store.rollback();
       queue.rewind(position);
       break;
     }
+    if (captureSequences && identifiedBatch) captureSequences[count] = identity.sequence;
     if (currentBootRecord) *includesCurrentBootRecord = true;
     *lastLength = length;
     count++;
   }
   if (locked) unlockSD();
-  if (count) store.tailer();
+  if (count && !(identifiedBatch && wrapIdentified)) store.tailer();
   return count;
 }
 
@@ -2668,6 +2751,8 @@ void telemetry(void* inst)
   // be moved to the reject file without another SD read.
   static char replayFrame[SAMPLE_FRAME_SIZE];
   uint16_t replayFrameLength = 0;
+  uint32_t captureSequences[HTTP_BATCH_MAX_SAMPLES] = {};
+  uint64_t captureSession = 0;
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
   // Narrows down a batch the collector refused instead of retrying it forever.
   ReplayIsolation isolation = {0, 0};
@@ -2709,7 +2794,9 @@ void telemetry(void* inst)
             const char* modem = teleClient.cell.deviceName();
             if (modem && strstr(modem, "7670")) {
               teleClient.cell.init();
-              result = performOtaReleaseUpdate(teleClient.cell, &otaCancelRequested);
+              result = performOtaReleaseUpdate(teleClient.cell, &otaCancelRequested,
+                                               otaContinueRequested,
+                                               (void*)&otaCancelRequested);
           } else {
             Serial.println("[OTA] Skipped: modem does not provide strict SIM7670 TLS");
           }
@@ -2861,6 +2948,7 @@ void telemetry(void* inst)
       uint8_t batchCount = 0;
       bool replaying = false;
       bool batchHasCurrentBootRecord = false;
+      bool captureV2Batch = false;
       // Upload timing for the log: time since the last POST finished, and
       // time spent assembling this batch.
       static uint32_t lastPostDone = 0;
@@ -2877,7 +2965,9 @@ void telemetry(void* inst)
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
         batchCount = buildReplayBatch(durableQueue, store, replayFrame, sizeof(replayFrame),
                                       replayBatchLimit(isolation, batchLimit), &replayFrameLength,
-                                      &batchHasCurrentBootRecord);
+                                      &batchHasCurrentBootRecord, captureSequences,
+                                      &captureSession, true);
+        captureV2Batch = captureSession != 0;
 #else
         // UDP has no HTTP batch isolation/ack protocol; send one complete
         // journal frame per datagram, still never a RAM-only sample.
@@ -2954,7 +3044,14 @@ void telemetry(void* inst)
       telemetryTransmitActive = true;
 #endif
       const uint32_t postStarted = millis();
-      const bool sent = teleClient.transmit(store.buffer(), store.length());
+      bool sent;
+#if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
+      if (replaying && captureV2Batch)
+        sent = teleClient.transmitCaptureBatch(store.buffer(), store.length(), captureSession,
+                                               captureSequences, batchCount);
+      else
+#endif
+        sent = teleClient.transmit(store.buffer(), store.length());
       Serial.print("[UPLOAD] POST ");
       Serial.print(millis() - postStarted);
       Serial.println(" ms");
@@ -3120,6 +3217,7 @@ void standby()
   xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
 #if ENABLE_OTA
   bool otaStorageReadyAtPark = false;
+  bool otaCoprocessorMutexReleased = false;
 #endif
 #if STORAGE != STORAGE_NONE
   if (state.check(STATE_STORAGE_READY)) {
@@ -3209,6 +3307,11 @@ void standby()
 
     otaCancelRequested = false;
     otaAttemptDone = false;
+    otaNextVehicleCheckAt = millis() + OTA_VEHICLE_RECHECK_INTERVAL_MS;
+    // Permit the telemetry owner to perform OBD checks from its cancellation
+    // callback while this standby thread continues sampling motion.
+    xSemaphoreGive(coprocessorMutex);
+    otaCoprocessorMutexReleased = true;
     otaCheckRequested = true;
     uint32_t otaNextStorageProbeAt = millis();
     bool motionWake = false;
@@ -3278,10 +3381,13 @@ void standby()
     }
     if (motionWake || sensorFailure || supplyUnsafe || storageUnsafe ||
         endpointUnavailable || credentialUnavailable) {
-      // Let the modem owner observe cancellation and close its socket before
-      // releasing the shared coprocessor link to OBD acquisition.
+      // Let the modem owner close its socket before standby resumes OBD access.
       otaCancelRequested = true;
       waitForOtaCancellationCompletionOrRestart();
+      if (otaCoprocessorMutexReleased) {
+        xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
+        otaCoprocessorMutexReleased = false;
+      }
       if (otaAttemptResult == OTA_ATTEMPT_READY) discardVerifiedOtaUpdate();
       if (sensorFailure) Serial.println("[OTA] Attempt cancelled: motion sensor stopped providing valid samples");
       if (storageUnsafe) Serial.println("[OTA] Attempt cancelled: durable storage became unhealthy");
@@ -3299,6 +3405,10 @@ void standby()
       continue;
     }
     if (otaAttemptDone) {
+      if (otaCoprocessorMutexReleased) {
+        xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
+        otaCoprocessorMutexReleased = false;
+      }
       if (otaAttemptResult == OTA_ATTEMPT_READY) {
         // The transfer task never selects a boot slot. Revalidate vehicle
         // state here, in the standby owner, before hashing/journaling the
@@ -3381,6 +3491,12 @@ void standby()
   delay(5000);
 #endif
   Serial.println("[POWER] Restarting active mode");
+#if ENABLE_OTA
+  if (otaCoprocessorMutexReleased) {
+    xSemaphoreTake(coprocessorMutex, portMAX_DELAY);
+    otaCoprocessorMutexReleased = false;
+  }
+#endif
   sys.resetLink();
 #if RESET_AFTER_WAKEUP
   // Light sleep keeps RAM. Reboot only when no reading exists solely in RAM;

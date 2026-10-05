@@ -249,6 +249,9 @@
 // OTA is checked only while parked, after the separate one-hour motion/OBD
 // gate. This is a cadence, not a local-time window.
 #define OTA_CHECK_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+// Revalidate OBD speed and RPM during a cellular OTA transfer; unknown or
+// non-zero signals cancel the transfer before image activation.
+#define OTA_VEHICLE_RECHECK_INTERVAL_MS 5000UL
 
 #define PING_BACK_INTERVAL 900 /* seconds */
 #define SIGNAL_CHECK_INTERVAL 10 /* seconds */

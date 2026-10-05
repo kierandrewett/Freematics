@@ -311,6 +311,96 @@ void runJournalScenarios()
     report("batched append and read-ahead replay open the journal once each", okay && batchOpens == 2 &&
            replayOpens == 1 && batched.pendingBytes() == 16 * (12 + first.size()), false, batchOpens + replayOpens);
 
+    // Capture identity is assigned once, persisted with the SD record, and
+    // remains available after a simulated power cycle/recovery.
+    {
+        resetCard();
+        constexpr uint64_t session = 0x123456789abcdef0ULL;
+        constexpr uint32_t sequence = 0x10203040UL;
+        DurableQueue writer;
+        okay = writer.begin() && writer.appendIdentified(first.c_str(), first.size(), session, sequence);
+        DurableQueue reader;
+        okay = okay && reader.begin();
+        char body[8192];
+        uint16_t length = 0;
+        JournalCaptureIdentity restored;
+        okay = okay && reader.peekIdentified(body, sizeof(body), &length, &restored) &&
+            length == first.size() && !memcmp(body, first.data(), length) &&
+            restored.session == session && restored.sequence == sequence;
+        report("SD journal preserves capture identity across reopen", okay, false, restored.sequence);
+    }
+
+    {
+        resetCard();
+        constexpr uint64_t session = 0x123456789abcdef0ULL;
+        DurableQueue identified;
+        okay = identified.begin() &&
+            identified.appendIdentified(first.c_str(), first.size(), session, 101) &&
+            identified.appendIdentified(second.c_str(), second.size(), session, 103);
+        CStorageRAM wire;
+        static char scratch[8192];
+        uint16_t lastLength = 0;
+        uint32_t sequences[2] = {};
+        uint64_t builtSession = 0;
+        bool currentBoot = false;
+        const uint8_t built = okay ? buildReplayBatch(identified, wire, scratch, sizeof(scratch), 2,
+            &lastLength, &currentBoot, sequences, &builtSession, true) : 0;
+        const std::string expected =
+            "FQI1,123456789abcdef0,101,14,5038f9a9\n0:1000,10C:900\n"
+            "FQI1,123456789abcdef0,103,14,f766ba6d\n0:1250,10C:910\n";
+        const bool wireOkay = built == 2 && builtSession == session && sequences[0] == 101 &&
+            sequences[1] == 103 && std::string(wire.buffer(), wire.length()) == expected;
+        report("identified SD replay envelope preserves exact IDs and tolerates sequence holes",
+               okay && wireOkay, false, built);
+    }
+
+    {
+        resetCard();
+        constexpr uint64_t session = 0x123456789abcdef0ULL;
+        DurableQueue wrapped;
+        okay = wrapped.begin() &&
+            wrapped.appendIdentified(first.c_str(), first.size(), session, UINT32_MAX) &&
+            wrapped.appendIdentified(second.c_str(), second.size(), session, 0);
+        CStorageRAM wire;
+        static char scratch[8192];
+        uint16_t lastLength = 0;
+        uint32_t sequences[2] = {};
+        uint64_t builtSession = 0;
+        bool currentBoot = false;
+        const uint8_t built = okay ? buildReplayBatch(wrapped, wire, scratch, sizeof(scratch), 2,
+            &lastLength, &currentBoot, sequences, &builtSession, true) : 0;
+        const std::string encoded(wire.buffer(), wire.length());
+        const size_t secondEnvelopeAt = encoded.find('\n');
+        const bool wireOkay = built == 2 && builtSession == session &&
+            sequences[0] == UINT32_MAX && sequences[1] == 0 && secondEnvelopeAt != std::string::npos &&
+            encoded.find("FQI1,123456789abcdef0,4294967295,", 0) == 0 &&
+            encoded.find("FQI1,123456789abcdef0,0,", secondEnvelopeAt + 1) != std::string::npos;
+        report("identified SD replay preserves capture-sequence uint32 rollover",
+               okay && wireOkay, false, built);
+    }
+
+    {
+        resetCard();
+        DurableQueue journal;
+        okay = journal.begin() &&
+            journal.appendIdentified(first.c_str(), first.size(), 9, 101) &&
+            append(journal, second) &&
+            journal.appendIdentified(first.c_str(), first.size(), 9, 103);
+        auto& bytes = *cardFiles.at("/QUEUE.BIN");
+        const size_t secondBody = 24 + first.size() + 12;
+        bytes[secondBody] ^= 1;
+        char body[8192];
+        uint16_t length = 0;
+        JournalCaptureIdentity identity;
+        okay = okay && journal.peekIdentified(body, sizeof(body), &length, &identity) && identity.sequence == 101;
+        okay = okay && !journal.peekIdentified(body, sizeof(body), &length, &identity) && journal.damaged();
+        okay = okay && journal.recover();
+        journal.retry();
+        okay = okay && journal.peekIdentified(body, sizeof(body), &length, &identity) && identity.sequence == 101;
+        okay = okay && journal.peekIdentified(body, sizeof(body), &length, &identity) && identity.sequence == 103;
+        report("SD recovery preserves IDs on intact records around corruption", okay, journal.damaged(), identity.sequence);
+    }
+
     // Building a 24-frame upload batch takes the SD lock once, not once per
     // frame; each per-frame acquisition could wait behind the recorder.
     {

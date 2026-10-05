@@ -851,8 +851,22 @@ bool TeleClientHTTP::transmit(const char* packetBuffer, unsigned int packetSize)
   return transmitBody(packetBuffer, packetSize, nullptr, 0);
 }
 
+bool TeleClientHTTP::transmitCaptureBatch(const char* packetBuffer, unsigned int packetSize,
+                                          uint64_t session, const uint32_t* sequences,
+                                          uint8_t count)
+{
+  if (!packetBuffer || !packetSize || !session || !sequences || !count) return false;
+  // V2 envelopes are intentionally sent uncompressed until the v2 endpoint's
+  // decompression path is separately verified. The bounded batch remains
+  // comfortably within the existing HTTP payload limit.
+  return transmitBody(packetBuffer, packetSize, nullptr, 0, session, sequences, count);
+}
+
 bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetSize,
-                                  const char* packed, unsigned int packedSize)
+                                  const char* packed, unsigned int packedSize,
+                                  uint64_t captureSession,
+                                  const uint32_t* captureSequences,
+                                  uint8_t captureCount)
 {
   lastStatus = 0;
 #if ENABLE_WIFI
@@ -894,7 +908,9 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
     success = cell.send(METHOD_GET, telemetryServerHost(), SERVER_PORT, path);
   }
 #else
-  len = snprintf(path, sizeof(path), packed ? "%s/post/%s?z=1" : "%s/post/%s", telemetryServerPath(), devid);
+  len = captureCount
+    ? snprintf(path, sizeof(path), "%s/post-v2/%s", telemetryServerPath(), devid)
+    : snprintf(path, sizeof(path), packed ? "%s/post/%s?z=1" : "%s/post/%s", telemetryServerPath(), devid);
   // The field count check below always uses the uncompressed batch.
   const char* body = packed ? packed : packetBuffer;
   const unsigned int bodySize = packed ? packedSize : packetSize;
@@ -948,6 +964,29 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
   bool accepted = responseCode == 200;
 #if SERVER_PROTOCOL == PROTOCOL_HTTPS_POST
   if (accepted) {
+    if (captureCount) {
+      char expectedAck[512];
+      int expectedBytes = snprintf(expectedAck, sizeof(expectedAck), "ACK2,%016llx",
+                                   (unsigned long long)captureSession);
+      for (uint8_t i = 0; i < captureCount && expectedBytes >= 0 &&
+           (size_t)expectedBytes < sizeof(expectedAck); ++i) {
+        int added = snprintf(expectedAck + expectedBytes, sizeof(expectedAck) - (size_t)expectedBytes,
+                             ",%lu", (unsigned long)captureSequences[i]);
+        if (added < 0 || (size_t)added >= sizeof(expectedAck) - (size_t)expectedBytes) {
+          expectedBytes = -1;
+          break;
+        }
+        expectedBytes += added;
+      }
+      size_t actualBytes = recvBytes > 0 ? (size_t)recvBytes : strlen(content);
+      while (actualBytes && (content[actualBytes - 1] == '\r' || content[actualBytes - 1] == '\n')) actualBytes--;
+      accepted = expectedBytes >= 0 && (size_t)expectedBytes < sizeof(expectedAck) &&
+        actualBytes == (size_t)expectedBytes && memcmp(content, expectedAck, actualBytes) == 0;
+      if (!accepted) {
+        Serial.print("[HTTP] Capture acknowledgement mismatch | response: ");
+        Serial.println(content);
+      }
+    } else {
     // A proxy or captive portal can answer 200 without ingesting telemetry.
     // The collector returns the exact number of non-timestamp fields stored.
     unsigned int expected = 0;
@@ -965,6 +1004,7 @@ bool TeleClientHTTP::transmitBody(const char* packetBuffer, unsigned int packetS
       Serial.print(expected);
       Serial.print(" | response: ");
       Serial.println(content);
+    }
     }
   }
 #endif

@@ -1,68 +1,59 @@
 # Telemetry ingest reliability contract
 
-This is the implementation plan for moving from the current at-least-once SD
-journal to an idempotent capture-to-archive path. It records the failure windows
-that still matter after the collector's disk-sync acknowledgement fix.
+This documents the capture-to-history path and the failure windows that remain.
 
 ## Current state
 
-* The device writes complete, CRC-checked frames to `/QUEUE.BIN` and advances a
-  separate cursor only after an accepted HTTP response. A lost response can
-  replay frames. The journal has no durable reading identity, so the collector
-  cannot distinguish a replay from a new reading.
-* The collector now acknowledges only after the raw trip archive is flushed
-  and `fsync` succeeds. A failed open, write, flush, or sync returns HTTP 503.
-  An ACK after a successful write can still be lost on the network, causing a
-  duplicate append. A newly created file or directory also needs directory
-  sync for a complete host-power-loss guarantee.
-* A collector trip ID is based on receipt time. A backlog captured before a
-  device reboot can be written into a later collector trip. Where GNSS UTC is
-  absent, the old frame contains no durable capture-time or boot identity to
-  repair that attribution reliably.
-* The 3.75 GiB FAT32 journal bound, failed card, or full RAM queue can still
-  cause missed collection cycles. The missed-readings counter is evidence of
-  those cycles, not a substitute for the absent data.
+* SD journal records use FQJ2 capture identity: one persistent 64-bit session
+  and a wrapping uint32 sequence are assigned once before journaling; the CRC
+  covers the identity and frame. Existing FQJ1 records remain readable. The
+  upload cursor advances only after an accepted response, so lost responses
+  replay the same IDs.
+* HTTPS replay uses FQI1 envelopes. The collector validates framing and CRC,
+  durably stores exact payload bytes under device/session/sequence, then ACKs
+  the exact received sequence list. Same-ID/same-payload retries are
+  idempotent; same-ID/different-payload conflicts return 409. Invalid records
+  fail with 400, and inbox durability failures return 503 without an ACK.
+  The current durable inbox implementation is POSIX-only; the Windows build
+  stub returns 503 and must not be used as an FQI1 ingest target.
+* The inbox is authoritative; the legacy text archive is not duplicated for
+  FQI1 records. The Python history indexer projects inbox records into SQLite
+  using stable `fqi-<session>` trip IDs. Valid device UTC requires both PIDs
+  `0x90` and `0x91`; collector receipt time is stored separately and never
+  substitutes for capture time. Sequence holes and monotonic-time intervals
+  are reported independently in Grafana.
+* The 3.75 GiB FAT32 journal bound or a failed card can still cause missed
+  collection cycles. SD builds keep only one in-flight capture in working
+  memory and synchronously verify its journal append before starting another;
+  a slow append can overrun the 250 ms cadence, while an append failure counts
+  the capture as missed and never makes it an upload candidate. The missed-
+  readings counter and historical interval/sequence views are evidence of
+  losses, not substitutes for absent data. A sequence hole indicates a
+  journaled-ID gap but does not by itself attribute loss to ECU polling, SD
+  latency, reset timing, or upload transport.
 
-## Next wire format
+## Current wire and projection contract
 
-Keep the existing PID payload as the raw evidence. Wrap each complete reading
-in an envelope with these fields before it enters the SD journal:
+Each FQI1 record preserves the existing ordered PID frame as raw evidence. Its
+envelope is:
 
 | Field | Rule |
 | --- | --- |
-| `device_id` | Stable device identity, checked against the upload credential. |
-| `capture_id` | Persistent 128-bit random recording-session ID, created before the first sample and retained across upload retries. |
-| `sequence` | Monotonic 64-bit reading number within `capture_id`, assigned once before journaling. |
-| `monotonic_ms` | Device tick at collection, never replaced by upload time. |
-| `capture_utc_ms` | GNSS/network UTC when known; otherwise null with time-source and uncertainty fields. |
-| `payload` | Complete original ordered PID frame, including repeated PIDs. |
-| `payload_crc32` | Corruption check over the exact payload bytes. |
+`FQI1,<16-hex session>,<uint32 sequence>,<payload byte length>,<CRC32>\n`
+followed by exactly that many payload bytes and a newline. Sequence `0` is
+valid at uint32 rollover. One upload batch contains a single session and may
+contain sequence holes; its ACK lists precisely the accepted sequence values,
+not a contiguous prefix or a parsed-field count. The device verifies the
+session and full ACK list before advancing the SD cursor.
 
-Store the envelope itself on SD so reboot/retry cannot create a new ID for the
-same reading. A new recording session after reboot gets a new `capture_id`;
-queued readings retain their original one. Batch uploads preserve order but an
-ACK names the accepted `(capture_id, sequence)` records, not merely a count of
-parsed values. Unknown protocol versions must fail closed without advancing
-the SD cursor.
+The Linux collector publishes inbox files atomically and syncs each file and
+its containing directory before ACK. The indexer keeps corrupt inbox files for
+investigation and excludes them from SQLite. It is idempotent when new files
+arrive and recomputes the session projection when the inbox contents change.
+Legacy frames continue through the existing archive path with unknown capture
+identity; do not infer identity from `millis()`, PID values, or upload order.
 
-## Server acceptance boundary
-
-1. Authenticate the device and reject malformed envelopes before any ACK.
-2. Insert the exact envelope bytes into a durable inbox keyed by
-   `(device_id, capture_id, sequence)`. A repeated key with the same bytes is
-   an idempotent success; the same key with different bytes is an integrity
-   fault and must be reported.
-3. Commit and sync the inbox transaction before returning the accepted IDs.
-   Retain an explicit storage-error response so the device keeps its copy.
-4. Build trip archives, SQLite history, Grafana projections, and AI evidence
-   from that inbox. These are rebuildable outputs; their failure must not make
-   the inbox claim an absent reading, and their lag must be visible.
-
-During migration, accept legacy frames through the current archive path and
-mark their identity and capture time as unknown. Do not infer uniqueness from
-`millis()`, PID values, or upload order. Introduce the inbox server first, then
-flash the envelope-writing firmware, then switch downstream projections to the
-inbox after historical import and count reconciliation.
+## Remaining reliability evidence
 
 ## Operational evidence needed before a no-missed-readings claim
 

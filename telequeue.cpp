@@ -16,6 +16,7 @@ constexpr const char* CURSOR_A = "/QUEUE.A";
 constexpr const char* CURSOR_B = "/QUEUE.B";
 constexpr const char* REJECTED_PATH = "/QUEUE.REJ";
 constexpr uint32_t RECORD_MAGIC = 0x46514A31; // FQJ1
+constexpr uint32_t RECORD_MAGIC_IDENTIFIED = 0x46514A32; // FQJ2
 constexpr uint32_t CURSOR_MAGIC = 0x46514331; // FQC1
 constexpr uint16_t MAX_FRAME = SAMPLE_FRAME_SIZE;
 // FAT32's maximum file size is 4 GiB minus one byte. Leave room for a final
@@ -38,6 +39,20 @@ struct RecordHeader {
 };
 static_assert(sizeof(RecordHeader) == 12, "journal header layout changed");
 
+struct RecordIdentityDisk {
+    uint32_t sessionLow;
+    uint32_t sessionHigh;
+    uint32_t sequence;
+};
+static_assert(sizeof(RecordIdentityDisk) == 12, "journal identity layout changed");
+
+uint16_t recordHeaderSize(uint32_t magic)
+{
+    return magic == RECORD_MAGIC_IDENTIFIED
+        ? (uint16_t)(sizeof(RecordHeader) + sizeof(RecordIdentityDisk))
+        : (uint16_t)sizeof(RecordHeader);
+}
+
 struct Cursor {
     uint32_t magic;
     uint32_t offset;
@@ -57,20 +72,43 @@ uint32_t crc32(const uint8_t* data, size_t length)
     return ~crc;
 }
 
+uint32_t crc32Identified(const RecordIdentityDisk& identity, const uint8_t* frame, size_t length)
+{
+    uint32_t crc = 0xFFFFFFFF;
+    const uint8_t* metadata = (const uint8_t*)&identity;
+    for (size_t index = 0; index < sizeof(identity) + length; ++index) {
+        const uint8_t value = index < sizeof(identity) ? metadata[index] : frame[index - sizeof(identity)];
+        crc ^= value;
+        for (uint8_t bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xEDB88320UL & -(crc & 1));
+    }
+    return ~crc;
+}
+
 // Return -1 for an I/O failure, 0 for damaged bytes, and 1 for a valid record.
 // A read failure must not be treated as permission to skip a record.
 int readRecord(File& file, uint32_t position, uint32_t size,
-               RecordHeader* header, char* frame)
+               RecordHeader* header, RecordIdentityDisk* identity, char* frame)
 {
     if (size - position < sizeof(*header)) return 0;
     if (!file.seek(position) ||
         file.read((uint8_t*)header, sizeof(*header)) != sizeof(*header)) return -1;
-    if (header->magic != RECORD_MAGIC || header->reserved != 0 ||
+    if ((header->magic != RECORD_MAGIC && header->magic != RECORD_MAGIC_IDENTIFIED) || header->reserved != 0 ||
         header->length < 3 || header->length > MAX_FRAME ||
-        header->length > size - position - sizeof(*header)) return 0;
+        recordHeaderSize(header->magic) > size - position ||
+        header->length > size - position - recordHeaderSize(header->magic)) return 0;
+    if (header->magic == RECORD_MAGIC_IDENTIFIED) {
+        if (!identity) return 0;
+        if (file.read((uint8_t*)identity, sizeof(*identity)) != sizeof(*identity)) return -1;
+    } else if (identity) {
+        identity->sessionLow = 0;
+        identity->sessionHigh = 0;
+        identity->sequence = 0;
+    }
     if (file.read((uint8_t*)frame, header->length) != header->length) return -1;
-    return frame[header->length - 1] == ',' &&
-        crc32((const uint8_t*)frame, header->length) == header->crc ? 1 : 0;
+    const uint32_t actualCrc = header->magic == RECORD_MAGIC_IDENTIFIED
+        ? crc32Identified(*identity, (const uint8_t*)frame, header->length)
+        : crc32((const uint8_t*)frame, header->length);
+    return frame[header->length - 1] == ',' && actualCrc == header->crc ? 1 : 0;
 }
 
 bool removeCursors()
@@ -288,13 +326,17 @@ bool DurableQueue::recover()
     okay = okay && position <= size;
     while (okay && position < size) {
         RecordHeader header;
-        int valid = readRecord(source, position, size, &header, frame);
+        RecordIdentityDisk identity = {};
+        int valid = readRecord(source, position, size, &header, &identity, frame);
         if (valid < 0) { okay = false; break; }
         if (valid) {
+            const uint16_t headerBytes = recordHeaderSize(header.magic);
             okay = target.write((const uint8_t*)&header, sizeof(header)) == sizeof(header) &&
+                (header.magic != RECORD_MAGIC_IDENTIFIED ||
+                 target.write((const uint8_t*)&identity, sizeof(identity)) == sizeof(identity)) &&
                 target.write((const uint8_t*)frame, header.length) == header.length;
-            position += sizeof(header) + header.length;
-            recovered += sizeof(header) + header.length;
+            position += headerBytes + header.length;
+            recovered += headerBytes + header.length;
         } else {
             position++;
             damaged++;
@@ -309,8 +351,9 @@ bool DurableQueue::recover()
     position = lastYield = 0;
     while (okay && position < recovered) {
         RecordHeader header;
-        okay = readRecord(verify, position, recovered, &header, frame) == 1;
-        if (okay) position += sizeof(header) + header.length;
+        RecordIdentityDisk identity = {};
+        okay = readRecord(verify, position, recovered, &header, &identity, frame) == 1;
+        if (okay) position += recordHeaderSize(header.magic) + header.length;
         if (position - lastYield >= 4096) { delay(1); lastYield = position; }
     }
     if (verify) verify.close();
@@ -350,8 +393,21 @@ bool DurableQueue::append(const char* frame, uint16_t length, bool* lockTimedOut
     return appendBatch(&frame, &length, 1, lockTimedOut);
 }
 
+bool DurableQueue::appendIdentified(const char* frame, uint16_t length, uint64_t session,
+                                   uint32_t sequence, bool* lockTimedOut)
+{
+    const JournalCaptureIdentity identity = {session, sequence};
+    return appendRecords(&frame, &length, 1, &identity, lockTimedOut);
+}
+
 bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count,
                                bool* lockTimedOut)
+{
+    return appendRecords(frames, lengths, count, nullptr, lockTimedOut);
+}
+
+bool DurableQueue::appendRecords(const char* const* frames, const uint16_t* lengths, uint8_t count,
+                                 const JournalCaptureIdentity* identities, bool* lockTimedOut)
 {
     if (lockTimedOut) *lockTimedOut = false;
     if (!m_ready || m_fault || m_corrupt || !frames || !lengths || !count) return false;
@@ -359,7 +415,7 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
     for (uint8_t i = 0; i < count; i++) {
         const uint16_t length = lengths[i];
         if (!frames[i] || length < 3 || length > MAX_FRAME || frames[i][length - 1] != ',') return false;
-        total += sizeof(RecordHeader) + length;
+        total += sizeof(RecordHeader) + (identities ? sizeof(RecordIdentityDisk) : 0) + length;
     }
     if (!lock()) {
         if (lockTimedOut) *lockTimedOut = true;
@@ -385,13 +441,25 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
             okay = true;
             size_t written = 0;
             for (uint8_t i = 0; okay && i < count; i++) {
-                RecordHeader header = {RECORD_MAGIC, lengths[i], 0, crc32((const uint8_t*)frames[i], lengths[i])};
+                const uint64_t session = identities ? identities[i].session : 0;
+                const RecordIdentityDisk identity = {(uint32_t)session, (uint32_t)(session >> 32),
+                    identities ? identities[i].sequence : 0};
+                RecordHeader header = {identities ? RECORD_MAGIC_IDENTIFIED : RECORD_MAGIC,
+                    lengths[i], 0, identities
+                        ? crc32Identified(identity, (const uint8_t*)frames[i], lengths[i])
+                        : crc32((const uint8_t*)frames[i], lengths[i])};
                 const size_t headerBytes = file.write((const uint8_t*)&header, sizeof(header));
-                const size_t frameBytes = headerBytes == sizeof(header)
+                size_t identityBytes = 0;
+                if (headerBytes == sizeof(header) && identities)
+                    identityBytes = file.write((const uint8_t*)&identity, sizeof(identity));
+                const size_t frameBytes = headerBytes == sizeof(header) &&
+                    (!identities || identityBytes == sizeof(RecordIdentityDisk))
                     ? file.write((const uint8_t*)frames[i], lengths[i]) : 0;
-                written += headerBytes + frameBytes;
-                okay = headerBytes == sizeof(header) && frameBytes == lengths[i];
-                if (!okay) failureStage = headerBytes != sizeof(header) ? "append-header-write" : "append-frame-write";
+                written += headerBytes + identityBytes + frameBytes;
+                okay = headerBytes == sizeof(header) &&
+                    (!identities || identityBytes == sizeof(RecordIdentityDisk)) && frameBytes == lengths[i];
+                if (!okay) failureStage = headerBytes != sizeof(header) ? "append-header-write" :
+                    (identities && identityBytes != sizeof(RecordIdentityDisk) ? "append-identity-write" : "append-frame-write");
             }
             partial = !okay && written != 0;
             file.flush();
@@ -411,11 +479,26 @@ bool DurableQueue::appendBatch(const char* const* frames, const uint16_t* length
         char chunk[256];
         for (uint8_t i = 0; okay && i < count; i++) {
             RecordHeader header;
+            RecordIdentityDisk identity = {};
             const size_t headerBytes = verify.read((uint8_t*)&header, sizeof(header));
             okay = headerBytes == sizeof(header) &&
-                header.magic == RECORD_MAGIC && header.length == lengths[i] &&
-                header.crc == crc32((const uint8_t*)frames[i], lengths[i]);
+                header.magic == (identities ? RECORD_MAGIC_IDENTIFIED : RECORD_MAGIC) &&
+                header.length == lengths[i];
             if (!okay) failureStage = headerBytes != sizeof(header) ? "readback-header" : "readback-header-mismatch";
+            if (okay && identities) {
+                const uint64_t expectedSession = identities[i].session;
+                okay = verify.read((uint8_t*)&identity, sizeof(identity)) == sizeof(identity) &&
+                    (((uint64_t)identity.sessionHigh << 32) | identity.sessionLow) == expectedSession &&
+                    identity.sequence == identities[i].sequence;
+                if (!okay) failureStage = "readback-identity";
+            }
+            if (okay) {
+                const uint32_t expectedCrc = identities
+                    ? crc32Identified(identity, (const uint8_t*)frames[i], lengths[i])
+                    : crc32((const uint8_t*)frames[i], lengths[i]);
+                okay = header.crc == expectedCrc;
+                if (!okay) failureStage = "readback-crc";
+            }
             for (uint16_t offset = 0; okay && offset < lengths[i]; offset += sizeof(chunk)) {
                 const uint16_t part = min((uint16_t)sizeof(chunk), (uint16_t)(lengths[i] - offset));
                 const size_t readBytes = verify.read((uint8_t*)chunk, part);
@@ -475,6 +558,12 @@ bool DurableQueue::fillReadCache()
 
 bool DurableQueue::peek(char* frame, uint16_t capacity, uint16_t* length)
 {
+    return peekIdentified(frame, capacity, length, nullptr);
+}
+
+bool DurableQueue::peekIdentified(char* frame, uint16_t capacity, uint16_t* length,
+                                  JournalCaptureIdentity* identity)
+{
     if (!m_ready || m_fault || !frame || !length || !lock()) return false;
     const uint32_t candidate = m_read;
     // m_size is the journal length after the last verified append or
@@ -487,8 +576,8 @@ bool DurableQueue::peek(char* frame, uint16_t capacity, uint16_t* length)
     bool cached = candidate >= m_cacheStart && candidate + sizeof(header) <= m_cacheEnd;
     if (cached) {
         memcpy(&header, m_cache + (candidate - m_cacheStart), sizeof(header));
-        cached = header.length <= MAX_FRAME &&
-            candidate + sizeof(header) + header.length <= m_cacheEnd;
+        cached = (header.magic == RECORD_MAGIC || header.magic == RECORD_MAGIC_IDENTIFIED) &&
+            header.length <= MAX_FRAME && candidate + recordHeaderSize(header.magic) + header.length <= m_cacheEnd;
     }
     if (!cached) {
         if (!fillReadCache()) {
@@ -502,14 +591,30 @@ bool DurableQueue::peek(char* frame, uint16_t capacity, uint16_t* length)
     const uint32_t available = m_cacheEnd - candidate;
     if (available >= sizeof(header)) {
         memcpy(&header, m_cache + (candidate - m_cacheStart), sizeof(header));
-        const char* body = m_cache + (candidate - m_cacheStart) + sizeof(header);
-        if (header.magic == RECORD_MAGIC && header.reserved == 0 && header.length >= 3 &&
+        const uint16_t headerBytes = recordHeaderSize(header.magic);
+        const char* metadata = m_cache + (candidate - m_cacheStart) + sizeof(header);
+        const char* body = m_cache + (candidate - m_cacheStart) + headerBytes;
+        RecordIdentityDisk storedIdentity = {};
+        if (header.magic == RECORD_MAGIC_IDENTIFIED &&
+            sizeof(header) + sizeof(storedIdentity) <= available) memcpy(&storedIdentity, metadata, sizeof(storedIdentity));
+        if ((header.magic == RECORD_MAGIC || header.magic == RECORD_MAGIC_IDENTIFIED) &&
+            header.reserved == 0 && header.length >= 3 &&
             header.length <= MAX_FRAME && header.length <= capacity &&
-            sizeof(header) + header.length <= available &&
-            crc32((const uint8_t*)body, header.length) == header.crc &&
+            headerBytes + header.length <= available &&
+            (header.magic == RECORD_MAGIC_IDENTIFIED
+                ? crc32Identified(storedIdentity, (const uint8_t*)body, header.length)
+                : crc32((const uint8_t*)body, header.length)) == header.crc &&
             body[header.length - 1] == ',') {
+            if (identity) {
+                identity->session = 0;
+                identity->sequence = 0;
+                if (header.magic == RECORD_MAGIC_IDENTIFIED) {
+                    identity->session = ((uint64_t)storedIdentity.sessionHigh << 32) | storedIdentity.sessionLow;
+                    identity->sequence = storedIdentity.sequence;
+                }
+            }
             memcpy(frame, body, header.length);
-            m_read = candidate + sizeof(header) + header.length;
+            m_read = candidate + headerBytes + header.length;
             *length = header.length;
             found = true;
         }

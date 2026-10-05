@@ -211,6 +211,7 @@
   <ItemGroup>
     <ClCompile Include="cJSON\cJSON.c" />
     <ClCompile Include="cJSON\cJSON_Utils.c" />
+    <ClCompile Include="capture_inbox.c" />
     <ClCompile Include="data2kml.c" />
     <ClCompile Include="httpd\httpd.c" />
     <ClCompile Include="httpd\httppil.c" />
@@ -226,6 +227,7 @@
   <ItemGroup>
     <ClInclude Include="cJSON\cJSON.h" />
     <ClInclude Include="cJSON\cJSON_Utils.h" />
+    <ClInclude Include="capture_inbox.h" />
     <ClInclude Include="data2kml.h" />
     <ClInclude Include="httpd\httpd.h" />
     <ClInclude Include="httpd\httpint.h" />

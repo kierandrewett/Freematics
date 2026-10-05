@@ -5,7 +5,7 @@
   "description": "Historical Freematics trip index, route, replay telemetry, diagnostics and every ECU-advertised standard PID for the selected trip.",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
+  "graphTooltip": 2,
   "id": null,
   "links": [
     {
@@ -990,8 +990,8 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
-          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", gap_count AS \"Gaps\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
+          "queryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", over_target_interval_count AS \"Observed intervals >250 ms\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
+          "rawQueryText": "SELECT trip_id AS \"Trip\", device_id AS \"Vehicle\", datetime(timeline_start_ms / 1000, 'unixepoch') AS \"Timeline start\", datetime(timeline_end_ms / 1000, 'unixepoch') AS \"Timeline end\", timeline_start_ms - 30000 AS \"Window start\", timeline_end_ms + 30000 AS \"Window end\", timestamp_quality AS \"Capture timestamp quality\", time_basis AS \"Display time basis\", sample_count AS \"Samples\", over_target_interval_count AS \"Observed intervals >250 ms\", gps_fix_count AS \"GPS fixes\", gps_poor_quality_count AS \"Poor HDOP\", speed_disagreement_count AS \"Speed disagreements\", archive_path AS \"Archive\" FROM trip WHERE device_id = ${device:sqlstring} ORDER BY trip_id DESC",
           "queryType": "table",
           "refId": "A",
           "timeColumns": []
@@ -1143,7 +1143,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1151,7 +1151,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1305,7 +1305,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1313,7 +1313,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1403,7 +1403,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1411,7 +1411,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1501,7 +1501,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1509,7 +1509,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1599,7 +1599,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1607,7 +1607,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1714,7 +1714,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1722,7 +1722,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1829,7 +1829,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1837,7 +1837,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -1968,7 +1968,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -1976,7 +1976,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -2229,7 +2229,7 @@
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": 10000,
+            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "pointSize": 3,
@@ -2237,7 +2237,7 @@
               "type": "linear"
             },
             "showPoints": "always",
-            "spanNulls": 10000,
+            "spanNulls": false,
             "stacking": {
               "group": "A",
               "mode": "none"
@@ -2975,7 +2975,7 @@
         "type": "frser-sqlite-datasource",
         "uid": "freematics-history"
       },
-      "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
+      "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Observed intervals over 250 ms are listed; this does not prove a frame was dropped or identify the cause. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -3012,8 +3012,8 @@
             "type": "frser-sqlite-datasource",
             "uid": "freematics-history"
           },
-          "queryText": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id LEFT JOIN sample_gaps AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
-          "rawQueryText": "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", t.gap_count AS \"Trip gaps\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id LEFT JOIN sample_gaps AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "queryText": "SELECT s.sequence AS \"Sample\", s.capture_sequence AS \"Device capture sequence\", s.capture_session_id AS \"Device capture session\", t.missing_capture_sequence_count AS \"Missing capture IDs in session\", cg.previous_capture_sequence AS \"Previous capture ID\", cg.missing_sequences AS \"Missing IDs before sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", t.over_target_interval_count AS \"Trip observed intervals >250 ms\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id LEFT JOIN sample_over_target_intervals AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence LEFT JOIN sample_capture_sequence_gaps AS cg ON cg.device_id = s.device_id AND cg.trip_id = s.trip_id AND cg.capture_sequence = s.capture_sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
+          "rawQueryText": "SELECT s.sequence AS \"Sample\", s.capture_sequence AS \"Device capture sequence\", s.capture_session_id AS \"Device capture session\", t.missing_capture_sequence_count AS \"Missing capture IDs in session\", cg.previous_capture_sequence AS \"Previous capture ID\", cg.missing_sequences AS \"Missing IDs before sample\", t.timestamp_quality AS \"Trip timestamp quality\", s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", t.over_target_interval_count AS \"Trip observed intervals >250 ms\" FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id LEFT JOIN sample_over_target_intervals AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence LEFT JOIN sample_capture_sequence_gaps AS cg ON cg.device_id = s.device_id AND cg.trip_id = s.trip_id AND cg.capture_sequence = s.capture_sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence LIMIT 5000",
           "queryType": "table",
           "refId": "A",
           "timeColumns": []

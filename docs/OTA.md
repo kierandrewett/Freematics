@@ -35,11 +35,15 @@ Any fresh nonzero speed or RPM observation also invalidates the accumulated
 quiet proof; a new full hour of valid stillness evidence is required before a
 later attempt.
 OBD is refreshed after the final motion-observation interval immediately
-before cellular setup, then checked again before reboot. The modem owns the
-shared coprocessor link during the download, so OBD is not polled concurrently;
-motion proof, storage, credential presence, and supply voltage are monitored
-during transfer. Missing, stale, unsupported, or invalid OBD readings fail
-closed at each OBD check.
+before cellular setup and checked again before reboot. During download, the
+telemetry owner's cancellation callback rechecks supported, fresh speed and
+RPM every five seconds. Unknown, stale, or non-zero readings cancel the
+transfer. The standby owner temporarily releases the coprocessor mutex for
+these reads, while it independently continues the motion and supply checks;
+other acquisition tasks remain asleep. It reacquires the mutex after the
+telemetry owner finishes or acknowledges cancellation. This uses the Model B
+OBD link separately from the SIM7670 BEE UART; verify this concurrency and
+cancellation latency on hardware before enabling unattended OTA.
 Standby motion reads share a mutex with the background sensor-acquisition task;
 lock contention is bounded and treated as a failed motion sample, so it cannot
 silently extend a quiet period or be mistaken for fresh motion evidence.

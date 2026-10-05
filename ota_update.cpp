@@ -4,6 +4,7 @@
 #include "config.h"
 #include "ota_boot_identity.h"
 #include "ota_boot_policy.h"
+#include "ota_cancel_policy.h"
 #include "ota_release_policy.h"
 #include "ota_sha256_sidecar.h"
 #include "ota_stage_policy.h"
@@ -61,20 +62,24 @@ bool cancelled(const volatile bool* requested)
   return requested && *requested;
 }
 
-bool continueRequested(void* context)
-{
-  return !cancelled(static_cast<const volatile bool*>(context));
-}
-
 struct AssetWriter {
   CellHTTP& cell;
   const volatile bool* cancelRequested;
+  CellHTTPContinueCheck continueCheck;
+  void* continueContext;
   CellHTTPStreamResponse response;
   char host[128];
   char path[2048];
   char releaseTag[65];
   uint8_t redirects;
 };
+
+bool continueRequested(void* context)
+{
+  AssetWriter* asset = static_cast<AssetWriter*>(context);
+  return asset && freematics::ota::shouldContinueTransfer(
+      asset->cancelRequested, asset->continueCheck, asset->continueContext);
+}
 
 bool getAsset(AssetWriter& asset, const char* filename, uint32_t maxLength,
               CellHTTPBodyWriter writer, void* writerContext)
@@ -93,7 +98,7 @@ bool getAsset(AssetWriter& asset, const char* filename, uint32_t maxLength,
     if (cancelled(asset.cancelRequested)) return false;
     if (!asset.cell.getStream(asset.host, 443, asset.path, maxLength,
             writer, writerContext, &asset.response, kHttpTimeoutMs,
-            continueRequested, (void*)asset.cancelRequested)) return false;
+            continueRequested, &asset)) return false;
     if (asset.response.status == 200) {
       asset.cell.close();
       return asset.releaseTag[0] != 0;
@@ -399,18 +404,24 @@ extern "C" bool verifyRollbackLater()
 }
 #endif
 
-OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* cancelRequested)
+OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* cancelRequested,
+                                         CellHTTPContinueCheck continueCheck,
+                                         void* continueContext)
 {
   clearStagedCandidate();
 #if STORAGE != STORAGE_SD
   (void)cell;
   (void)cancelRequested;
+  (void)continueCheck;
+  (void)continueContext;
   Serial.println("[OTA] Refusing update: healthy SD journal is required");
   return OTA_ATTEMPT_FAILED;
 #endif
 #if !CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
   (void)cell;
   (void)cancelRequested;
+  (void)continueCheck;
+  (void)continueContext;
   Serial.println("[OTA] Refusing update: bootloader rollback is not enabled");
   return OTA_ATTEMPT_FAILED;
 #endif
@@ -422,7 +433,8 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
   if (cancelled(cancelRequested)) return OTA_ATTEMPT_CANCELLED;
 
   SidecarBuffer sidecar = {};
-  AssetWriter asset = {cell, cancelRequested, {}, {}, {}, {}, 0};
+  AssetWriter asset = {cell, cancelRequested, continueCheck, continueContext,
+                       {}, {}, {}, {}, 0};
   if (!getAsset(asset, kSidecarName, kSidecarMaximum, writeSidecar, &sidecar)) {
     return cancelled(cancelRequested) ? OTA_ATTEMPT_CANCELLED : OTA_ATTEMPT_FAILED;
   }

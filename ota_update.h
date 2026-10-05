@@ -12,7 +12,9 @@ enum OtaAttemptResult {
 
 // OTA uses only the strict ESP32-TLS-over-cellular transport on SIM7670.
 // The caller owns the parked-state policy and modem lifecycle.
-OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* cancelRequested);
+OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* cancelRequested,
+                                         CellHTTPContinueCheck continueCheck = nullptr,
+                                         void* continueContext = nullptr);
 bool prepareVerifiedOtaUpdate();
 bool activateVerifiedOtaUpdate();
 void discardVerifiedOtaUpdate();

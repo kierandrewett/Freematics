@@ -14,6 +14,7 @@
 ******************************************************************************/
 
 #include <stdio.h>
+#include <inttypes.h>
 #if defined(__has_include)
 #if __has_include(<zlib.h>)
 #include <zlib.h>
@@ -40,6 +41,7 @@ int uncompress(unsigned char* dest, unsigned long* destLen, const unsigned char*
 #include "data2kml.h"
 #include "httpd.h"
 #include "teleserver.h"
+#include "capture_inbox.h"
 #include "logdata.h"
 #include "processpil.h"
 #include "revision.h"
@@ -48,6 +50,7 @@ int uhPush(UrlHandlerParam* param);
 int uhPull(UrlHandlerParam* param);
 int uhGet(UrlHandlerParam* param);
 int uhPost(UrlHandlerParam* param);
+int uhPostV2(UrlHandlerParam* param);
 int uhChannels(UrlHandlerParam* param);
 int uhChannelsXML(UrlHandlerParam* param);
 int uhNotify(UrlHandlerParam* param);
@@ -64,6 +67,7 @@ int phData(void* _hp, int op, char* buf, int len);
 UrlHandler urlHandlerList[]={
 	{"metrics", uhMetrics},
 	{"api/post", uhPost},
+	{"api/post-v2", uhPostV2},
 	{"api/push", uhPush},
 	{"api/get", uhGet},
 	{"api/pull", uhPull},
@@ -1740,6 +1744,166 @@ int uhPost(UrlHandlerParam* param)
 	} else {
 		param->contentLength = (unsigned int)responseLength;
 	}
+	return FLAG_DATA_RAW;
+}
+
+static uint32_t captureCRC32(const unsigned char* data, size_t length)
+{
+	uint32_t crc = UINT32_C(0xffffffff);
+	for (size_t i = 0; i < length; ++i) {
+		crc ^= data[i];
+		for (unsigned bit = 0; bit < 8; ++bit)
+			crc = (crc >> 1) ^ ((crc & 1U) ? UINT32_C(0xedb88320) : 0U);
+	}
+	return crc ^ UINT32_C(0xffffffff);
+}
+
+static int parseCaptureHex(const char* text, size_t length, uint64_t* value)
+{
+	uint64_t result = 0;
+	if (!text || !length || length > 16 || !value) return 0;
+	for (size_t i = 0; i < length; ++i) {
+		unsigned char c = (unsigned char)text[i];
+		unsigned int nibble;
+		if (c >= '0' && c <= '9') nibble = c - '0';
+		else if (c >= 'a' && c <= 'f') nibble = c - 'a' + 10;
+		else if (c >= 'A' && c <= 'F') nibble = c - 'A' + 10;
+		else return 0;
+		result = (result << 4) | nibble;
+	}
+	*value = result;
+	return 1;
+}
+
+static int parseCaptureDecimal(const char* text, uint64_t maximum, uint64_t* value)
+{
+	uint64_t result = 0;
+	if (!text || !*text || !value) return 0;
+	for (const unsigned char* c = (const unsigned char*)text; *c; ++c) {
+		if (*c < '0' || *c > '9') return 0;
+		if (result > (maximum - (unsigned)(*c - '0')) / 10) return 0;
+		result = result * 10 + (unsigned)(*c - '0');
+	}
+	*value = result;
+	return 1;
+}
+
+static int captureV2Error(UrlHandlerParam* param, int status, const char* message)
+{
+	param->hs->response.statusCode = status;
+	param->contentType = HTTPFILETYPE_TEXT;
+	int length = snprintf(param->pucBuffer, param->bufSize, "%s", message);
+	param->contentLength = length >= 0 && (unsigned int)length < param->bufSize ? (unsigned int)length : 0;
+	return FLAG_DATA_RAW;
+}
+
+/* Versioned, capture-ID-bearing ingest. Each FQI1 record is independently
+ * checksummed and durably inboxed before the exact received ID is ACKed. */
+int uhPostV2(UrlHandlerParam* param)
+{
+	param->contentLength = 0;
+	CHANNEL_DATA* pld = locateChannel(param);
+	if (!pld) return captureV2Error(param, 403, "Unknown telemetry device");
+	if (!param->payloadSize || param->payloadSize > MAX_TELEMETRY_RECORD_SIZE)
+		return captureV2Error(param, 400, "Invalid capture batch size");
+
+	const unsigned char* body = (const unsigned char*)param->pucPayload;
+	size_t bodyLength = param->payloadSize, offset = 0;
+	uint64_t batchSession = 0;
+	uint32_t acceptedSequences[64];
+	unsigned int acceptedCount = 0;
+	uint32_t handledFields = 0;
+	while (offset < bodyLength) {
+		const unsigned char* newline = memchr(body + offset, '\n', bodyLength - offset);
+		if (!newline || (size_t)(newline - (body + offset)) >= 127)
+			return captureV2Error(param, 400, "Malformed capture envelope header");
+		char header[128];
+		size_t headerLength = (size_t)(newline - (body + offset));
+		memcpy(header, body + offset, headerLength);
+		header[headerLength] = 0;
+		char* fields[5] = {header, NULL, NULL, NULL, NULL};
+		unsigned int fieldCount = 1;
+		for (char* c = header; *c; ++c) {
+			if (*c == ',') {
+				if (fieldCount >= 5) return captureV2Error(param, 400, "Malformed capture envelope header");
+				*c = 0;
+				fields[fieldCount++] = c + 1;
+			}
+		}
+		uint64_t session, sequence, sampleLength, checksum;
+		if (fieldCount != 5 || strcmp(fields[0], "FQI1") || strlen(fields[1]) != 16 ||
+			strlen(fields[4]) != 8 || !parseCaptureHex(fields[1], 16, &session) || !session ||
+			!parseCaptureDecimal(fields[2], UINT32_MAX, &sequence) ||
+			!parseCaptureDecimal(fields[3], MAX_TELEMETRY_RECORD_SIZE, &sampleLength) || !sampleLength ||
+			!parseCaptureHex(fields[4], 8, &checksum) || sampleLength > bodyLength - (size_t)(newline - body) - 1)
+			return captureV2Error(param, 400, "Invalid capture envelope fields");
+		if (acceptedCount >= sizeof(acceptedSequences) / sizeof(acceptedSequences[0]))
+			return captureV2Error(param, 413, "Too many capture records");
+		if (!acceptedCount) batchSession = session;
+		else if (session != batchSession) return captureV2Error(param, 400, "Mixed capture sessions in one batch");
+
+		offset = (size_t)(newline - body) + 1;
+		const unsigned char* sampleBytes = body + offset;
+		if (sampleLength >= bodyLength - offset || sampleBytes[sampleLength] != '\n' ||
+			memchr(sampleBytes, 0, (size_t)sampleLength) ||
+			captureCRC32(sampleBytes, (size_t)sampleLength) != (uint32_t)checksum)
+			return captureV2Error(param, 400, "Capture checksum or framing failure");
+		char* sample = (char*)malloc((size_t)sampleLength + 1);
+		if (!sample) return captureV2Error(param, 503, "Capture validation unavailable");
+		memcpy(sample, sampleBytes, (size_t)sampleLength);
+		sample[sampleLength] = 0;
+		if (sample[sampleLength - 1] == ',') sample[sampleLength - 1] = 0;
+		uint32_t sampleTick = 0, finalTick = 0;
+		if (!validatePayload(sample, &sampleTick, &finalTick) || sampleTick != finalTick || strstr(sample + 1, ",0:")) {
+			free(sample);
+			return captureV2Error(param, 400, "Invalid capture sample");
+		}
+
+		CaptureInboxResult saved = captureInboxStore(dataDir, pld->devid, session, (uint32_t)sequence,
+			sampleBytes, (size_t)sampleLength);
+		if (saved == CAPTURE_INBOX_INVALID) {
+			free(sample);
+			return captureV2Error(param, 400, "Invalid capture identity");
+		}
+		if (saved == CAPTURE_INBOX_CONFLICT) {
+			free(sample);
+			return captureV2Error(param, 409, "Capture identity reused with different data");
+		}
+		if (saved == CAPTURE_INBOX_ERROR) {
+			free(sample);
+			return captureV2Error(param, 503, "Capture inbox durability failure");
+		}
+		/* A new durable record updates the live snapshot without writing a
+		 * second copy to the legacy text archive. Duplicates never roll the live
+		 * snapshot backwards after a lost response/retry. */
+		if (saved == CAPTURE_INBOX_STORED) {
+			int fields = processPayload(sample, pld, 2);
+			if (fields < 0) {
+				free(sample);
+				return captureV2Error(param, 503, "Durable capture is awaiting live projection");
+			}
+			handledFields += (uint32_t)fields;
+		}
+		free(sample);
+		acceptedSequences[acceptedCount++] = (uint32_t)sequence;
+		offset += (size_t)sampleLength + 1;
+	}
+	if (!acceptedCount) return captureV2Error(param, 400, "Empty capture batch");
+
+	int written = snprintf(param->pucBuffer, param->bufSize, "ACK2,%016" PRIx64, batchSession);
+	for (unsigned int i = 0; i < acceptedCount && written >= 0 && (unsigned int)written < param->bufSize; ++i) {
+		int added = snprintf(param->pucBuffer + written, param->bufSize - (unsigned int)written,
+			",%" PRIu32, acceptedSequences[i]);
+		if (added < 0 || (unsigned int)added >= param->bufSize - (unsigned int)written) { written = -1; break; }
+		written += added;
+	}
+	if (written < 0 || (unsigned int)written >= param->bufSize)
+		return captureV2Error(param, 500, "Capture acknowledgement overflow");
+	param->contentLength = (unsigned int)written;
+	param->contentType = HTTPFILETYPE_TEXT;
+	pld->dataReceived += param->payloadSize;
+	pld->ip = param->hs->ipAddr;
+	(void)handledFields;
 	return FLAG_DATA_RAW;
 }
 

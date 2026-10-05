@@ -17,6 +17,7 @@ struct UsbTelemetryRecord {
     uint16_t length;
     uint32_t sequence;
   uint32_t captureMs;
+  uint32_t captureSequence;
   uint64_t captureUtcMs;
   uint64_t bootId;
   uint32_t dropped;

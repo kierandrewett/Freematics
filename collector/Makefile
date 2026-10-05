@@ -1,8 +1,8 @@
 CC=gcc
 CFLAGS=-O3 -Wunused-result
-HEADERS = httpint.h httpapi.h
+HEADERS = httpint.h httpapi.h capture_inbox.h
 TARGET = teleserver
-OBJS += teleserver.o udpserver.o teletrips.o telebroker.o data2kml.o processpil.o httpd/httppil.o httpd/httpd.o cJSON/cJSON.o cJSON/cJSON_Utils.o libb64/cdecode.o libb64/cencode.o jsonconfig.o
+OBJS += teleserver.o capture_inbox.o udpserver.o teletrips.o telebroker.o data2kml.o processpil.o httpd/httppil.o httpd/httpd.o cJSON/cJSON.o cJSON/cJSON_Utils.o libb64/cdecode.o libb64/cencode.o jsonconfig.o
 
 CFLAGS+=-DMAX_CHANNELS=16
 CFLAGS+=-Ihttpd -Ilibb64 -IcJSON

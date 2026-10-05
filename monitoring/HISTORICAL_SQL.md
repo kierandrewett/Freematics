@@ -34,13 +34,23 @@ The current schema uses these boundaries:
   `trip_metric_summary` provide metadata and bounded query surfaces.
 * `ingest_file` records content hashes, processed size, sealing state, and
   mutation detection so an index pass is idempotent.
+* `capture_inbox_record` and the nullable capture identity columns on `sample`
+  project durable FQI records by `(device_id, session_id, capture_sequence)`.
+  Inbox session trip IDs are `fqi-<16-hex-session>` and remain independent of
+  collector-created archive trip IDs. `sample_capture_sequence_gaps` reports
+  missing capture sequence values separately from monotonic-time interval gaps;
+  sequence deltas are uint32-wrap aware.
 
 The indexer marks HDOP above `5.0` as poor and an OBD/GNSS speed difference
 above `10 km/h` as a disagreement. These are data-quality flags, not vehicle
 fault diagnoses.
 
-`capture_utc_ms` is populated only from valid GNSS date/time fields or a
-monotonic interpolation anchored by valid GNSS. If capture UTC is unknown,
+For legacy archive rows, `capture_utc_ms` is populated only from valid GNSS
+date/time fields or a monotonic interpolation anchored by valid GNSS. For FQI
+inbox rows it is populated only when both device UTC fields PID `0x90` and
+`0x91` are valid. Inbox file modification time is retained separately in
+`collector_received_ms`; it is never used as capture UTC or as the sample
+timeline. If capture UTC is unknown,
 `timeline_ms` uses a session-relative display position and `time_basis` is
 `collector_session`. This makes a row navigable without presenting the
 collector login time as the vehicle's capture time. Dashboard labels must
@@ -76,12 +86,22 @@ SELECT trip_id AS "Trip",
        timestamp_quality AS "Timestamp quality",
        time_basis AS "Display time basis",
        sample_count AS "Samples",
-       gap_count AS "Gaps",
+       gap_count AS "Long capture gaps (>3 s)",
+       over_target_interval_count AS "Observed intervals >250 ms",
        archive_path AS "Archive"
 FROM trip
 WHERE device_id = '$device'
 ORDER BY trip_id DESC;
 ```
+
+`gap_count` preserves the established quality-gate definition: intervals whose
+device monotonic clock advances by more than 3 seconds. The separate
+`over_target_interval_count` reports every interval over the nominal 250 ms
+cadence, using the firmware-compatible signed 32-bit rollover calculation.
+This over-target count is not a count of proven dropped frames: a slightly slow
+interval can exceed 250 ms without a missing sample. FQI sessions additionally
+expose missing durable capture sequence values, but neither metric alone can
+attribute a loss to ECU polling, SD capture, reboot, or upload transport.
 
 Metric aggregates must join `sample_metric` to `sample` before applying the
 time range. A `MAX(numeric_value)` is not a latest value. Use the highest

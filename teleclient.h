@@ -133,6 +133,9 @@ public:
     bool notify(byte event, const char* payload = 0);
     bool connect(bool quick = false);
     bool transmit(const char* packetBuffer, unsigned int packetSize);
+    bool transmitCaptureBatch(const char* packetBuffer, unsigned int packetSize,
+                              uint64_t session, const uint32_t* sequences,
+                              uint8_t count);
     bool ping();
     void shutdown();
     // A connected Wi-Fi station does not imply that its HTTPS socket opened.
@@ -149,6 +152,9 @@ public:
 private:
     // One POST. packed, when set, is the zlib form of packetBuffer (?z=1).
     bool transmitBody(const char* packetBuffer, unsigned int packetSize,
-                      const char* packed, unsigned int packedSize);
+                      const char* packed, unsigned int packedSize,
+                      uint64_t captureSession = 0,
+                      const uint32_t* captureSequences = nullptr,
+                      uint8_t captureCount = 0);
     bool m_useWifi = false;
 };

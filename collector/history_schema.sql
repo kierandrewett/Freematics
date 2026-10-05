@@ -3,6 +3,11 @@
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS history_projection_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trip (
     device_id TEXT NOT NULL,
     trip_id TEXT NOT NULL,
@@ -17,6 +22,8 @@ CREATE TABLE IF NOT EXISTS trip (
     sample_count INTEGER NOT NULL DEFAULT 0,
     data_bytes INTEGER NOT NULL DEFAULT 0,
     gap_count INTEGER NOT NULL DEFAULT 0,
+    over_target_interval_count INTEGER NOT NULL DEFAULT 0,
+    missing_capture_sequence_count INTEGER NOT NULL DEFAULT 0,
     gps_fix_count INTEGER NOT NULL DEFAULT 0,
     gps_poor_quality_count INTEGER NOT NULL DEFAULT 0,
     speed_disagreement_count INTEGER NOT NULL DEFAULT 0,
@@ -45,6 +52,8 @@ CREATE TABLE IF NOT EXISTS sample (
     acceleration_x_g REAL,
     acceleration_y_g REAL,
     acceleration_z_g REAL,
+    capture_session_id TEXT,
+    capture_sequence INTEGER,
     PRIMARY KEY (device_id, trip_id, sequence),
     FOREIGN KEY (device_id, trip_id) REFERENCES trip(device_id, trip_id) ON DELETE CASCADE
 );
@@ -102,6 +111,17 @@ CREATE TABLE IF NOT EXISTS ingest_file (
     indexed_at_ms INTEGER NOT NULL
 );
 
+-- Capture identity is independent of archive enumeration and remains stable
+-- across collector retries and uint32 capture-sequence wrap.
+CREATE TABLE IF NOT EXISTS capture_inbox_record (
+    device_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    capture_sequence INTEGER NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    PRIMARY KEY (device_id, session_id, capture_sequence)
+);
+
 CREATE TABLE IF NOT EXISTS metric_catalogue (
     pid TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -112,6 +132,9 @@ CREATE TABLE IF NOT EXISTS metric_catalogue (
 );
 
 CREATE INDEX IF NOT EXISTS sample_trip_time ON sample(device_id, trip_id, timeline_ms);
+CREATE UNIQUE INDEX IF NOT EXISTS sample_capture_identity
+    ON sample(device_id, capture_session_id, capture_sequence)
+    WHERE capture_session_id IS NOT NULL AND capture_sequence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS sample_metric_pid ON sample_metric(device_id, trip_id, pid, sequence);
 CREATE INDEX IF NOT EXISTS diagnostic_trip_time ON diagnostic_code(device_id, trip_id, sequence);
 CREATE INDEX IF NOT EXISTS trip_device_time ON trip(device_id, start_capture_ms DESC);
@@ -131,6 +154,8 @@ SELECT
     s.time_basis,
     s.collector_received_ms,
     s.timestamp_quality,
+    s.capture_session_id,
+    s.capture_sequence,
     m.pid,
     m.numeric_value,
     m.text_value,
@@ -158,6 +183,8 @@ SELECT
     s.timeline_ms,
     s.time_basis,
     s.timestamp_quality,
+    s.capture_session_id,
+    s.capture_sequence,
     f.ordinal,
     f.pid,
     f.numeric_value,
@@ -176,7 +203,10 @@ JOIN sample_field AS f
   ON f.device_id = s.device_id AND f.trip_id = s.trip_id AND f.sequence = s.sequence;
 
 DROP VIEW IF EXISTS sample_gaps;
-CREATE VIEW IF NOT EXISTS sample_gaps AS
+DROP VIEW IF EXISTS sample_capture_sequence_gaps;
+DROP VIEW IF EXISTS sample_over_target_intervals;
+DROP VIEW IF EXISTS sample_intervals;
+CREATE VIEW IF NOT EXISTS sample_intervals AS
 WITH ordered AS (
     SELECT
         device_id,
@@ -189,6 +219,12 @@ WITH ordered AS (
         LAG(device_monotonic_ms) OVER (PARTITION BY device_id, trip_id ORDER BY sequence) AS previous_device_monotonic_ms,
         LAG(capture_utc_ms) OVER (PARTITION BY device_id, trip_id ORDER BY sequence) AS previous_capture_utc_ms
     FROM sample
+), deltas AS (
+    SELECT
+        *,
+        (((((device_monotonic_ms - previous_device_monotonic_ms + 2147483648)
+             % 4294967296) + 4294967296) % 4294967296) - 2147483648) AS gap_ms
+    FROM ordered
 )
 SELECT
     device_id,
@@ -199,11 +235,34 @@ SELECT
     device_monotonic_ms,
     previous_capture_utc_ms,
     capture_utc_ms,
-    device_monotonic_ms - previous_device_monotonic_ms AS gap_ms,
+    gap_ms,
     timestamp_quality
-FROM ordered
-WHERE previous_device_monotonic_ms IS NOT NULL
-  AND device_monotonic_ms - previous_device_monotonic_ms > 3000;
+FROM deltas
+WHERE previous_device_monotonic_ms IS NOT NULL;
+
+CREATE VIEW IF NOT EXISTS sample_gaps AS
+SELECT * FROM sample_intervals WHERE gap_ms > 3000;
+
+CREATE VIEW IF NOT EXISTS sample_over_target_intervals AS
+SELECT * FROM sample_intervals WHERE gap_ms > 250;
+
+CREATE VIEW IF NOT EXISTS sample_capture_sequence_gaps AS
+WITH ordered AS (
+    SELECT device_id, trip_id, capture_session_id, capture_sequence,
+           LAG(capture_sequence) OVER (
+               PARTITION BY device_id, capture_session_id ORDER BY sequence
+           ) AS previous_capture_sequence
+    FROM sample
+    WHERE capture_session_id IS NOT NULL AND capture_sequence IS NOT NULL
+), deltas AS (
+    SELECT *, ((capture_sequence - previous_capture_sequence - 1 + 4294967296)
+               % 4294967296) AS missing_sequences
+    FROM ordered
+)
+SELECT device_id, trip_id, capture_session_id, previous_capture_sequence,
+       capture_sequence, missing_sequences
+FROM deltas
+WHERE previous_capture_sequence IS NOT NULL AND missing_sequences > 0;
 DROP VIEW IF EXISTS trip_metric_summary;
 
 CREATE VIEW IF NOT EXISTS trip_metric_summary AS

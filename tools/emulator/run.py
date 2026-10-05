@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +39,22 @@ def request(base, path, packet=None):
     headers = {"Authorization": "Bearer " + "A" * 64, "Content-Type": "application/octet-stream"}
     with urllib.request.urlopen(urllib.request.Request(base + path, data=packet, headers=headers), timeout=3) as response:
         return response.read()
+
+
+def capture_v2_record(session, sequence, sample, corrupt_crc=False):
+    checksum = zlib.crc32(sample) ^ (1 if corrupt_crc else 0)
+    header = f"FQI1,{session:016x},{sequence},{len(sample)},{checksum:08x}\n".encode("ascii")
+    return header + sample + b"\n"
+
+
+def capture_v2_request(base, body):
+    headers = {"Authorization": "Bearer " + "A" * 64, "Content-Type": "application/octet-stream"}
+    request_obj = urllib.request.Request(base + "/api/post-v2/EMULATOR", data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(request_obj, timeout=3) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
 
 
 def drive(executable, collector):
@@ -106,6 +124,33 @@ def drive(executable, collector):
                     missing = [index for index in range(240) if f"0:{1000 + index * 250}," not in archive]
                     results.append({"scenario": "240 offline readings reach local collector archive",
                                     "status": "PASS" if not missing else "ERROR", "observed": 240 - len(missing)})
+                    session = 0x123456789ABCDEF0
+                    first = b"0:61000,10C:754.0,24:1420"
+                    later = b"0:61250,10C:731.5,24:1390"
+                    wrapped = b"0:61500,10C:720.0,24:1360"
+                    batch = capture_v2_record(session, 101, first) + \
+                        capture_v2_record(session, 103, later) + \
+                        capture_v2_record(session, 0, wrapped)
+                    expected_ack = f"ACK2,{session:016x},101,103,0".encode("ascii")
+                    first_status, first_ack = capture_v2_request(base, batch)
+                    duplicate_status, duplicate_ack = capture_v2_request(base, batch)
+                    inbox_files = list((root / "data" / "capture-inbox" / "EMULATOR").glob("*.fqi"))
+                    conflict = capture_v2_record(session, 101, b"0:61000,10C:999.0,24:1420")
+                    conflict_status, _ = capture_v2_request(base, conflict)
+                    bad_crc_status, _ = capture_v2_request(
+                        base, capture_v2_record(session, 105, b"0:61500,10C:700.0", corrupt_crc=True))
+                    live_after_v2 = json.loads(request(base, "/api/get/EMULATOR"))
+                    v2_values = {int(row[0]): row[1] for row in live_after_v2["data"]}
+                    v2_ok = first_status == 200 and first_ack == expected_ack and \
+                        duplicate_status == 200 and duplicate_ack == expected_ack and \
+                        len(inbox_files) == 3 and conflict_status == 409 and bad_crc_status == 400 and \
+                        v2_values.get(0x10C) == 720.0 and \
+                        sum(f"0:{tick}," in archive for tick in (61000, 61250, 61500)) == 0
+                    results.append({"scenario": "capture-ID inbox is durable, idempotent, conflict-safe, and accepts holes plus uint32 wrap",
+                                    "status": "PASS" if v2_ok else "ERROR", "observed": len(inbox_files),
+                                    "first_ack": first_ack.decode("ascii", "replace"),
+                                    "duplicate_ack": duplicate_ack.decode("ascii", "replace"),
+                                    "conflict_http": conflict_status, "corrupt_http": bad_crc_status})
             finally:
                 for process in (child, server):
                     if process is not None:
@@ -431,8 +476,10 @@ public:
             wire += extract_function(storage, signature) + "\n"
         # The production replay batch builder and acknowledgement policy.
         firmware = (ROOT / "telelogger.ino").read_text()
-        wire += '#include "sdaccess.h"\n#include "telequeue.h"\n#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
-        wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength,\n                         bool* includesCurrentBootRecord)") + "\n"
+        wire += '#include "sdaccess.h"\n#include "telequeue.h"\n'
+        wire += 'inline uint32_t usbTelemetryCrc32(const uint8_t* data, size_t length) { uint32_t crc=0xFFFFFFFFUL; while(length--) { crc^=*data++; for(unsigned bit=0;bit<8;bit++) crc=(crc>>1)^(0xEDB88320UL & -(crc&1)); } return ~crc; }\n'
+        wire += '#define HTTP_BATCH_MAX_WAIT_MS 1000UL\n'
+        wire += extract_function(firmware, "uint8_t buildReplayBatch(DurableQueue& queue, CStorageRAM& store, char* frame, uint16_t capacity,\n                         uint8_t limit, uint16_t* lastLength,\n                         bool* includesCurrentBootRecord,\n                         uint32_t* captureSequences = nullptr,\n                         uint64_t* captureSession = nullptr,\n                         bool wrapIdentified = false)") + "\n"
         wire += "#define HTTP_BATCH_MAX_SAMPLES 24\n#define HTTP_BATCH_MIN_SAMPLES 4\n#define HTTP_BATCH_GROW_STEP 4\n"
         start = firmware.index("struct ReplayIsolation {")
         wire += firmware[start:firmware.index("};", start) + 2] + "\n"

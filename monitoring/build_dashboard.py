@@ -86,7 +86,7 @@ def trip_archive_sql() -> str:
         f'timeline_start_ms - {TRIP_WINDOW_PAD_MS} AS "Window start", '
         f'timeline_end_ms + {TRIP_WINDOW_PAD_MS} AS "Window end", '
         'timestamp_quality AS "Capture timestamp quality", time_basis AS "Display time basis", '
-        'sample_count AS "Samples", gap_count AS "Gaps", gps_fix_count AS "GPS fixes", '
+        'sample_count AS "Samples", over_target_interval_count AS "Observed intervals >250 ms", gps_fix_count AS "GPS fixes", '
         'gps_poor_quality_count AS "Poor HDOP", speed_disagreement_count AS "Speed disagreements", '
         'archive_path AS "Archive" '
         'FROM trip WHERE device_id = \'$device\' ORDER BY trip_id DESC'
@@ -1707,13 +1707,12 @@ def build_dashboard(view: str = "combined") -> dict:
                 panel["datasource"] = HISTORY_DS
                 panel["targets"] = targets
                 if panel["type"] == "timeseries":
-                    # Rotating PID acquisition leaves isolated values among
-                    # null rows. Show each observation and join short gaps,
-                    # while preserving longer acquisition outages.
+                    # Do not visually bridge acquisition gaps: sparse or
+                    # missing historical observations must remain explicit.
                     panel["fieldConfig"]["defaults"]["custom"].update({
                         "showPoints": "always",
-                        "spanNulls": 10_000,
-                        "insertNulls": 10_000,
+                        "spanNulls": False,
+                        "insertNulls": False,
                     })
                 if panel["id"] in {19, 20, 31}:
                     panel.pop("transformations", None)
@@ -1885,20 +1884,26 @@ def build_dashboard(view: str = "combined") -> dict:
         panels.append(
             {
                 "datasource": HISTORY_DS,
-                "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
+                "description": "Capture evidence from the durable archive. Unknown capture timestamps remain NULL; display time, archive mtime and device monotonic time are shown separately. Observed intervals over 250 ms are listed; this does not prove a frame was dropped or identify the cause. Per-sample receipt lag is unavailable until the collector records a receipt ledger.",
                 "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []},
                 "gridPos": {"h": 8, "w": 24, "x": 0, "y": 71},
                 "id": 42,
                 "options": {"cellHeight": "sm", "footer": {"countRows": True, "fields": "", "reducer": ["count"], "show": True}, "showHeader": True},
                 "targets": [history_target(
-                    "SELECT s.sequence AS \"Sample\", t.timestamp_quality AS \"Trip timestamp quality\", "
+                    "SELECT s.sequence AS \"Sample\", s.capture_sequence AS \"Device capture sequence\", "
+                    "s.capture_session_id AS \"Device capture session\", "
+                    "t.missing_capture_sequence_count AS \"Missing capture IDs in session\", "
+                    "cg.previous_capture_sequence AS \"Previous capture ID\", "
+                    "cg.missing_sequences AS \"Missing IDs before sample\", "
+                    "t.timestamp_quality AS \"Trip timestamp quality\", "
                     "s.timestamp_quality AS \"Sample timestamp quality\", s.device_monotonic_ms AS \"Device monotonic (ms)\", "
                     "s.capture_utc_ms AS \"Capture UTC (ms)\", s.timeline_ms AS \"Display time (ms)\", s.time_basis AS \"Display time basis\", "
                     "s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", "
                     "NULL AS \"Receipt lag (ms; not instrumented)\", g.gap_ms AS \"Gap from previous (ms)\", "
-                    "t.gap_count AS \"Trip gaps\" "
+                    "t.over_target_interval_count AS \"Trip observed intervals >250 ms\" "
                     "FROM sample AS s JOIN trip AS t ON t.device_id = s.device_id AND t.trip_id = s.trip_id "
-                    "LEFT JOIN sample_gaps AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence "
+                    "LEFT JOIN sample_over_target_intervals AS g ON g.device_id = s.device_id AND g.trip_id = s.trip_id AND g.sequence = s.sequence "
+                    "LEFT JOIN sample_capture_sequence_gaps AS cg ON cg.device_id = s.device_id AND cg.trip_id = s.trip_id AND cg.capture_sequence = s.capture_sequence "
                     f"WHERE {sample_trip_where} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                     "ORDER BY s.sequence LIMIT 5000",
                 )],
@@ -2168,7 +2173,9 @@ def build_dashboard(view: str = "combined") -> dict:
         "description": dashboard_description,
         "editable": True,
         "fiscalYearStartMonth": 0,
-        "graphTooltip": 1,
+        # Historical vehicle signals are captured at a shared device timeline;
+        # show every panel's values at the hovered capture time for correlation.
+        "graphTooltip": 2 if view == "trips" else 1,
         "id": None,
         "links": dashboard_links,
         "liveNow": view in {"combined", "live"},

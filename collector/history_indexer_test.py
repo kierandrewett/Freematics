@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import zlib
 from contextlib import closing
 from pathlib import Path
 
@@ -19,6 +20,143 @@ from history_indexer import (
 
 
 class HistoryIndexerTest(unittest.TestCase):
+    @staticmethod
+    def write_inbox_record(root: Path, device: str, session: str, sequence: int, payload: bytes) -> Path:
+        path = root / "capture-inbox" / device / f"{session}-{sequence}.fqi"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = f"FQI1,{session},{sequence},{len(payload)},{zlib.crc32(payload):08x}\n".encode()
+        path.write_bytes(header + payload)
+        return path
+
+    def test_capture_inbox_uses_capture_identity_clock_and_valid_device_utc(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            inbox_file = self.write_inbox_record(
+                root, "CAR", "0123456789abcdef", 7,
+                b"0:1000,10C:800,40C:20,90:1791030012,91:345,24:1380,",
+            )
+            inbox_file.touch()
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: 1_900_000_000_000)
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                sample = connection.execute(
+                    "SELECT device_monotonic_ms,capture_utc_ms,timeline_ms,time_basis,"
+                    "collector_received_ms,capture_session_id,capture_sequence "
+                    "FROM sample"
+                ).fetchone()
+                self.assertEqual(sample, (1000, 1791030012345, 0, "device_clock",
+                                          int(inbox_file.stat().st_mtime * 1000),
+                                          "0123456789abcdef", 7))
+                fields = connection.execute(
+                    "SELECT pid,numeric_value FROM sample_field ORDER BY ordinal"
+                ).fetchall()
+                self.assertEqual(fields, [("0x10C", 800.0), ("0x40C", 20.0),
+                                          ("0x090", 1791030012.0), ("0x091", 345.0),
+                                          ("0x024", 1380.0)])
+                self.assertEqual(connection.execute(
+                    "SELECT trip_id,missing_capture_sequence_count FROM trip"
+                ).fetchone(), ("fqi-0123456789abcdef", 0))
+
+    def test_capture_inbox_is_idempotent_and_keeps_unknown_utc_out_of_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            path = self.write_inbox_record(
+                root, "CAR", "0123456789abcdef", 20, b"0:4294967200,10C:700,91:123,"
+            )
+            path.touch()
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(root, database, now_ms=lambda: 1_900_000_000_000)
+            self.assertEqual(indexer.index_once(), 1)
+            self.assertEqual(indexer.index_once(), 0)
+            with closing(sqlite3.connect(database)) as connection:
+                row = connection.execute(
+                    "SELECT capture_utc_ms,timeline_ms,time_basis,collector_received_ms "
+                    "FROM sample"
+                ).fetchone()
+                self.assertEqual(row, (None, 0, "device_monotonic", int(path.stat().st_mtime * 1000)))
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 1)
+
+    def test_corrupt_inbox_records_are_retained_but_not_projected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            path = self.write_inbox_record(
+                root, "CAR", "0123456789abcdef", 1, b"0:100,10C:700"
+            )
+            path.write_bytes(path.read_bytes()[:-1] + b"X")
+            database = Path(directory) / "history.sqlite"
+            HistoryIndexer(root, database).index_once()
+            self.assertTrue(path.exists())
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
+
+    def test_capture_sequence_holes_are_separate_from_clock_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            self.write_inbox_record(root, "CAR", "0000000000000001", 10, b"0:100,10C:700")
+            self.write_inbox_record(root, "CAR", "0000000000000001", 12, b"0:200,10C:710")
+            database = Path(directory) / "history.sqlite"
+            HistoryIndexer(root, database).index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT missing_capture_sequence_count,gap_count FROM trip"
+                ).fetchone(), (1, 0))
+                self.assertEqual(connection.execute(
+                    "SELECT previous_capture_sequence,capture_sequence,missing_sequences "
+                    "FROM sample_capture_sequence_gaps"
+                ).fetchone(), (10, 12, 1))
+
+    def test_inbox_time_gap_uses_capture_clock_not_collector_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000003"
+            self.write_inbox_record(
+                root, "CAR", session, 40,
+                b"0:1000,90:1791030012,91:345,10C:700",
+            )
+            self.write_inbox_record(
+                root, "CAR", session, 41,
+                b"0:5000,90:1791030016,91:345,10C:710",
+            )
+            received_ms = min(
+                int(path.stat().st_mtime * 1000)
+                for path in (root / "capture-inbox/CAR").glob("*.fqi")
+            )
+            database = Path(directory) / "history.sqlite"
+            HistoryIndexer(root, database, now_ms=lambda: 1_900_000_000_000).index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT previous_device_monotonic_ms,device_monotonic_ms,"
+                    "previous_capture_utc_ms,capture_utc_ms,gap_ms FROM sample_gaps"
+                ).fetchone(), (1000, 5000, 1791030012345, 1791030016345, 4000))
+                self.assertEqual(connection.execute(
+                    "SELECT MIN(timeline_ms),MAX(timeline_ms),MIN(collector_received_ms) "
+                    "FROM sample"
+                ).fetchone(), (0, 4000, received_ms))
+
+    def test_capture_sequence_wrap_has_no_false_hole_or_time_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            session = "0000000000000002"
+            for sequence, tick in ((0xFFFFFFFE, 0xFFFFFF00), (0xFFFFFFFF, 0xFFFFFFFA),
+                                   (0, 244), (1, 494)):
+                self.write_inbox_record(
+                    root, "CAR", session, sequence, f"0:{tick},10C:700".encode()
+                )
+            database = Path(directory) / "history.sqlite"
+            HistoryIndexer(root, database).index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT capture_sequence,device_monotonic_ms FROM sample ORDER BY sequence"
+                ).fetchall(), [(0xFFFFFFFE, 0xFFFFFF00), (0xFFFFFFFF, 0xFFFFFFFA), (0, 244), (1, 494)])
+                self.assertEqual(connection.execute(
+                    "SELECT missing_capture_sequence_count,gap_count FROM trip WHERE trip_id=?",
+                    (f"fqi-{session}",),
+                ).fetchone(), (0, 0))
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM sample_capture_sequence_gaps"
+                ).fetchone()[0], 0)
+
     def test_device_clock_fields_enforce_integer_ranges(self) -> None:
         self.assertEqual(
             device_clock_capture_ms({"90": "1704067200", "91": "0"}),
@@ -220,6 +358,82 @@ class HistoryIndexerTest(unittest.TestCase):
                     "SELECT previous_sequence, sequence, gap_ms FROM sample_gaps"
                 ).fetchone()
                 self.assertEqual(gap, (0, 1, 4900))
+
+    def test_gap_view_reports_over_target_intervals_but_not_on_cadence_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "CAR" / "2026/08/27/20260827-001247.txt"
+            archive.parent.mkdir(parents=True)
+            # 251 ms is merely over target, while 500 ms spans a likely missed
+            # frame; the projection labels both as observed over-target intervals.
+            archive.write_text("0:100,10C:900,0:350,10C:910,0:601,10C:920,0:1101,10C:930,0:1351,10C:940\n")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(
+                root,
+                database,
+                now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 1_000,
+            )
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                intervals = connection.execute(
+                    "SELECT previous_sequence, sequence, gap_ms FROM sample_over_target_intervals"
+                ).fetchall()
+                gap_count = connection.execute(
+                    "SELECT gap_count FROM trip"
+                ).fetchone()[0]
+                over_target_count = connection.execute(
+                    "SELECT over_target_interval_count FROM trip"
+                ).fetchone()[0]
+                self.assertEqual(intervals, [(1, 2, 251), (2, 3, 500)])
+                self.assertEqual(gap_count, 0)
+                self.assertEqual(over_target_count, 2)
+
+    def test_initialise_refreshes_both_cached_interval_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            database = Path(directory) / "history.sqlite"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(
+                    (Path(__file__).with_name("history_schema.sql")).read_text()
+                )
+                connection.execute(
+                    "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, "
+                    "timestamp_quality, archive_mtime_ms, updated_at_ms, gap_count) "
+                    "VALUES ('CAR', '20260827-001247', '/archive.txt', 1, 'unknown', 1, 1, 0)"
+                )
+                connection.executemany(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, "
+                    "archive_mtime_ms, timestamp_quality) VALUES ('CAR', '20260827-001247', ?, ?, 1, 'unknown')",
+                    enumerate((100, 350, 850, 1100)),
+                )
+                connection.commit()
+
+            HistoryIndexer(root, database).initialise()
+            with closing(sqlite3.connect(database)) as connection:
+                gap_count, over_target_count = connection.execute(
+                    "SELECT gap_count, over_target_interval_count FROM trip WHERE device_id='CAR'"
+                ).fetchone()
+                self.assertEqual(gap_count, 0)
+                self.assertEqual(over_target_count, 1)
+
+    def test_gap_view_uses_wrap_safe_32bit_device_clock_delta(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "data"
+            archive = root / "CAR" / "2026/08/27/20260827-001247.txt"
+            archive.parent.mkdir(parents=True)
+            archive.write_text("0:4294967000,10C:900,0:500,10C:901\n")
+            database = Path(directory) / "history.sqlite"
+            indexer = HistoryIndexer(
+                root,
+                database,
+                now_ms=lambda: int(archive.stat().st_mtime * 1_000) + 61_000,
+            )
+            indexer.index_once()
+            with closing(sqlite3.connect(database)) as connection:
+                gap = connection.execute(
+                    "SELECT previous_sequence, sequence, gap_ms FROM sample_over_target_intervals"
+                ).fetchone()
+                self.assertEqual(gap, (0, 1, 796))
 
     def test_scaled_hdop_distance_acceleration_and_diagnostics_are_projected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

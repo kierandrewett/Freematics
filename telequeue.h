@@ -11,6 +11,13 @@
 
 // Append-only SD journal. HTTP acknowledgements advance a separately
 // checksummed cursor; a reset can resend records but cannot skip unacked ones.
+struct JournalCaptureIdentity {
+    JournalCaptureIdentity(uint64_t sessionId = 0, uint32_t sampleSequence = 0)
+        : session(sessionId), sequence(sampleSequence) {}
+    uint64_t session;
+    uint32_t sequence;
+};
+
 class DurableQueue {
 public:
     DurableQueue() = default;
@@ -26,11 +33,16 @@ public:
     bool probeStorage();
     bool damaged() const { return m_corrupt; }
     bool append(const char* frame, uint16_t length, bool* lockTimedOut = nullptr);
+    // Identified records are versioned on disk; legacy records remain readable.
+    bool appendIdentified(const char* frame, uint16_t length, uint64_t session,
+                          uint32_t sequence, bool* lockTimedOut = nullptr);
     // One open, flush and read-back verify for the whole batch. The recorder
     // falls behind 4 Hz when every sample pays for its own SD transaction.
     bool appendBatch(const char* const* frames, const uint16_t* lengths, uint8_t count,
                      bool* lockTimedOut = nullptr);
     bool peek(char* frame, uint16_t capacity, uint16_t* length);
+    bool peekIdentified(char* frame, uint16_t capacity, uint16_t* length,
+                        JournalCaptureIdentity* identity);
     bool acknowledge();
     // Keep a record the collector refused permanently in a local reject file,
     // then acknowledge past it. Valid only when the batch held that one record.
@@ -50,6 +62,8 @@ public:
     bool ready() const { return m_ready; }
     bool healthy() const { return m_ready && !m_fault && !m_probeFault; }
 private:
+    bool appendRecords(const char* const* frames, const uint16_t* lengths, uint8_t count,
+                       const JournalCaptureIdentity* identities, bool* lockTimedOut);
     bool lock();
     void unlock();
     bool readCursor(const char* path, uint32_t size, uint32_t* value);
