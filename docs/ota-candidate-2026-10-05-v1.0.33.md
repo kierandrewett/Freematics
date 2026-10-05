@@ -1,24 +1,27 @@
 # OTA candidate evidence — 2026-10-05, v1.0.33
 
-Local-only tokenless OTA candidate built from the signed and pushed Freematics
+Local-only tokenless OTA candidate rebuilt from the signed and pushed Freematics
 source commit below. It has not been published or flashed.
 
 | Property | Value |
 | --- | --- |
 | Firmware version | `1.0.33` |
-| Source commit | `f895cb284f3a71ad77d9d8161f9667d34ff61caa` |
-| Build ID | `f895cb284f3a` |
+| Source commit | `8094e743f58bcabcae01ddde405b4c490b8170f4` |
+| Build ID | `8094e743f58b` |
 | Image | `freematics-model-b.bin` |
-| SHA-256 | `025477b4f2a401aa743689d3d6dacc0825774ce527a444c900ad61073668ac26` |
-| Local candidate directory | `.pio/ota-release-candidate-f895cb2-v1.0.33/` |
+| SHA-256 | `227fcd3afde81507667eb4b44463d4ea04d86f6d6db7c2a982676b463740197f` |
+| Local candidate directory | `.pio/ota-release-candidate-8094e74-v1.0.33/` |
 
 Built with the `esp32dev-ota-test` PlatformIO environment from a clean
-worktree. The candidate packager and its `--verify-only` pass accepted the
+worktree using the documented explicit-empty-token OTA release command. The
+candidate packager and its `--verify-only` pass accepted the
 embedded source/version markers, token-absent marker, configured-private-value
 scan, exact two-file allowlist, owner-only permissions, and SHA-256 sidecar.
 The candidate directory is mode `0700`; both assets are mode `0600`. No GitHub
 release is published. The separate credential-bearing USB bootstrap is a
-private local build product and is not an OTA asset.
+private local build product and is not an OTA asset. The prior local v1.0.33
+package from `f895cb284f3a71ad77d9d8161f9667d34ff61caa` is retained unchanged;
+use only the candidate directory recorded above for any later review.
 
 On this source, all 68 firmware Python tool tests and 26 Grafana dashboard
 tests passed. The strict sanitized firmware emulator passed, including journal
