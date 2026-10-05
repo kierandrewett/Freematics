@@ -3396,6 +3396,171 @@
     },
     {
       "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "freematics-history"
+      },
+      "description": "Capture-time overlay for engine RPM, ECU control-module voltage, and the raw Model B supply-voltage waveform. RPM uses the right axis; voltage uses the left. Each source keeps its own freshness and waveform-gap rules, and missing capture intervals remain nulls. The aligned traces help compare events but do not establish their cause.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "always",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          },
+          "unit": "volt"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Engine RPM"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "rpm"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ECU control-module voltage (PID 0x042)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vehicle supply (Model B input)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 117
+      },
+      "id": 57,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10C' AND EXISTS (SELECT 1 FROM sample_metric AS age_metric WHERE age_metric.device_id = s.device_id AND age_metric.trip_id = s.trip_id AND age_metric.sequence = s.sequence AND age_metric.pid = '0x40C' AND age_metric.numeric_value BETWEEN 0 AND 500) THEN m.numeric_value END) AS \"Engine RPM\", MAX(CASE WHEN m.pid = '0x142' AND EXISTS (SELECT 1 FROM sample_metric AS age_metric WHERE age_metric.device_id = s.device_id AND age_metric.trip_id = s.trip_id AND age_metric.sequence = s.sequence AND age_metric.pid = '0x442' AND age_metric.numeric_value BETWEEN 0 AND 2000) THEN m.numeric_value END) AS \"ECU control-module voltage (PID 0x042)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"Engine RPM\", NULL AS \"ECU control-module voltage (PID 0x042)\" FROM gap_points ORDER BY time",
+          "rawQueryText": "WITH plotted AS (SELECT s.timeline_ms / 1000.0 AS time, MAX(CASE WHEN m.pid = '0x10C' AND EXISTS (SELECT 1 FROM sample_metric AS age_metric WHERE age_metric.device_id = s.device_id AND age_metric.trip_id = s.trip_id AND age_metric.sequence = s.sequence AND age_metric.pid = '0x40C' AND age_metric.numeric_value BETWEEN 0 AND 500) THEN m.numeric_value END) AS \"Engine RPM\", MAX(CASE WHEN m.pid = '0x142' AND EXISTS (SELECT 1 FROM sample_metric AS age_metric WHERE age_metric.device_id = s.device_id AND age_metric.trip_id = s.trip_id AND age_metric.sequence = s.sequence AND age_metric.pid = '0x442' AND age_metric.numeric_value BETWEEN 0 AND 2000) THEN m.numeric_value END) AS \"ECU control-module voltage (PID 0x042)\" FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence WHERE s.device_id = ${device:sqlstring} AND s.trip_id = ${trip:sqlstring} AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"Engine RPM\", NULL AS \"ECU control-module voltage (PID 0x042)\" FROM gap_points ORDER BY time",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        },
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "freematics-history"
+          },
+          "queryText": "WITH plotted AS (WITH raw_points AS (SELECT f.sequence, f.ordinal, (s.timeline_ms + (((CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) - s.device_monotonic_ms + 2147483648) & 4294967295) - 2147483648)) AS point_time_ms, CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) / 100.0 AS voltage FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A0' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL AND instr(f.text_value, ';') > 0 AND length(f.text_value) - length(replace(f.text_value, ';', '')) = 1 AND f.text_value NOT GLOB '*[^0-9;]*' AND CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) BETWEEN 0 AND 4294967295 AND CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) BETWEEN 0 AND 65535), ordered_points AS (SELECT sequence, ordinal, point_time_ms, voltage, LAG(point_time_ms) OVER (ORDER BY point_time_ms, sequence, ordinal) AS previous_time_ms FROM raw_points), chart_rows AS (SELECT point_time_ms AS time_ms, voltage FROM ordered_points UNION ALL SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage FROM ordered_points WHERE previous_time_ms IS NOT NULL AND point_time_ms - previous_time_ms >= 40) SELECT time_ms / 1000.0 AS time, voltage AS \"Vehicle supply (Model B input)\" FROM chart_rows WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time_ms), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"Vehicle supply (Model B input)\" FROM gap_points ORDER BY time",
+          "rawQueryText": "WITH plotted AS (WITH raw_points AS (SELECT f.sequence, f.ordinal, (s.timeline_ms + (((CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) - s.device_monotonic_ms + 2147483648) & 4294967295) - 2147483648)) AS point_time_ms, CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) / 100.0 AS voltage FROM sample_field AS f JOIN sample AS s ON s.device_id = f.device_id AND s.trip_id = f.trip_id AND s.sequence = f.sequence WHERE f.device_id = ${device:sqlstring} AND f.trip_id = ${trip:sqlstring} AND f.pid = '0x0A0' AND f.text_value IS NOT NULL AND s.timeline_ms IS NOT NULL AND instr(f.text_value, ';') > 0 AND length(f.text_value) - length(replace(f.text_value, ';', '')) = 1 AND f.text_value NOT GLOB '*[^0-9;]*' AND CAST(substr(f.text_value, 1, instr(f.text_value, ';') - 1) AS INTEGER) BETWEEN 0 AND 4294967295 AND CAST(substr(f.text_value, instr(f.text_value, ';') + 1) AS INTEGER) BETWEEN 0 AND 65535), ordered_points AS (SELECT sequence, ordinal, point_time_ms, voltage, LAG(point_time_ms) OVER (ORDER BY point_time_ms, sequence, ordinal) AS previous_time_ms FROM raw_points), chart_rows AS (SELECT point_time_ms AS time_ms, voltage FROM ordered_points UNION ALL SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage FROM ordered_points WHERE previous_time_ms IS NOT NULL AND point_time_ms - previous_time_ms >= 40) SELECT time_ms / 1000.0 AS time, voltage AS \"Vehicle supply (Model B input)\" FROM chart_rows WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY time_ms), ordered_captures AS (SELECT timeline_ms, capture_session_id, capture_sequence, LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence FROM sample WHERE device_id = ${device:sqlstring} AND trip_id = ${trip:sqlstring} AND timeline_ms IS NOT NULL), gap_points AS (SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > 375 OR (capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) > 1 AND ((next_capture_sequence - capture_sequence + 4294967296) % 4294967296) < 2147483648)) AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)) SELECT * FROM plotted UNION ALL SELECT time, NULL AS \"Vehicle supply (Model B input)\" FROM gap_points ORDER BY time",
+          "queryType": "time series",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "title": "Idle and electrical trends — shared capture time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },

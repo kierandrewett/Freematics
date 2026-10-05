@@ -2281,6 +2281,61 @@ def build_dashboard(view: str = "combined") -> dict:
         })
         pid_age_panel["datasource"] = HISTORY_DS
         panels.append(pid_age_panel)
+        idle_correlation_sql = (
+            "SELECT s.timeline_ms / 1000.0 AS time, "
+            f"{history_mode01_case('0x10C')} AS \"Engine RPM\", "
+            f"{history_mode01_case('0x142')} AS \"ECU control-module voltage (PID 0x042)\" "
+            "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
+            "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+            f"WHERE {sample_trip_where} AND s.{historical_range} "
+            "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time"
+        )
+        idle_correlation_panel = timeseries(
+            57,
+            "Idle and electrical trends — shared capture time",
+            0,
+            117,
+            24,
+            8,
+            [
+                history_target(
+                    historical_series_with_gap_breaks(
+                        idle_correlation_sql,
+                        ("Engine RPM", "ECU control-module voltage (PID 0x042)"),
+                    ),
+                    format="time_series",
+                ),
+                history_target(
+                    historical_series_with_gap_breaks(
+                        voltage_waveform_sql(),
+                        ("Vehicle supply (Model B input)",),
+                    ),
+                    format="time_series",
+                ),
+            ],
+            unit="volt",
+            description=(
+                "Capture-time overlay for engine RPM, ECU control-module voltage, and the raw Model B "
+                "supply-voltage waveform. RPM uses the right axis; voltage uses the left. Each source "
+                "keeps its own freshness and waveform-gap rules, and missing capture intervals remain "
+                "nulls. The aligned traces help compare events but do not establish their cause."
+            ),
+            overrides=[
+                by_name("Engine RPM", ("unit", "rpm"), ("custom.axisPlacement", "right"),
+                        ("color", {"fixedColor": "orange", "mode": "fixed"})),
+                by_name("ECU control-module voltage (PID 0x042)",
+                        ("color", {"fixedColor": "yellow", "mode": "fixed"})),
+                by_name("Vehicle supply (Model B input)",
+                        ("color", {"fixedColor": "blue", "mode": "fixed"})),
+            ],
+        )
+        idle_correlation_panel["datasource"] = HISTORY_DS
+        idle_correlation_panel["fieldConfig"]["defaults"]["custom"].update({
+            "showPoints": "always",
+            "spanNulls": False,
+            "insertNulls": False,
+        })
+        panels.append(idle_correlation_panel)
         missed_readings_sql = (
             "SELECT s.timeline_ms / 1000.0 AS time, "
             "MAX(CASE WHEN m.pid = '0x08E' THEN m.numeric_value END) AS \"Missed collection cycles\" "

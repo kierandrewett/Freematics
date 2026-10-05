@@ -647,6 +647,73 @@ class DashboardViewsTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_historical_idle_correlation_aligns_fresh_signals_and_keeps_capture_gaps(self) -> None:
+        dashboard = build_dashboard("trips")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 57)
+        self.assertEqual(panel["title"], "Idle and electrical trends — shared capture time")
+        self.assertEqual(panel["datasource"]["uid"], "freematics-history")
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["spanNulls"])
+        self.assertFalse(panel["fieldConfig"]["defaults"]["custom"]["insertNulls"])
+        self.assertEqual(len(panel["targets"]), 2)
+        self.assertIn("Engine RPM", panel["targets"][0]["queryText"])
+        self.assertIn("ECU control-module voltage (PID 0x042)", panel["targets"][0]["queryText"])
+        self.assertIn("Vehicle supply (Model B input)", panel["targets"][1]["queryText"])
+        self.assertIn("raw Model B supply-voltage waveform", panel["description"])
+        rpm_override = next(
+            override for override in panel["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "Engine RPM"
+        )
+        self.assertIn(
+            {"id": "custom.axisPlacement", "value": "right"},
+            rpm_override["properties"],
+        )
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 2500, 'device', 4, 2500, 2500)"
+            )
+            captures = (
+                (0, 1000, 800, 0, 1400, 100),
+                (1, 1250, 780, 100, 1390, 500),
+                (2, 1500, 740, 501, 1380, 2501),
+                (3, 2500, 760, 120, 1410, 200),
+            )
+            for sequence, timeline, rpm, rpm_age, ecu_voltage, ecu_age in captures:
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, time_basis, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 'device_monotonic', 2500, 'device')",
+                    (sequence, timeline, timeline),
+                )
+                connection.executemany(
+                    "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
+                    (
+                        (sequence, "0x10C", rpm),
+                        (sequence, "0x40C", rpm_age),
+                        (sequence, "0x142", ecu_voltage / 100),
+                        (sequence, "0x442", ecu_age),
+                    ),
+                )
+            sql = panel["targets"][0]["queryText"]
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            self.assertEqual(connection.execute(sql).fetchall(), [
+                (1.0, 800.0, 14.0),
+                (1.25, 780.0, 13.9),
+                (1.5, None, None),
+                (2.0, None, None),
+                (2.5, 760.0, 14.1),
+            ])
+        finally:
+            connection.close()
+
     def test_historical_missed_cycle_chart_shows_wrap_up_total_and_capture_gap(self) -> None:
         panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 54)
         self.assertEqual(panel["title"], "Unrecorded sample cycles")
