@@ -41,6 +41,7 @@ harness = r'''
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include "OTA_SENSOR_ACTIVITY_HEADER"
 using byte = uint8_t;
 using std::isfinite;
 #define ENABLE_MEMS 1
@@ -177,6 +178,7 @@ struct Buffers { unsigned missedReadings() { return 0; } unsigned unpersistedRea
 struct Storage { bool healthy() {return storageHealthy;} uint32_t cachedPendingBytes() {return sdBacklog;} } durableQueue, logger;
 uint32_t fileid = 1;
 '''
+harness = harness.replace("OTA_SENSOR_ACTIVITY_HEADER", str(ROOT / "ota_sensor_activity.h"))
 harness += defines + "\n" + support + "\n"
 harness += function(source, "bool readTripMotion(bool& moving)") + "\n"
 harness += function(source, "void tripChime(bool started)") + "\n"

@@ -13,7 +13,7 @@ class OTASensorActivityLatch {
   // hashing. Working acquisition remains high-rate; idle non-OTA standby sleeps.
   static uint32_t samplingIntervalMs(bool working, bool parkedOtaWatch) {
     if (working) return 20;
-    return parkedOtaWatch ? 250 : 50;
+    return parkedOtaWatch ? 20 : 50;
   }
 
   enum Event : uint8_t {

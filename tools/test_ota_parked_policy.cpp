@@ -263,8 +263,31 @@ static void testMotionDuringDownloadInvalidatesTheQuietProof() {
 
 static void testMotionWorkerRemainsScheduledDuringParkedOtaChecks() {
   assert(OTASensorActivityLatch::samplingIntervalMs(true, false) == 20);
-  assert(OTASensorActivityLatch::samplingIntervalMs(false, true) == 250);
+  assert(OTASensorActivityLatch::samplingIntervalMs(false, true) == 20);
   assert(OTASensorActivityLatch::samplingIntervalMs(false, false) == 50);
+}
+
+static void testOneMissingTwoPollWindowsBreaksContinuousEvidence() {
+  assert(Policy::kMotionSampleMaxGapMs == 500);
+  assert(Policy::kSupplySampleMaxGapMs == 500);
+  const uint32_t start = 1000;
+  const uint32_t completeAt = start + Policy::kRequiredQuietMs;
+  Policy policy;
+  policy.beginBoot(start);
+  quietSamples(policy, start, completeAt);
+  assert(policy.quietPeriodComplete(completeAt));
+
+  const uint32_t oneMissedPoll = completeAt + 500;
+  policy.observeMotionSample(oneMissedPoll, true, false);
+  policy.observeSupplySample(oneMissedPoll, true, 12.5f);
+  assert(policy.quietDurationMs(oneMissedPoll) == Policy::kRequiredQuietMs + 500);
+  assert(policy.quietPeriodComplete(oneMissedPoll));
+
+  const uint32_t afterGap = oneMissedPoll + 501;
+  policy.observeMotionSample(afterGap, true, false);
+  policy.observeSupplySample(afterGap, true, 12.5f);
+  assert(policy.quietDurationMs(afterGap) == 0);
+  assert(!policy.quietPeriodComplete(afterGap));
 }
 
 static void testSupplyEvidenceMustRemainContinuousAndResting() {
@@ -377,6 +400,7 @@ int main() {
   testObservedEngineOrVehicleActivityRestartsQuietPeriod();
   testMotionDuringDownloadInvalidatesTheQuietProof();
   testMotionWorkerRemainsScheduledDuringParkedOtaChecks();
+  testOneMissingTwoPollWindowsBreaksContinuousEvidence();
   testSupplyEvidenceMustRemainContinuousAndResting();
   testSupplyObservationGapInvalidatesParkedProof();
   testWrapSafeContinuousQuietTimer();

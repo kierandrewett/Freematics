@@ -748,8 +748,8 @@ void ICM_42627::setLowPower(bool enabled)
   // Keep only the accelerometer in the vendor's low-power mode while parked;
   // the gyro and temperature channel are not needed for wake detection.
   if (enabled) {
-    // 50 Hz is sufficient for a 250 ms host-side motion check and avoids
-    // running the sensor's normal 1 kHz output data rate while parked.
+    // Match the OTA standby worker's 50 Hz polling to the sensor ODR, while
+    // avoiding the normal 1 kHz output data rate during parked monitoring.
     writeByte(ACCEL_CONFIG0_REG, ACCEL_ODR_50HZ | ACCEL_FS_SEL_2G);
     delay(1);
   }

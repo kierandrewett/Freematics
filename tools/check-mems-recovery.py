@@ -27,6 +27,7 @@ using byte=uint8_t;
 #define STANDBY_MOTION_THRESHOLD 0.08f
 #define PHASE_TRIP 1
 #define PHASE_WRAP_UP 2
+#define PHASE_STANDBY 3
 #define BUFFER_LENGTH 3072
 #define ELEMENT_UINT8 0
 #define ELEMENT_UINT32 2
@@ -132,15 +133,19 @@ int main(){
 
     // OTA standby must keep this worker sampling while the standby owner may
     // be blocked in SD/OBD/hash operations; the activity latch protects that gap.
-    powerPhase=PHASE_WRAP_UP;
+    powerPhase=PHASE_STANDBY;
     state.clear(STATE_WORKING);
     state.set(STATE_STANDBY);
     otaParkedWatchActive=true;
     const unsigned readsBeforeParkedWatch=sensor.reads;
     stopAt=tick+300;
     try{acquireMEMS(nullptr);}catch(const Stop&){}
-    assert(sensor.reads>readsBeforeParkedWatch);
+    assert(sensor.reads-readsBeforeParkedWatch>=10);
     assert((otaSensorActivityLatch.consume() & OTASensorActivityLatch::kMotion)!=0);
+    CBuffer parkedWaveforms;
+    sensorWaveforms.emit(&parkedWaveforms);
+    assert(parkedWaveforms.voltageRecords==0 && parkedWaveforms.motionTimestamps==0);
+    assert(!sensorWaveforms.hasPending());
     otaParkedWatchActive=false;
     state.clear(STATE_STANDBY);
     state.set(STATE_WORKING);

@@ -2499,8 +2499,10 @@ void acquireMEMS(void*)
         portEXIT_CRITICAL(&otaActivityMux);
       }
       portENTER_CRITICAL(&sensorMux);
-      noteVoltage(intervalExtremes, voltage);
-      if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordVoltage(acquiredMs, voltage);
+      if (working) {
+        noteVoltage(intervalExtremes, voltage);
+        if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordVoltage(acquiredMs, voltage);
+      }
       portEXIT_CRITICAL(&sensorMux);
     }
 #endif
@@ -2552,8 +2554,11 @@ void acquireMEMS(void*)
       snapshot.timestamp = millis();
       portENTER_CRITICAL(&sensorMux);
       memsSnapshot = snapshot;
-      noteAcceleration(intervalExtremes, snapshot.acceleration);
-      if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordMotion(snapshot.timestamp, rawAcceleration, snapshot.gyro);
+      if (working) {
+        noteAcceleration(intervalExtremes, snapshot.acceleration);
+        if (powerPhase != PHASE_WRAP_UP)
+          sensorWaveforms.recordMotion(snapshot.timestamp, rawAcceleration, snapshot.gyro);
+      }
       portEXIT_CRITICAL(&sensorMux);
     } else {
       if (otaParkedWatchActive) {

@@ -19,10 +19,10 @@ class OTAParkedPolicy {
   // Match RESTING_VOLTAGE_MAX: an elevated reading is ambiguous (charging,
   // recently charged, or sensor error), so it must not authorize OTA.
   static constexpr float kMaximumRestingVoltage = 12.9f;
-  // Standby polls the accelerometer every 250 ms. A missed or stalled poll
-  // longer than this breaks the evidence of continuous quiet.
-  static const uint32_t kMotionSampleMaxGapMs = 1500UL;
-  static const uint32_t kSupplySampleMaxGapMs = 1500UL;
+  // The standby owner normally polls at 250 ms. Tolerate no more than one
+  // missed poll; longer gaps break the evidence of continuous car-off.
+  static const uint32_t kMotionSampleMaxGapMs = 500UL;
+  static const uint32_t kSupplySampleMaxGapMs = 500UL;
 
   static bool vehicleSupplyPlausible(float volts) {
     return volts == volts && volts <= FLT_MAX && volts >= -FLT_MAX &&
