@@ -20,15 +20,22 @@ KPH_TO_UK_MPG_PER_LPH = KM_TO_MI * IMPERIAL_GALLON_LITRES
 # are assumptions, not vehicle-specific facts.
 PETROL_STOICH_AFR = 14.7
 PETROL_DENSITY_G_PER_LITRE = 745.0
-# The collector publishes each PID's age from its own device timestamp.  Keep
-# an old ECU reading out of live summaries and charts instead of making a
-# stopped engine look as though it is still running.
-OBD_FRESH_MAX_AGE_SECONDS = 15
+# The collector publishes each PID's age from its own device timestamp. Keep
+# live charts aligned with acquisition targets: allow two target intervals so
+# normal request/transport jitter does not create false stale states.
+OBD_FAST_FRESH_MAX_AGE_SECONDS = 0.5
+OBD_FRESH_MAX_AGE_SECONDS = 2
+DEVICE_DATA_FRESH_MAX_AGE_SECONDS = 15
+DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS = 1
 DTC_FRESH_MAX_AGE_SECONDS = 300
 # A trip's time window is its stored timeline bounds plus this margin on each
 # side, so the first and last samples are not drawn on the chart edge. The
 # archive table link and the trips-view time sync both use this window.
 TRIP_WINDOW_PAD_MS = 30_000
+# Historical PID/sample charts target a 250 ms cadence. Sequence IDs catch
+# exact losses when available; for older archives without them, tolerate up to
+# 50% scheduling jitter and infer a missing frame only beyond this boundary.
+HISTORICAL_CAPTURE_GAP_THRESHOLD_MS = 375
 # Business Text (Volkov Labs) runs the trip time sync script. Grafana has no
 # native way to change the dashboard time range when a variable changes, and
 # a variable-driven panel time shift breaks drag-zoom.
@@ -75,6 +82,36 @@ def history_target(sql: str, ref: str = "A", *, format: str = "table") -> dict:
         "timeColumns": ["time"] if format == "time_series" else [],
     }
     return result
+
+
+def historical_series_with_gap_breaks(sql: str, value_columns: tuple[str, ...]) -> str:
+    """Add explicit NULL points where stored trip captures exceed cadence.
+
+    Gap detection uses the complete stored sample timeline for the selected
+    trip, independent of the Grafana time-range filter on the plotted series.
+    The midpoint keeps the break inside the missing interval and avoids using
+    collector receipt or archive-arrival timestamps as capture evidence.
+    """
+    null_values = ", ".join(f"NULL AS \"{column}\"" for column in value_columns)
+    return (
+        "WITH plotted AS (" + sql + "), "
+        "ordered_captures AS ("
+        "SELECT timeline_ms, capture_session_id, capture_sequence, "
+        "LEAD(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS next_timeline_ms, "
+        "LEAD(capture_session_id) OVER (ORDER BY timeline_ms, sequence) AS next_capture_session_id, "
+        "LEAD(capture_sequence) OVER (ORDER BY timeline_ms, sequence) AS next_capture_sequence "
+        "FROM sample WHERE device_id = '$device' AND trip_id = '$trip' AND timeline_ms IS NOT NULL"
+        "), gap_points AS ("
+        "SELECT (timeline_ms + next_timeline_ms) / 2000.0 AS time "
+        "FROM ordered_captures WHERE (next_timeline_ms - timeline_ms > "
+        f"{HISTORICAL_CAPTURE_GAP_THRESHOLD_MS} OR "
+        "(capture_session_id IS NOT NULL AND capture_session_id = next_capture_session_id "
+        "AND capture_sequence IS NOT NULL AND next_capture_sequence IS NOT NULL "
+        "AND next_capture_sequence > capture_sequence + 1)) "
+        "AND (timeline_ms + next_timeline_ms) / 2 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER)"
+        ") SELECT * FROM plotted UNION ALL "
+        f"SELECT time, {null_values} FROM gap_points ORDER BY time"
+    )
 
 
 def trip_archive_sql() -> str:
@@ -415,15 +452,31 @@ def build_dashboard(view: str = "combined") -> dict:
     selection = f"{{{metric_labels}}}"
     obd_age = f"freematics_obd_value_age_seconds{selection}"
 
+    def stale_obd(boolean: bool = False) -> str:
+        comparison = "> bool" if boolean else ">"
+        regular_age = f'freematics_obd_value_age_seconds{{{metric_labels},pid!~"0x10C|0x10D"}}'
+        fast_age = f'freematics_obd_value_age_seconds{{{metric_labels},pid=~"0x10C|0x10D"}}'
+        return (
+            f"(({regular_age} {comparison} {OBD_FRESH_MAX_AGE_SECONDS}) or "
+            f"({fast_age} {comparison} {OBD_FAST_FRESH_MAX_AGE_SECONDS}))"
+        )
+
     def fresh_obd(value_expression: str) -> str:
         return (
-            f"({value_expression} unless on(device_id,trip_id,pid) "
-            f"({obd_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+            f"({value_expression} unless on(device_id,trip_id,pid) {stale_obd()})"
         )
     device_age = f"freematics_device_data_age_seconds{{{DEVICE}}}"
 
     def fresh_device(value_expression: str) -> str:
-        return f"({value_expression} unless on(device_id) ({device_age} > {OBD_FRESH_MAX_AGE_SECONDS}))"
+        return f"({value_expression} unless on(device_id) ({device_age} > {DEVICE_DATA_FRESH_MAX_AGE_SECONDS}))"
+
+    device_voltage_age = f"freematics_device_battery_voltage_age_seconds{{{DEVICE}}}"
+
+    def fresh_device_voltage(value_expression: str) -> str:
+        return (
+            f"({value_expression} unless on(device_id) "
+            f"({device_voltage_age} > {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS}))"
+        )
 
     def fresh_live(value_expression: str) -> str:
         """Apply current-data gating only to the live dashboard view."""
@@ -446,7 +499,7 @@ def build_dashboard(view: str = "combined") -> dict:
     )
 
     network_transport = fresh_device(f"freematics_network_transport{{{DEVICE}}}")
-    vehicle_voltage = fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}")
+    vehicle_voltage = fresh_device_voltage(f"freematics_device_battery_voltage_volts{{{DEVICE}}}")
     gps_satellites = fresh_device(f"freematics_gps_satellites{{{DEVICE}}}")
 
     speed_kph = fresh_obd(f'freematics_obd_value{{{metric_labels},pid="0x10D"}}')
@@ -524,10 +577,10 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"max(freematics_device_data_age_seconds{{{DEVICE}}})",
                 width=3,
                 unit="s",
-                description=f"Age of the newest packet at the collector. Live telemetry cards and charts hide values after {OBD_FRESH_MAX_AGE_SECONDS} seconds; parked standby deliberately creates longer gaps.",
+                description=f"Age of the newest packet at the collector. Device-level live telemetry hides values after {DEVICE_DATA_FRESH_MAX_AGE_SECONDS} seconds; parked standby deliberately creates longer gaps.",
                 decimals=1,
                 no_value="No packets",
-                threshold_steps=((None, "green"), (10, "orange"), (OBD_FRESH_MAX_AGE_SECONDS, "red")),
+                threshold_steps=((None, "green"), (10, "orange"), (DEVICE_DATA_FRESH_MAX_AGE_SECONDS, "red")),
             ),
             stat(
                 4,
@@ -538,7 +591,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 width=3,
                 unit="volt",
                 decimals=2,
-                description="Voltage reported by the Freematics power input. Bench USB voltage is not a vehicle-battery reading.",
+                description=f"Voltage reported by the Freematics power input. It is hidden after {DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS} seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
                 no_value="Unavailable",
                 threshold_steps=((None, "red"), (11.8, "orange"), (12.2, "green"), (15.0, "red")),
             ),
@@ -589,9 +642,9 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"max({obd_age})",
                 unit="s",
                 decimals=1,
-                description=f"Oldest currently cached ECU PID value. Values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are hidden from live charts and summaries. The raw inventory still reports their age.",
+                description=f"Oldest currently cached ECU PID value. RPM and vehicle speed are hidden after {OBD_FAST_FRESH_MAX_AGE_SECONDS} seconds; other PIDs after {OBD_FRESH_MAX_AGE_SECONDS} seconds. The raw inventory still reports each age.",
                 no_value="No ECU data",
-                threshold_steps=((None, "green"), (10, "orange"), (OBD_FRESH_MAX_AGE_SECONDS, "red")),
+                threshold_steps=((None, "green"), (OBD_FAST_FRESH_MAX_AGE_SECONDS, "orange"), (OBD_FRESH_MAX_AGE_SECONDS, "red")),
                 width=3,
             ),
         ]
@@ -639,7 +692,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"(avg(avg_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (avg(avg_over_time({gps_speed_kph}[$__range:])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
-                description=f"Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
+                description=f"Time-average speed in miles per hour. OBD speed is preferred, with GPS as the fallback. OBD speed older than {OBD_FAST_FRESH_MAX_AGE_SECONDS} seconds is excluded.",
                 no_value="No speed",
             ),
             stat(
@@ -650,7 +703,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 f"(max(max_over_time({speed_kph}[$__range:])) * {KM_TO_MI}) or (max(max_over_time({gps_speed_kph}[$__range:])) * {KM_TO_MI})",
                 unit="suffix: mph",
                 decimals=1,
-                description=f"Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD values older than {OBD_FRESH_MAX_AGE_SECONDS} seconds are excluded.",
+                description=f"Highest observed speed in miles per hour, with GPS used when OBD speed is unavailable. OBD speed older than {OBD_FAST_FRESH_MAX_AGE_SECONDS} seconds is excluded.",
                 no_value="No speed",
             ),
             stat(
@@ -910,7 +963,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 7,
                 [
                     target(
-                        fresh_device(f"freematics_device_battery_voltage_volts{{{DEVICE}}}"),
+                        fresh_device_voltage(f"freematics_device_battery_voltage_volts{{{DEVICE}}}"),
                         "A",
                         "Vehicle supply (Model B input)",
                     ),
@@ -923,8 +976,10 @@ def build_dashboard(view: str = "combined") -> dict:
                 unit="volt",
                 description=(
                     "Separate measurements: Model B device-input vehicle supply and ECU-reported "
-                    "control-module voltage (PID 0x042). Each series is hidden when its own existing "
-                    f"freshness limit exceeds {OBD_FRESH_MAX_AGE_SECONDS} seconds; missing or stale "
+                    "control-module voltage (PID 0x042). Each series is hidden when its own freshness "
+                    f"limit is exceeded ({DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS} seconds for the supply-voltage sample; "
+                    f"{OBD_FRESH_MAX_AGE_SECONDS} seconds for ECU PIDs, or {OBD_FAST_FRESH_MAX_AGE_SECONDS} "
+                    "seconds for RPM/speed); missing or stale "
                     "samples remain gaps, and the values are never substituted for each other."
                 ),
                 overrides=[
@@ -1240,12 +1295,12 @@ def build_dashboard(view: str = "combined") -> dict:
         target(f"avg_over_time(freematics_obd_value{selection}[$__range])", "C", "Average", instant=True, table=True),
         target(f"max_over_time(freematics_obd_value{selection}[$__range])", "D", "Maximum", instant=True, table=True),
         target(f"last_over_time(freematics_obd_value_age_seconds{selection}[$__range])", "E", "Age", instant=True, table=True),
-        target(f"max_over_time((freematics_obd_value_age_seconds{selection} > bool {OBD_FRESH_MAX_AGE_SECONDS})[$__range:])", "F", "Stale", instant=True, table=True),
+        target(f"max_over_time({stale_obd(boolean=True)}[$__range:])", "F", "Stale", instant=True, table=True),
     ]
     panels.append(
         {
             "datasource": DS,
-            "description": f"Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. 'Latest fresh' is blank when an ECU value is older than {OBD_FRESH_MAX_AGE_SECONDS} seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
+            "description": f"Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. RPM and vehicle speed go stale after {OBD_FAST_FRESH_MAX_AGE_SECONDS} seconds; other PIDs after {OBD_FRESH_MAX_AGE_SECONDS} seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
             "fieldConfig": {
                 "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}, "decimals": 2},
                 "overrides": [
@@ -1702,6 +1757,28 @@ def build_dashboard(view: str = "combined") -> dict:
                 "ORDER BY latest.pid",
             )],
         }
+        historical_gap_columns = {
+            21: ("OBD speed (mph)", "Engine RPM", "GPS speed (mph)"),
+            22: ("X axis (g)", "Y axis (g)", "Z axis (g)"),
+            23: ("Engine load", "Throttle"),
+            24: ("Coolant", "Intake temperature"),
+            25: ("Fuel level", "Fuel trim"),
+            26: ("Mass airflow",),
+            27: ("Satellites", "HDOP", "GPS speed (mph)"),
+            38: ("ECU fuel rate", "Mass airflow", "ECU economy (UK mpg)", "MAF economy estimate (UK mpg)"),
+            39: ("Timing advance", "Equivalence ratio"),
+            50: ("Model B input voltage (PID 0x024)", "ECU control module voltage (PID 0x042)"),
+        }
+        for panel_id, value_columns in historical_gap_columns.items():
+            historical_targets[panel_id] = [
+                history_target(
+                    historical_series_with_gap_breaks(
+                        target["queryText"], value_columns
+                    ),
+                    format="time_series",
+                )
+                for target in historical_targets[panel_id]
+            ]
         for panel in panels:
             targets = historical_targets.get(panel["id"])
             if targets:

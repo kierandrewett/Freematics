@@ -94,6 +94,16 @@ WHERE device_id = '$device'
 ORDER BY trip_id DESC;
 ```
 
+Historical time-series panels insert a NULL at the midpoint of a stored
+timeline gap greater than 375 ms. This is the 250 ms capture target plus 50%
+jitter allowance, so a slightly late frame does not become a false gap. When
+capture-session identity and sequence are available, a sequence hole inserts a
+break even if the timeline interval is shorter. Sequence continuity is checked
+only within one session, preserving normal uint32 rollover and reboot
+boundaries. These breaks reveal a missing stored capture; they do not identify
+whether the original cause was ECU polling, acquisition, SD journalling, or
+upload transport.
+
 `gap_count` preserves the established quality-gate definition: intervals whose
 device monotonic clock advances by more than 3 seconds. The separate
 `over_target_interval_count` reports every interval over the nominal 250 ms
@@ -112,14 +122,22 @@ The raw Model B supply-voltage chart reads repeated `0x0A0` values from
 `sample_field`, not the one-value-per-PID projection. It aligns each uint32
 device acquisition tick to the parent sample's stored display timeline using a
 signed wrap-safe offset; collector receipt time is never used. A null point is
-inserted when adjacent archived voltage observations are more than 40 ms
-apart, making a persisted-observation gap visible without interpolation. The
-threshold is twice the nominal 20 ms capture interval. Such a gap proves only
-that the archived waveform has a wider interval; it does not alone attribute
-the cause to sampling, bounded buffering, SD journalling, or transport. Use the
-raw archive and per-boot waveform loss counters for that distinction. Trips
-without waveform records stay empty rather than being filled from the slower
-PID snapshot.
+inserted when adjacent archived voltage observations are 40 ms or more apart,
+making even a single missed 20 ms capture visible without interpolation. Such
+a gap proves only that the archived waveform has a wider interval; it does not
+alone attribute the cause to sampling, bounded buffering, SD journalling, or
+transport. Use the raw archive and per-boot waveform loss counters for that
+distinction. Trips without waveform records stay empty rather than being
+filled from the slower PID snapshot.
+
+Live OBD charts mask values using each ECU PID's own acquisition age: RPM and
+vehicle speed become stale after 500 ms (two 250 ms target intervals); other
+Mode 01 PIDs become stale after 2 seconds (two 1-second target intervals).
+Model B input voltage uses its own sample age with a 1-second limit, separate
+from both ECU PID age and newest-packet age. The packet-age metric retains its
+15-second link-liveness window for intentional parked gaps. The collector's
+age arithmetic regression can be repeated with
+`make -C collector test-measurement-age`.
 
 The adjacent loss-counter chart reads the four cumulative values from `0x0A4`
 at each archived sample's display-timeline time. The dropped-voltage and

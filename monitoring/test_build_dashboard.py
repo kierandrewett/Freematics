@@ -98,20 +98,39 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertEqual(supply["legendFormat"], "Vehicle supply (Model B input)")
         self.assertEqual(ecu["legendFormat"], "ECU control-module voltage (PID 0x042)")
         self.assertIn("freematics_device_battery_voltage_volts", supply["expr"])
-        self.assertIn("freematics_device_data_age_seconds", supply["expr"])
-        self.assertIn("> 15", supply["expr"])
+        self.assertIn("freematics_device_battery_voltage_age_seconds", supply["expr"])
+        self.assertIn("> 1", supply["expr"])
+        self.assertNotIn("freematics_device_data_age_seconds", supply["expr"])
         self.assertNotIn("freematics_obd_value", supply["expr"])
         self.assertNotIn("pid=", supply["expr"])
 
         self.assertIn('freematics_obd_value{device_id="$device",pid="0x042"}', ecu["expr"])
         self.assertIn("freematics_obd_value_age_seconds", ecu["expr"])
-        self.assertIn("> 15", ecu["expr"])
+        self.assertIn('pid!~"0x10C|0x10D"', ecu["expr"])
+        self.assertIn("> 2", ecu["expr"])
+        self.assertIn("> 0.5", ecu["expr"])
+        self.assertNotIn("> 15", ecu["expr"])
         self.assertIn("on(device_id,trip_id,pid)", ecu["expr"])
         self.assertNotIn("freematics_device_battery_voltage_volts", ecu["expr"])
         self.assertIn("never substituted for each other", panel["description"])
 
         combined = build_dashboard("combined")
         self.assertNotIn(51, {item["id"] for item in combined["panels"]})
+
+    def test_live_core_pid_charts_use_faster_freshness_limit_than_other_pids(self) -> None:
+        dashboard = build_dashboard("live")
+        speed_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 21)
+        rpm = next(target for target in speed_panel["targets"] if target["legendFormat"] == "Engine RPM")
+        speed = next(target for target in speed_panel["targets"] if target["legendFormat"] == "OBD speed (mph)")
+        for series in (rpm, speed):
+            self.assertIn('pid=~"0x10C|0x10D"', series["expr"])
+            self.assertIn("> 0.5", series["expr"])
+            self.assertNotIn("> 15", series["expr"])
+
+        coolant_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 24)
+        coolant = coolant_panel["targets"][0]
+        self.assertIn('pid!~"0x10C|0x10D"', coolant["expr"])
+        self.assertIn("> 2", coolant["expr"])
     def test_live_view_surfaces_obd_quality_metrics(self) -> None:
         dashboard = build_dashboard("live")
         quality_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 45)
@@ -256,6 +275,52 @@ class DashboardViewsTest(unittest.TestCase):
                 custom = panel["fieldConfig"]["defaults"]["custom"]
                 self.assertFalse(custom["spanNulls"])
                 self.assertFalse(custom["insertNulls"])
+
+    def test_historical_trip_charts_insert_null_rows_only_for_capture_gaps(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timestamp_quality, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1, 'partial', 1, 1)"
+            )
+            # 250 ms is nominal cadence and 300 ms can be scheduling jitter.
+            # A 500 ms gap indicates a missing frame in older archives without
+            # capture IDs; a sequence hole catches a loss at normal cadence.
+            for sequence, timeline in enumerate((1000, 1250, 1550, 1800, 2300, 2550)):
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, archive_mtime_ms, timestamp_quality, capture_session_id, capture_sequence) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 1, 'partial', 'SESSION', ?)",
+                    (sequence, timeline, timeline, (1, 2, 3, 4, 5, 7)[sequence]),
+                )
+            dashboard = build_dashboard("trips")
+            for panel_id in (21, 22, 23, 24, 25, 26, 27, 38, 39, 50):
+                with self.subTest(panel_id=panel_id):
+                    panel = next(panel for panel in dashboard["panels"] if panel["id"] == panel_id)
+                    sql = panel["targets"][0]["queryText"]
+                    for variable, value in {
+                        "${device:sqlstring}": "'CAR'",
+                        "${trip:sqlstring}": "'TRIP'",
+                        "$__from": "0",
+                        "$__to": "9999",
+                    }.items():
+                        sql = sql.replace(variable, value)
+                    rows = connection.execute(sql).fetchall()
+                    gap_rows = [row for row in rows if row[0] == 2.05]
+                    self.assertEqual(len(gap_rows), 1)
+                    self.assertTrue(all(value is None for value in gap_rows[0][1:]))
+                    sequence_gap_rows = [row for row in rows if row[0] == 2.425]
+                    self.assertEqual(len(sequence_gap_rows), 1)
+                    self.assertTrue(all(value is None for value in sequence_gap_rows[0][1:]))
+                    self.assertFalse(any(row[0] == 1.4 for row in rows))
+                    self.assertIn(1.0, [row[0] for row in rows])
+                    self.assertIn(1.25, [row[0] for row in rows])
+                    self.assertIn(1.55, [row[0] for row in rows])
+                    self.assertIn(1.8, [row[0] for row in rows])
+                    self.assertIn(2.3, [row[0] for row in rows])
+                    self.assertIn(2.55, [row[0] for row in rows])
+        finally:
+            connection.close()
 
     def test_live_views_keep_their_existing_hover_behavior(self) -> None:
         for view in ("live", "combined"):
@@ -430,7 +495,13 @@ class DashboardViewsTest(unittest.TestCase):
             }.items():
                 sql = sql.replace(variable, value)
             rows = connection.execute(sql).fetchall()
-            self.assertEqual(rows, [(1.0, 13.8, 14.1), (2.0, None, None), (3.0, 12.4, 13.2)])
+            self.assertEqual(rows, [
+                (1.0, 13.8, 14.1),
+                (1.5, None, None),
+                (2.0, None, None),
+                (2.5, None, None),
+                (3.0, 12.4, 13.2),
+            ])
         finally:
             connection.close()
 

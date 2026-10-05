@@ -221,7 +221,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Age of the newest packet at the collector. Live telemetry cards and charts hide values after 15 seconds; parked standby deliberately creates longer gaps.",
+      "description": "Age of the newest packet at the collector. Device-level live telemetry hides values after 15 seconds; parked standby deliberately creates longer gaps.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -296,7 +296,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Voltage reported by the Freematics power input. Bench USB voltage is not a vehicle-battery reading.",
+      "description": "Voltage reported by the Freematics power input. It is hidden after 1 seconds without a new voltage sample; bench USB voltage is not a vehicle-battery reading.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -360,7 +360,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max((freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)))",
+          "expr": "max((freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1)))",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -375,7 +375,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Live ECU fuel-tank percentage, only while its reported age is at most 15 seconds. This is a gauge percentage, not litres; red means at or below 15%.",
+      "description": "Live ECU fuel-tank percentage, only while its reported age is at most 2 seconds. This is a gauge percentage, not litres; red means at or below 15%.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -439,7 +439,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[5m:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x12F\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))[5m:])",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -600,7 +600,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Oldest currently cached ECU PID value. Values older than 15 seconds are hidden from live charts and summaries. The raw inventory still reports their age.",
+      "description": "Oldest currently cached ECU PID value. RPM and vehicle speed are hidden after 0.5 seconds; other PIDs after 2 seconds. The raw inventory still reports each age.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -616,11 +616,11 @@
                 "color": "green"
               },
               {
-                "value": 10,
+                "value": 0.5,
                 "color": "orange"
               },
               {
-                "value": 15,
+                "value": 2,
                 "color": "red"
               }
             ]
@@ -727,7 +727,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x1A6\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:]) * 0.621371",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=\"0x1A6\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))[$__range:]) * 0.621371",
           "legendFormat": "",
           "range": false,
           "refId": "A",
@@ -888,7 +888,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 0.621371)",
+          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 0.621371)",
           "legendFormat": "OBD speed (mph)",
           "range": true,
           "refId": "A"
@@ -910,7 +910,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10C\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Engine RPM",
           "range": true,
           "refId": "C"
@@ -924,7 +924,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Separate measurements: Model B device-input vehicle supply and ECU-reported control-module voltage (PID 0x042). Each series is hidden when its own existing freshness limit exceeds 15 seconds; missing or stale samples remain gaps, and the values are never substituted for each other.",
+      "description": "Separate measurements: Model B device-input vehicle supply and ECU-reported control-module voltage (PID 0x042). Each series is hidden when its own freshness limit is exceeded (1 seconds for the supply-voltage sample; 2 seconds for ECU PIDs, or 0.5 seconds for RPM/speed); missing or stale samples remain gaps, and the values are never substituted for each other.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1037,7 +1037,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_device_battery_voltage_volts{device_id=\"$device\"} unless on(device_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1))",
           "legendFormat": "Vehicle supply (Model B input)",
           "range": true,
           "refId": "A"
@@ -1048,7 +1048,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x042\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x042\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "ECU control-module voltage (PID 0x042)",
           "range": true,
           "refId": "B"
@@ -1240,7 +1240,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x104\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x104\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Engine load",
           "range": true,
           "refId": "A"
@@ -1251,7 +1251,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x111\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x111\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Throttle",
           "range": true,
           "refId": "B"
@@ -1262,7 +1262,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"accelerator_pedal_position_.*|relative_accelerator_pedal_position|driver_demand_engine_torque|actual_engine_torque\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "C"
@@ -1358,7 +1358,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*temperature.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*temperature.*\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "A"
@@ -1482,7 +1482,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"fuel_level|.*fuel_trim.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"fuel_level|.*fuel_trim.*\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "A"
@@ -1493,7 +1493,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=\"commanded_equivalence_ratio\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=\"commanded_equivalence_ratio\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Equivalence ratio",
           "range": true,
           "refId": "B"
@@ -1606,7 +1606,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Mass airflow",
           "range": true,
           "refId": "A"
@@ -1617,7 +1617,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*pressure.*\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\".*pressure.*\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "B"
@@ -2267,7 +2267,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "ECU fuel rate (L/h)",
           "range": true,
           "refId": "A"
@@ -2278,7 +2278,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0))",
+          "expr": "((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 3600 / (14.7 * 745.0))",
           "legendFormat": "MAF fuel rate estimate (L/h)",
           "range": true,
           "refId": "B"
@@ -2289,7 +2289,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)), 0.01)) or ((((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)) * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)), 0.01))",
+          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 2.82480848939) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))), 0.01)) or ((((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)) * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min((freematics_obd_value{device_id=\"$device\",pid=\"0x15E\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))), 0.01))",
           "legendFormat": "ECU economy (UK mpg)",
           "range": true,
           "refId": "C"
@@ -2300,7 +2300,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 2.82480848939) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01)) or ((((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)) * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15)) * 3600 / (14.7 * 745.0)), 0.01))",
+          "expr": "(((freematics_obd_value{device_id=\"$device\",pid=\"0x10D\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 2.82480848939) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 3600 / (14.7 * 745.0)), 0.01)) or ((((freematics_gps_speed_kilometres_per_hour{device_id=\"$device\"} unless on(device_id) (freematics_device_data_age_seconds{device_id=\"$device\"} > 15)) * 0.621371) * 4.54609) / on(device_id,trip_id) clamp_min(((freematics_obd_value{device_id=\"$device\",pid=\"0x110\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5))) * 3600 / (14.7 * 745.0)), 0.01))",
           "legendFormat": "MAF economy estimate (UK mpg)",
           "range": true,
           "refId": "D"
@@ -2582,7 +2582,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. 'Latest fresh' is blank when an ECU value is older than 15 seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
+      "description": "Every standard Mode 01 PID the vehicle advertised, with friendly metadata from kierandrewett/obd. RPM and vehicle speed go stale after 0.5 seconds; other PIDs after 2 seconds. A missing row means the ECU did not advertise that PID; it is never shown as zero.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -2672,7 +2672,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))[$__range:])",
           "legendFormat": "Latest fresh",
           "range": false,
           "refId": "A",
@@ -2737,7 +2737,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "max_over_time((freematics_obd_value_age_seconds{device_id=\"$device\"} > bool 15)[$__range:])",
+          "expr": "max_over_time(((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > bool 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > bool 0.5))[$__range:])",
           "legendFormat": "Stale",
           "range": false,
           "refId": "F",
@@ -2903,7 +2903,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10E\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x10E\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Timing advance",
           "range": true,
           "refId": "A"
@@ -2914,7 +2914,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"oxygen_sensor_.*_voltage\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",name=~\"oxygen_sensor_.*_voltage\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "{{description}}",
           "range": true,
           "refId": "B"
@@ -2925,7 +2925,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x144\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))",
+          "expr": "(freematics_obd_value{device_id=\"$device\",pid=\"0x144\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))",
           "legendFormat": "Equivalence ratio",
           "range": true,
           "refId": "C"
@@ -3021,7 +3021,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131|0x1A6\"} unless on(device_id,trip_id,pid) (freematics_obd_value_age_seconds{device_id=\"$device\"} > 15))[$__range:])",
+          "expr": "last_over_time((freematics_obd_value{device_id=\"$device\",pid=~\"0x101|0x11C|0x11F|0x121|0x130|0x131|0x1A6\"} unless on(device_id,trip_id,pid) ((freematics_obd_value_age_seconds{device_id=\"$device\",pid!~\"0x10C|0x10D\"} > 2) or (freematics_obd_value_age_seconds{device_id=\"$device\",pid=~\"0x10C|0x10D\"} > 0.5)))[$__range:])",
           "legendFormat": "Latest",
           "range": false,
           "refId": "A",
