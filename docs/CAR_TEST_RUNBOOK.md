@@ -289,3 +289,49 @@ preserve each sample's capture timeline.
 The coverage check exits with status 1 for missing fields, a device-clock reset,
 or intervals above 375 ms. It includes startup omissions and needs explicit
 `--require-pid` arguments to detect a signal absent from the entire trip.
+
+## Synchronized warm-idle shudder evidence
+
+The reported symptom is an intermittent warm-idle shudder with an RPM drop and
+occasional infotainment/clock dimming. It has also occurred in neutral, with AC
+off, and with Freematics disconnected, so neither the adapter nor AC is
+established as its cause. Collect observations without changing driving
+behaviour or clearing diagnostic codes.
+
+For a stationary warm-idle session, keep the Model B connected to both the
+OBD socket and laptop USB and use the OBD dashboard as the only USB reader; do
+not start a serial monitor on the same port. Before the session, verify that
+the laptop clock is synchronized and that dashboard capture timestamps are
+device UTC (not host receive time). If device UTC is invalid, note that and
+correlate by device-monotonic capture time instead; do not substitute upload
+or laptop arrival time for capture time.
+
+Have a passenger or observer keep a separate timestamped event note. Do not
+operate a laptop or phone while driving. Record the local timezone or use UTC,
+and note each event to the nearest second, for example:
+
+```text
+2026-10-05T17:30:00Z warm_idle_session_start; engine_warm=true; gear=neutral
+2026-10-05T17:32:14Z shudder_observed; duration=approx_1s; infotainment_dim=true
+2026-10-05T17:34:00Z AC_request=on
+2026-10-05T17:35:21Z shudder_observed; duration=approx_2s; infotainment_dim=false
+2026-10-05T17:37:00Z AC_request=off
+2026-10-05T17:40:00Z electrical_load=headlamps_on
+```
+
+Record what was actually observed rather than inferred causes. Include engine
+temperature/warm-up state, gear, AC request changes, headlamps, cabin blower,
+heated rear window and other significant electrical loads. Mark engine start,
+stop and any movement. Change one load at a time, allow the idle to settle,
+and leave controls untouched during each observation interval. Keep the note
+beside the original local SD recording and indexed Grafana trip; do not edit
+the raw recording. Use the capture-time trend panel to compare RPM, ECU
+control-module voltage (PID 0x42) and Model B supply voltage around each note,
+and inspect the individual acquisition ages and missed-cycle/journal-health
+counters before trusting an apparent trace. Retain stale intervals and gaps
+as evidence rather than interpolating them away.
+
+Repeat comparable warm-idle intervals with AC/load changes separated in time.
+Report the time-aligned measurements and uncertainties only. A correlation
+with RPM or voltage is evidence for further testing, not a definitive
+mechanical diagnosis.
