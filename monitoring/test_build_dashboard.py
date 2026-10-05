@@ -441,7 +441,13 @@ class DashboardViewsTest(unittest.TestCase):
                     "VALUES ('CAR', 'TRIP', ?, ?, ?, 'collector_session', 1000, 'unknown', ?)",
                     (sequence, timeline, timeline, acceleration),
                 )
-            metrics = ((0, "0x030", 4.0), (2, "0x030", 5.0), (0, "0x12F", 12.0), (1, "0x12F", 8.0), (2, "0x12F", 9.0), (0, "0x10C", 900.0), (2, "0x10C", 1400.0))
+            metrics = (
+                (0, "0x030", 4.0), (2, "0x030", 5.0),
+                (0, "0x12F", 12.0), (1, "0x12F", 8.0), (2, "0x12F", 9.0),
+                (0, "0x42F", 250.0), (1, "0x42F", 250.0), (2, "0x42F", 250.0),
+                (0, "0x10C", 900.0), (2, "0x10C", 1400.0),
+                (0, "0x40C", 250.0), (2, "0x40C", 250.0),
+            ) + tuple((sequence, "0x095", 100.0) for sequence in range(4))
             connection.executemany(
                 "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
                 metrics,
@@ -472,7 +478,11 @@ class DashboardViewsTest(unittest.TestCase):
             self.assertEqual(run(15, 1500, 2500), [(0.0,)])
             self.assertEqual(run(16)[0][0], 0.4)
             self.assertEqual(run(17)[0][0], 0.6)
-            self.assertEqual(run(40), [("0x030", 5.0), ("0x10C", 1400.0), ("0x12F", 9.0)])
+            self.assertEqual(run(40), [
+                ("0x030", 5.0, None, "Not a Mode 01 measurement"),
+                ("0x10C", 1400.0, 250.0, "Fresh"),
+                ("0x12F", 9.0, 250.0, "Fresh"),
+            ])
             self.assertEqual(run(44)[0][3:5], ("P234", "powertrain"))
         finally:
             connection.close()
@@ -491,7 +501,7 @@ class DashboardViewsTest(unittest.TestCase):
         sql = panel["targets"][0]["queryText"]
         self.assertIn("s.timeline_ms / 1000.0 AS time", sql)
         self.assertIn("m.pid = '0x024'", sql)
-        self.assertIn("m.pid = '0x042'", sql)
+        self.assertIn("m.pid = '0x142'", sql)
         self.assertNotIn("collector_received_ms", sql)
         self.assertNotIn("archive_mtime_ms", sql)
 
@@ -510,7 +520,10 @@ class DashboardViewsTest(unittest.TestCase):
                 )
             connection.executemany(
                 "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
-                ((0, "0x024", 1380), (0, "0x042", 14.1), (2, "0x024", 1240), (2, "0x042", 13.2)),
+                (
+                    (0, "0x024", 1380), (0, "0x094", 250), (0, "0x142", 14.1), (0, "0x442", 800),
+                    (2, "0x024", 1240), (2, "0x094", 900), (2, "0x142", 13.2), (2, "0x442", 1200),
+                ),
             )
             for variable, value in {
                 "${device:sqlstring}": "'CAR'",
@@ -527,6 +540,40 @@ class DashboardViewsTest(unittest.TestCase):
                 (2.5, None, None),
                 (3.0, 12.4, 13.2),
             ])
+        finally:
+            connection.close()
+
+    def test_historical_trends_mask_stale_cached_values_using_measurement_age(self) -> None:
+        dashboard = build_dashboard("trips")
+        panel = next(panel for panel in dashboard["panels"] if panel["id"] == 21)
+        sql = panel["targets"][0]["queryText"]
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 2000, 'gnss', 4, 2000, 2000)"
+            )
+            rpm = ((0, 750, 0), (1, 760, 250), (2, 780, 501), (3, 790, 100))
+            for sequence, value, age in rpm:
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, time_basis, archive_mtime_ms, timestamp_quality) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 'device_monotonic', 2000, 'device')",
+                    (sequence, sequence * 250, 1000 + sequence * 250),
+                )
+                connection.executemany(
+                    "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, ?, ?)",
+                    ((sequence, "0x10C", value), (sequence, "0x40C", age)),
+                )
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            rows = connection.execute(sql).fetchall()
+            self.assertEqual([row[2] for row in rows], [750.0, 760.0, None, 790.0])
         finally:
             connection.close()
 

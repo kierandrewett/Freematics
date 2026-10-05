@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -28,6 +29,16 @@ OBD_FRESH_MAX_AGE_SECONDS = 2
 DEVICE_DATA_FRESH_MAX_AGE_SECONDS = 15
 DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS = 1
 DTC_FRESH_MAX_AGE_SECONDS = 300
+GNSS_FRESH_MAX_AGE_MS = 2_000
+MEMS_FRESH_MAX_AGE_MS = 1_000
+MODE01_PID_BYTES = tuple(
+    int(pid, 16)
+    for pid in re.findall(
+        r"^OBD_PID\(0x([0-9A-Fa-f]{2}),",
+        (Path(__file__).resolve().parent.parent / "obd_pids.h").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+)
 # A trip's time window is its stored timeline bounds plus this margin on each
 # side, so the first and last samples are not drawn on the chart edge. The
 # archive table link and the trips-view time sync both use this window.
@@ -82,6 +93,65 @@ def history_target(sql: str, ref: str = "A", *, format: str = "table") -> dict:
         "timeColumns": ["time"] if format == "time_series" else [],
     }
     return result
+
+
+def history_age_is_fresh(sample_alias: str, age_pid: str, max_age_ms: int) -> str:
+    """Return a correlated guard for an age field captured in the same sample."""
+    return (
+        "EXISTS (SELECT 1 FROM sample_metric AS age_metric "
+        f"WHERE age_metric.device_id = {sample_alias}.device_id "
+        f"AND age_metric.trip_id = {sample_alias}.trip_id "
+        f"AND age_metric.sequence = {sample_alias}.sequence "
+        f"AND age_metric.pid = '{age_pid}' "
+        f"AND age_metric.numeric_value BETWEEN 0 AND {max_age_ms})"
+    )
+
+
+def history_mode01_is_fresh(sample_alias: str, metric_pid: str) -> str:
+    """Mask a cached Mode 01 value unless its per-PID age meets live targets."""
+    obd_pid = int(metric_pid, 16) & 0xFF
+    max_age_ms = int(
+        (OBD_FAST_FRESH_MAX_AGE_SECONDS if obd_pid in {0x0C, 0x0D}
+         else OBD_FRESH_MAX_AGE_SECONDS) * 1000
+    )
+    age_pid = f"0x{(0x400 | obd_pid):03X}"
+    return history_age_is_fresh(sample_alias, age_pid, max_age_ms)
+
+
+def history_mode01_case(metric_pid: str, value_sql: str = "m.numeric_value") -> str:
+    return (
+        f"MAX(CASE WHEN m.pid = '{metric_pid}' AND "
+        f"{history_mode01_is_fresh('s', metric_pid)} THEN {value_sql} END)"
+    )
+
+
+def history_mode01_age_pid_case(metric_alias: str) -> str:
+    cases = " ".join(
+        f"WHEN '0x{0x100 | pid:03X}' THEN '0x{0x400 | pid:03X}'"
+        for pid in MODE01_PID_BYTES
+    )
+    return f"CASE {metric_alias}.pid {cases} ELSE NULL END"
+
+
+def history_mode01_max_age_case(metric_alias: str) -> str:
+    return (
+        f"CASE WHEN {metric_alias}.pid IN ('0x10C', '0x10D') THEN "
+        f"{int(OBD_FAST_FRESH_MAX_AGE_SECONDS * 1000)} ELSE "
+        f"{int(OBD_FRESH_MAX_AGE_SECONDS * 1000)} END"
+    )
+
+
+def history_metric_scalar(metric_pid: str, multiplier: float = 1.0) -> str:
+    """Return a same-sample scalar that is NULL without fresh Mode 01 age."""
+    value = "metric_value.numeric_value"
+    if multiplier != 1.0:
+        value += f" * {multiplier}"
+    return (
+        "(SELECT CASE WHEN " + history_mode01_is_fresh("s", metric_pid) + " THEN " + value + " END "
+        "FROM sample_metric AS metric_value WHERE metric_value.device_id = s.device_id "
+        "AND metric_value.trip_id = s.trip_id AND metric_value.sequence = s.sequence "
+        f"AND metric_value.pid = '{metric_pid}')"
+    )
 
 
 def historical_series_with_gap_breaks(sql: str, value_columns: tuple[str, ...]) -> str:
@@ -1572,7 +1642,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "FROM sample_metric AS m "
                 "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 f"WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '{pid}' "
-                f"AND {historical_range}"
+                f"AND {historical_range} AND {history_mode01_is_fresh('s', pid)}"
             )
 
         historical_targets: dict[int, list[dict]] = {
@@ -1600,6 +1670,7 @@ def build_dashboard(view: str = "combined") -> dict:
                 "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
                 "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                f"AND {history_mode01_is_fresh('s', '0x12F')} "
                 "ORDER BY s.sequence ASC LIMIT 1",
             )],
             14: [history_target(
@@ -1607,61 +1678,70 @@ def build_dashboard(view: str = "combined") -> dict:
                 "JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
                 "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                f"AND {history_mode01_is_fresh('s', '0x12F')} "
                 "ORDER BY s.sequence DESC LIMIT 1",
             )],
             15: [history_target(
                 "SELECT (first.numeric_value - last.numeric_value) AS \"Fuel level change\" "
                 "FROM (SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
-                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence ASC LIMIT 1) AS first, "
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                f"AND {history_mode01_is_fresh('s', '0x12F')} ORDER BY s.sequence ASC LIMIT 1) AS first, "
                 "(SELECT m.numeric_value FROM sample_metric AS m JOIN sample AS s ON s.device_id = m.device_id AND s.trip_id = m.trip_id AND s.sequence = m.sequence "
                 "WHERE m.device_id = '$device' AND m.trip_id = '$trip' AND m.pid = '0x12F' "
-                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) ORDER BY s.sequence DESC LIMIT 1) AS last",
+                "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                f"AND {history_mode01_is_fresh('s', '0x12F')} ORDER BY s.sequence DESC LIMIT 1) AS last",
             )],
             16: [history_target(
-                "SELECT MAX(acceleration_x_g) AS \"Peak acceleration (X)\" FROM sample "
-                "WHERE device_id = '$device' AND trip_id = '$trip' AND " + historical_range,
+                "SELECT MAX(CASE WHEN " + history_age_is_fresh("s", "0x095", MEMS_FRESH_MAX_AGE_MS)
+                + " THEN acceleration_x_g END) AS \"Peak acceleration (X)\" FROM sample AS s "
+                "WHERE s.device_id = '$device' AND s.trip_id = '$trip' AND s." + historical_range,
             )],
             17: [history_target(
-                "SELECT ABS(MIN(acceleration_x_g)) AS \"Peak braking (X)\" FROM sample "
-                "WHERE device_id = '$device' AND trip_id = '$trip' AND " + historical_range,
+                "SELECT ABS(MIN(CASE WHEN " + history_age_is_fresh("s", "0x095", MEMS_FRESH_MAX_AGE_MS)
+                + " THEN acceleration_x_g END)) AS \"Peak braking (X)\" FROM sample AS s "
+                "WHERE s.device_id = '$device' AND s.trip_id = '$trip' AND s." + historical_range,
             )],
             18: [history_target(metric_aggregate("0x105", "MAX", "Maximum coolant"))],
             19: [history_target(trip_archive_sql())],
             20: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, s.latitude AS \"Latitude\", s.longitude AS \"Longitude\", "
-                f"s.gps_speed_kph * {KM_TO_MI} AS \"GPS speed (mph)\", s.gps_heading_degrees AS \"Heading\", "
-                "(SELECT numeric_value * " + str(KM_TO_MI) + " FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10D') AS \"OBD speed (mph)\", "
-                "(SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x10C') AS \"RPM\", "
-                "(SELECT numeric_value FROM sample_metric WHERE device_id = s.device_id AND trip_id = s.trip_id AND sequence = s.sequence AND pid = '0x12F') AS \"Fuel %\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN s.gps_speed_kph * {KM_TO_MI} END AS \"GPS speed (mph)\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN s.gps_heading_degrees END AS \"Heading\", "
+                f"{history_metric_scalar('0x10D', KM_TO_MI)} AS \"OBD speed (mph)\", "
+                f"{history_metric_scalar('0x10C')} AS \"RPM\", "
+                f"{history_metric_scalar('0x12F')} AS \"Fuel %\", "
                 "s.sequence AS \"Sample\", s.device_monotonic_ms AS \"Device monotonic (ms)\", "
                 "s.collector_received_ms AS \"Collector receipt (per-sample, if available)\", s.archive_mtime_ms AS \"Archive mtime (ms)\", "
                 "s.capture_utc_ms AS \"Capture UTC (ms)\", s.timestamp_quality AS \"Capture timestamp quality\", s.time_basis AS \"Display time basis\" "
                 "FROM sample AS s WHERE s.device_id = '$device' AND s.trip_id = '$trip' AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL "
+                f"AND {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} "
                 "AND s.timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
                 "ORDER BY sequence",
                 format="time_series",
             )],
             21: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                f"MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value * {KM_TO_MI} END) AS \"OBD speed (mph)\", "
-                "MAX(CASE WHEN m.pid = '0x10C' THEN m.numeric_value END) AS \"Engine RPM\", "
-                f"MAX(s.gps_speed_kph * {KM_TO_MI}) AS \"GPS speed (mph)\" "
+                f"{history_mode01_case('0x10D', f'm.numeric_value * {KM_TO_MI}')} AS \"OBD speed (mph)\", "
+                f"{history_mode01_case('0x10C')} AS \"Engine RPM\", "
+                f"MAX(CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN s.gps_speed_kph * {KM_TO_MI} END) AS \"GPS speed (mph)\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             22: [history_target(
-                "SELECT timeline_ms / 1000.0 AS time, acceleration_x_g AS \"X axis (g)\", "
-                "acceleration_y_g AS \"Y axis (g)\", acceleration_z_g AS \"Z axis (g)\" "
-                f"FROM sample WHERE {trip_where} AND {historical_range} ORDER BY time",
+                "SELECT s.timeline_ms / 1000.0 AS time, "
+                f"CASE WHEN {history_age_is_fresh('s', '0x095', MEMS_FRESH_MAX_AGE_MS)} THEN acceleration_x_g END AS \"X axis (g)\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x095', MEMS_FRESH_MAX_AGE_MS)} THEN acceleration_y_g END AS \"Y axis (g)\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x095', MEMS_FRESH_MAX_AGE_MS)} THEN acceleration_z_g END AS \"Z axis (g)\" "
+                f"FROM sample AS s WHERE {sample_trip_where} AND s.{historical_range} ORDER BY time",
                 format="time_series",
             )],
             23: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x104' THEN m.numeric_value END) AS \"Engine load\", "
-                "MAX(CASE WHEN m.pid = '0x111' THEN m.numeric_value END) AS \"Throttle\" "
+                f"{history_mode01_case('0x104')} AS \"Engine load\", "
+                f"{history_mode01_case('0x111')} AS \"Throttle\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
@@ -1669,8 +1749,8 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
             24: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x105' THEN m.numeric_value END) AS \"Coolant\", "
-                "MAX(CASE WHEN m.pid = '0x10F' THEN m.numeric_value END) AS \"Intake temperature\" "
+                f"{history_mode01_case('0x105')} AS \"Coolant\", "
+                f"{history_mode01_case('0x10F')} AS \"Intake temperature\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
@@ -1678,8 +1758,9 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
             25: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x12F' THEN m.numeric_value END) AS \"Fuel level\", "
-                "MAX(CASE WHEN m.pid IN ('0x106', '0x107') THEN m.numeric_value END) AS \"Fuel trim\" "
+                f"{history_mode01_case('0x12F')} AS \"Fuel level\", "
+                "MAX(CASE WHEN m.pid = '0x106' AND " + history_mode01_is_fresh("s", "0x106") + " THEN m.numeric_value "
+                "WHEN m.pid = '0x107' AND " + history_mode01_is_fresh("s", "0x107") + " THEN m.numeric_value END) AS \"Fuel trim\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
@@ -1687,22 +1768,24 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
             26: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\" "
+                f"{history_mode01_case('0x110')} AS \"Mass airflow\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             27: [history_target(
-                f"SELECT timeline_ms / 1000.0 AS time, gps_satellites AS \"Satellites\", "
-                f"gps_hdop AS \"HDOP\", gps_speed_kph * {KM_TO_MI} AS \"GPS speed (mph)\" "
-                f"FROM sample WHERE {trip_where} AND {historical_range} ORDER BY time",
+                "SELECT s.timeline_ms / 1000.0 AS time, "
+                f"CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN gps_satellites END AS \"Satellites\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN gps_hdop END AS \"HDOP\", "
+                f"CASE WHEN {history_age_is_fresh('s', '0x093', GNSS_FRESH_MAX_AGE_MS)} THEN gps_speed_kph * {KM_TO_MI} END AS \"GPS speed (mph)\" "
+                f"FROM sample AS s WHERE {sample_trip_where} AND s.{historical_range} ORDER BY time",
                 format="time_series",
             )],
             50: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x024' THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", "
-                "MAX(CASE WHEN m.pid = '0x042' THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" "
+                f"MAX(CASE WHEN m.pid = '0x024' AND {history_age_is_fresh('s', '0x094', int(DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS * 1000))} THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", "
+                f"MAX(CASE WHEN m.pid = '0x142' AND {history_mode01_is_fresh('s', '0x142')} THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
                 "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
@@ -1722,16 +1805,13 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
             38: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) AS \"ECU fuel rate\", "
-                "MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) AS \"Mass airflow\", "
-                "CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL "
-                "AND MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) > 0 THEN "
-                "MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * " + str(KPH_TO_UK_MPG_PER_LPH) + " / "
-                "MAX(CASE WHEN m.pid = '0x15E' THEN m.numeric_value END) END AS \"ECU economy (UK mpg)\", "
-                "CASE WHEN MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) IS NOT NULL "
-                "AND MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) > 0 THEN "
-                "MAX(CASE WHEN m.pid = '0x10D' THEN m.numeric_value END) * " + str(KPH_TO_UK_MPG_PER_LPH) + " / "
-                "(MAX(CASE WHEN m.pid = '0x110' THEN m.numeric_value END) * 3600.0 / " + str(PETROL_STOICH_AFR * PETROL_DENSITY_G_PER_LITRE) + ") END AS \"MAF economy estimate (UK mpg)\" "
+                f"{history_mode01_case('0x15E')} AS \"ECU fuel rate\", "
+                f"{history_mode01_case('0x110')} AS \"Mass airflow\", "
+                f"CASE WHEN {history_mode01_case('0x10D')} IS NOT NULL AND {history_mode01_case('0x15E')} > 0 THEN "
+                f"{history_mode01_case('0x10D')} * {KPH_TO_UK_MPG_PER_LPH} / {history_mode01_case('0x15E')} END AS \"ECU economy (UK mpg)\", "
+                f"CASE WHEN {history_mode01_case('0x10D')} IS NOT NULL AND {history_mode01_case('0x110')} > 0 THEN "
+                f"{history_mode01_case('0x10D')} * {KPH_TO_UK_MPG_PER_LPH} / "
+                f"({history_mode01_case('0x110')} * 3600.0 / {PETROL_STOICH_AFR * PETROL_DENSITY_G_PER_LITRE}) END AS \"MAF economy estimate (UK mpg)\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
@@ -1739,18 +1819,31 @@ def build_dashboard(view: str = "combined") -> dict:
             )],
             39: [history_target(
                 "SELECT s.timeline_ms / 1000.0 AS time, "
-                "MAX(CASE WHEN m.pid = '0x10E' THEN m.numeric_value END) AS \"Timing advance\", "
-                "MAX(CASE WHEN m.pid = '0x144' THEN m.numeric_value END) AS \"Equivalence ratio\" "
+                f"{history_mode01_case('0x10E')} AS \"Timing advance\", "
+                f"{history_mode01_case('0x144')} AS \"Equivalence ratio\" "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
                 f"WHERE {sample_trip_where} AND s.{historical_range} "
                 "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
                 format="time_series",
             )],
             40: [history_target(
-                "SELECT latest.pid AS \"PID\", latest.numeric_value AS \"Latest\" "
+                "SELECT latest.pid AS \"PID\", "
+                f"CASE WHEN {history_mode01_age_pid_case('latest')} IS NULL OR "
+                f"latest_age.numeric_value BETWEEN 0 AND {history_mode01_max_age_case('latest')} "
+                "THEN latest.numeric_value END AS \"Latest\", "
+                "latest_age.numeric_value AS \"Age (ms)\", "
+                f"CASE WHEN {history_mode01_age_pid_case('latest')} IS NULL THEN 'Not a Mode 01 measurement' "
+                "WHEN latest_age.numeric_value IS NULL THEN 'Age unavailable' "
+                f"WHEN latest_age.numeric_value BETWEEN 0 AND {history_mode01_max_age_case('latest')} THEN 'Fresh' "
+                "ELSE 'Stale' END AS \"Freshness\" "
                 "FROM sample_metric AS latest JOIN sample AS latest_sample ON latest_sample.device_id = latest.device_id "
                 "AND latest_sample.trip_id = latest.trip_id AND latest_sample.sequence = latest.sequence "
+                f"LEFT JOIN sample_metric AS latest_age ON latest_age.device_id = latest.device_id "
+                "AND latest_age.trip_id = latest.trip_id AND latest_age.sequence = latest.sequence "
+                f"AND latest_age.pid = {history_mode01_age_pid_case('latest')} "
                 f"WHERE {metric_trip_where.replace('m.', 'latest.')} AND latest.numeric_value IS NOT NULL AND latest_sample.{historical_range} "
+                "AND latest.pid NOT LIKE '0x4%' "
+                "AND latest.pid NOT IN ('0x093', '0x094', '0x095', '0x096') "
                 "AND latest.sequence = (SELECT MAX(candidate.sequence) FROM sample_metric AS candidate "
                 "JOIN sample AS candidate_sample ON candidate_sample.device_id = candidate.device_id "
                 "AND candidate_sample.trip_id = candidate.trip_id AND candidate_sample.sequence = candidate.sequence "
@@ -1924,7 +2017,7 @@ def build_dashboard(view: str = "combined") -> dict:
             31: "Historical numeric and text metric inventory with catalogue metadata and explicit sample counts. Raw duplicate fields remain in field_timeline.",
             38: "Stored ECU fuel rate and mass airflow, plus direct ECU and petrol-assumption MAF economy only when OBD speed and the required source are present. No GPS fallback is used.",
             39: "Stored timing advance and commanded air-fuel equivalence ratio. Oxygen-sensor voltage is not included in this historical query.",
-            40: "Latest stored numeric value per PID by sample sequence within the selected range; this is not a maximum-value summary.",
+            40: "Latest stored value per PID in the selected range. Mode 01 values are hidden when their per-PID acquisition age exceeds the live freshness target; age and freshness remain visible.",
         }.items():
             panel = next(item for item in panels if item["id"] == panel_id)
             panel["description"] = description
