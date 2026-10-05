@@ -28,6 +28,7 @@ OBD_FAST_FRESH_MAX_AGE_SECONDS = 0.5
 OBD_FRESH_MAX_AGE_SECONDS = 2
 DEVICE_DATA_FRESH_MAX_AGE_SECONDS = 15
 DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS = 1
+DEVICE_VOLTAGE_GAP_BREAK_MS = 500
 DTC_FRESH_MAX_AGE_SECONDS = 300
 GNSS_FRESH_MAX_AGE_MS = 2_000
 MEMS_FRESH_MAX_AGE_MS = 1_000
@@ -1056,7 +1057,9 @@ def build_dashboard(view: str = "combined") -> dict:
                 7,
                 [
                     target(
-                        fresh_device_voltage(f"freematics_device_battery_voltage_volts{{{DEVICE}}}"),
+                        fresh_device_voltage(
+                            f"freematics_device_battery_voltage_capture_volts{{{DEVICE}}}"
+                        ),
                         "A",
                         "Vehicle supply (Model B input)",
                     ),
@@ -1074,7 +1077,11 @@ def build_dashboard(view: str = "combined") -> dict:
                     f"{OBD_FRESH_MAX_AGE_SECONDS} seconds for ECU PIDs, or {OBD_FAST_FRESH_MAX_AGE_SECONDS} "
                     "seconds for RPM/speed). Supply voltage is unavailable until the collector "
                     "provides its per-measurement age; missing or stale "
-                    "samples remain gaps, and the values are never substituted for each other."
+                    "samples remain gaps, and the values are never substituted for each other. The "
+                    "supply series is emitted only with a valid device capture UTC timestamp, so it "
+                    "disappears and leaves a gap whenever UTC is invalid or unavailable. Prometheus "
+                    "live graphs are evaluated on query steps; use Trips history for capture-exact "
+                    "sample timing and gap placement."
                 ),
                 overrides=[
                     by_name("Vehicle supply (Model B input)", ("color", {"fixedColor": "blue", "mode": "fixed"})),
@@ -1805,13 +1812,31 @@ def build_dashboard(view: str = "combined") -> dict:
                 format="time_series",
             )],
             50: [history_target(
-                "SELECT s.timeline_ms / 1000.0 AS time, "
-                f"MAX(CASE WHEN m.pid = '0x024' AND {history_age_is_fresh('s', '0x094', int(DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS * 1000))} THEN m.numeric_value * 0.01 END) AS \"Model B input voltage (PID 0x024)\", "
-                f"MAX(CASE WHEN m.pid = '0x142' AND {history_mode01_is_fresh('s', '0x142')} THEN m.numeric_value END) AS \"ECU control module voltage (PID 0x042)\" "
+                "WITH sample_values AS ("
+                "SELECT s.sequence, s.timeline_ms, "
+                f"MAX(CASE WHEN m.pid = '0x024' AND {history_age_is_fresh('s', '0x094', int(DEVICE_VOLTAGE_FRESH_MAX_AGE_SECONDS * 1000))} THEN m.numeric_value * 0.01 END) AS voltage, "
+                f"MAX(CASE WHEN m.pid = '0x142' AND {history_mode01_is_fresh('s', '0x142')} THEN m.numeric_value END) AS ecu_voltage "
                 "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
                 "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
-                f"WHERE {sample_trip_where} AND s.{historical_range} "
-                "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time",
+                f"WHERE {sample_trip_where} AND s.timeline_ms IS NOT NULL "
+                "GROUP BY s.trip_id, s.sequence, s.timeline_ms"
+                "), ordered_voltage AS ("
+                "SELECT timeline_ms, voltage, previous_voltage_time_ms, "
+                "timeline_ms - previous_voltage_time_ms AS voltage_interval_ms FROM ("
+                "SELECT timeline_ms, sequence, voltage, "
+                "LAG(timeline_ms) OVER (ORDER BY timeline_ms, sequence) AS previous_voltage_time_ms "
+                "FROM sample_values WHERE voltage IS NOT NULL)"
+                "), voltage_breaks AS ("
+                "SELECT (previous_voltage_time_ms + timeline_ms) / 2000.0 AS time "
+                "FROM ordered_voltage WHERE voltage_interval_ms IS NOT NULL "
+                f"AND voltage_interval_ms >= {DEVICE_VOLTAGE_GAP_BREAK_MS}"
+                ") SELECT timeline_ms / 1000.0 AS time, voltage AS \"Model B input voltage (PID 0x024)\", "
+                "ecu_voltage AS \"ECU control module voltage (PID 0x042)\" FROM sample_values "
+                "WHERE timeline_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "UNION ALL SELECT time, NULL AS \"Model B input voltage (PID 0x024)\", "
+                "NULL AS \"ECU control module voltage (PID 0x042)\" FROM voltage_breaks "
+                "WHERE time * 1000 BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "
+                "ORDER BY time",
                 format="time_series",
             )],
             31: [history_target(

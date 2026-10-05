@@ -1032,7 +1032,7 @@
         "type": "prometheus",
         "uid": "freematics-prometheus"
       },
-      "description": "Separate measurements: Model B device-input vehicle supply and ECU-reported control-module voltage (PID 0x042). Each series is hidden when its own freshness limit is exceeded (1 seconds for the supply-voltage sample; 2 seconds for ECU PIDs, or 0.5 seconds for RPM/speed). Supply voltage is unavailable until the collector provides its per-measurement age; missing or stale samples remain gaps, and the values are never substituted for each other.",
+      "description": "Separate measurements: Model B device-input vehicle supply and ECU-reported control-module voltage (PID 0x042). Each series is hidden when its own freshness limit is exceeded (1 seconds for the supply-voltage sample; 2 seconds for ECU PIDs, or 0.5 seconds for RPM/speed). Supply voltage is unavailable until the collector provides its per-measurement age; missing or stale samples remain gaps, and the values are never substituted for each other. The supply series is emitted only with a valid device capture UTC timestamp, so it disappears and leaves a gap whenever UTC is invalid or unavailable. Prometheus live graphs are evaluated on query steps; use Trips history for capture-exact sample timing and gap placement.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1145,7 +1145,7 @@
             "uid": "freematics-prometheus"
           },
           "editorMode": "code",
-          "expr": "((freematics_device_battery_voltage_volts{device_id=\"$device\"} and on(device_id,trip_id) freematics_device_battery_voltage_age_seconds{device_id=\"$device\"}) unless on(device_id,trip_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1))",
+          "expr": "((freematics_device_battery_voltage_capture_volts{device_id=\"$device\"} and on(device_id,trip_id) freematics_device_battery_voltage_age_seconds{device_id=\"$device\"}) unless on(device_id,trip_id) (freematics_device_battery_voltage_age_seconds{device_id=\"$device\"} > 1))",
           "legendFormat": "Vehicle supply (Model B input)",
           "range": true,
           "refId": "A"

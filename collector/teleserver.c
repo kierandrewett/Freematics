@@ -38,6 +38,7 @@ int uncompress(unsigned char* dest, unsigned long* destLen, const unsigned char*
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <time.h>
 #include "data2kml.h"
 #include "httpd.h"
 #include "teleserver.h"
@@ -159,6 +160,31 @@ static int appendScalarMetric(char* buf, int bs, int l, const char* metric,
 	if (!parseFiniteNumber(data->value, &value) || !isfinite(value * scale)) return l;
 	return appendFormat(buf, bs, l, "%s{device_id=\"%s\",trip_id=\"%s\"} %.10g\n",
 		metric, devid, tripid, value * scale);
+}
+
+static int appendCaptureTimedScalarMetric(char* buf, int bs, int l, const char* metric,
+	const char* devid, const char* tripid, const CHANNEL_DATA* pld,
+	const PID_DATA* data, double scale)
+{
+	if (!buf || bs <= 0 || !pld || !data || !data->ts || l < 0 || l >= bs - 1) return l;
+	const PID_DATA* utcSecondsData = pld->data + PID_CAPTURE_UTC_SECONDS;
+	const PID_DATA* utcMillisecondsData = pld->data + PID_CAPTURE_UTC_MILLISECONDS;
+	if (!utcSecondsData->ts || utcSecondsData->ts != utcMillisecondsData->ts) return l;
+	double utcSeconds, utcMilliseconds, value;
+	if (!parseFiniteNumber(utcSecondsData->value, &utcSeconds) ||
+		!parseFiniteNumber(utcMillisecondsData->value, &utcMilliseconds) ||
+		!parseFiniteNumber(data->value, &value) || !isfinite(value * scale) ||
+		utcSeconds < 1704067200.0 || utcSeconds > UINT32_MAX ||
+		utcSeconds != floor(utcSeconds) || utcMilliseconds < 0 ||
+		utcMilliseconds >= 1000 || utcMilliseconds != floor(utcMilliseconds)) return l;
+	uint64_t measurementUtcMs;
+	time_t collectorNow = time(NULL);
+	if (collectorNow <= 0 || !telemetryCaptureUtcMsForMeasurement((uint32_t)utcSeconds,
+		(uint32_t)utcMilliseconds, pld->deviceTick, utcSecondsData->ts,
+		data->ts, 1, (uint64_t)collectorNow * 1000ULL, &measurementUtcMs)) return l;
+	return appendFormat(buf, bs, l,
+		"%s{device_id=\"%s\",trip_id=\"%s\"} %.10g %" PRIu64 "\n",
+		metric, devid, tripid, value * scale, measurementUtcMs);
 }
 
 static int getNumericPID(const CHANNEL_DATA* pld, uint16_t pid, double* value)
@@ -450,6 +476,12 @@ int uhMetrics(UrlHandlerParam* param)
 		l = appendScalarMetric(buf, bs, l, "freematics_obd_core_failures", pld->devid, pld->tripid, pld->data + PID_OBD_FAST_FAILURES, 1);
 		const PID_DATA* batteryVoltage = pld->data + PID_BATTERY_VOLTAGE;
 		l = appendScalarMetric(buf, bs, l, "freematics_device_battery_voltage_volts", pld->devid, pld->tripid, batteryVoltage, 0.01);
+		/* This parallel series is intentionally absent without trusted capture
+		 * UTC. Its explicit Prometheus timestamp is the device measurement time,
+		 * not this endpoint's scrape/upload time. */
+		l = appendCaptureTimedScalarMetric(buf, bs, l,
+			"freematics_device_battery_voltage_capture_volts", pld->devid,
+			pld->tripid, pld, batteryVoltage, 0.01);
 		if (batteryVoltage->ts) {
 			unsigned int voltageAge = telemetryMeasurementAgeMs(pld->deviceTick, batteryVoltage->ts, age);
 			l = appendFormat(buf, bs, l,
