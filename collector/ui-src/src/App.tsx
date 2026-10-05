@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowUpRight, Search } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -98,6 +98,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [status, setStatus] = useState<Status | null>(null)
+  const [statusCheckedAt, setStatusCheckedAt] = useState<number | null>(null)
   const [listError, setListError] = useState("")
   const [detailError, setDetailError] = useState("")
   const selectedRef = useRef<string | null>(null)
@@ -109,19 +110,24 @@ function App() {
   const other = visible.filter(trip => !isJourney(trip))
   const otherExpanded = showOther || !!query || !!selected && other.some(trip => trip.trip_id === selected)
 
-  function selectTrip(id: string) { selectedRef.current = id; setSelected(id); setDetailError("") }
-  async function loadTrips(before?: string | null) {
-    setLoading(true); setListError("")
+  const selectTrip = useCallback((id: string) => {
+    selectedRef.current = id
+    setSelected(id)
+    setDetail(null)
+    setDetailError("")
+  }, [])
+  const loadTrips = useCallback(async (before?: string | null, showLoading = true) => {
+    if (showLoading) { setLoading(true); setListError("") }
     try {
       const result = await api<{ trips: Trip[]; next_before: string | null }>(`/api/ui/trips?limit=150${before ? `&before=${encodeURIComponent(before)}` : ""}`)
       setTrips(old => { const seen = new Set(old.map(trip => trip.trip_id)); return [...old, ...result.trips.filter(trip => !seen.has(trip.trip_id))] }); setNext(result.next_before)
       if (!selectedRef.current) { const first = result.trips.find(isJourney) || result.trips.find(trip => trip.sample_count > 0) || result.trips[0]; if (first) selectTrip(first.trip_id) }
     } catch (cause) { setListError(`Could not load trips: ${String(cause)}`) }
-    finally { setLoading(false) }
-  }
-  async function refresh() {
+    finally { if (showLoading) setLoading(false) }
+  }, [selectTrip])
+  const refresh = useCallback(async () => {
     try {
-      const result = await api<Status>("/api/ui/status"); setStatus(result)
+      const result = await api<Status>("/api/ui/status"); setStatus(result); setStatusCheckedAt(Date.now())
       if (result.report_version > reportCount.current) {
         const overview = await api<{ trips: Trip[] }>("/api/ui/trips?limit=150")
         const fresh = new Map(overview.trips.map(trip => [trip.trip_id, trip]))
@@ -130,15 +136,15 @@ function App() {
       }
       reportCount.current = result.report_version
     } catch { /* Trip archive remains available if the status request fails. */ }
-  }
-  useEffect(() => { void loadTrips(); void refresh(); const timer = setInterval(() => void refresh(), 30000); return () => clearInterval(timer) }, [])
-  useEffect(() => { if (!selected) return; let cancelled = false; setDetail(null); api<Detail>(`/api/ui/trip?id=${encodeURIComponent(selected)}&limit=1`).then(result => { if (!cancelled) setDetail(result) }).catch(cause => { if (!cancelled) setDetailError(`Could not load this report: ${String(cause)}`) }); return () => { cancelled = true } }, [selected])
+  }, [])
+  useEffect(() => { const initial = window.setTimeout(() => { void loadTrips(undefined, false); void refresh() }, 0); const timer = setInterval(() => void refresh(), 30000); return () => { window.clearTimeout(initial); clearInterval(timer) } }, [loadTrips, refresh])
+  useEffect(() => { if (!selected) return; let cancelled = false; api<Detail>(`/api/ui/trip?id=${encodeURIComponent(selected)}&limit=1`).then(result => { if (!cancelled) setDetail(result) }).catch(cause => { if (!cancelled) setDetailError(`Could not load this report: ${String(cause)}`) }); return () => { cancelled = true } }, [selected])
 
   const last = status?.latest?.archive_mtime_ms
   const link = current ? grafana(current) : null
   const date = current ? tripDate(current) : null
   return <div className="app-shell">
-    <header className="topbar"><div className="topbar-brand"><strong>FREEMATICS</strong><span>Vehicle record</span></div><div className="topbar-right"><span className="receipt-status" role="status"><span className={cn("status-dot", last && Date.now() - last < 600000 && "status-dot-recent")} />{status ? `${status.device_id} · ${last ? `Last data ${stampFormat.format(new Date(last))}` : "No indexed data"}` : "Checking latest data"}</span><Button size="sm" variant="ghost" asChild><a href="https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0">Grafana <ArrowUpRight data-icon="inline-end" /></a></Button></div></header>
+    <header className="topbar"><div className="topbar-brand"><strong>FREEMATICS</strong><span>Vehicle record</span></div><div className="topbar-right"><span className="receipt-status" role="status"><span className={cn("status-dot", last && statusCheckedAt && statusCheckedAt - last < 600000 && "status-dot-recent")} />{status ? `${status.device_id} · ${last ? `Last data ${stampFormat.format(new Date(last))}` : "No indexed data"}` : "Checking latest data"}</span><Button size="sm" variant="ghost" asChild><a href="https://grafana.drewett.dev/d/freematics-vehicle?var-device=ZKUCALJ0">Grafana <ArrowUpRight data-icon="inline-end" /></a></Button></div></header>
     <div className="workspace">
       <aside className="archive-panel" aria-label="Trip archive"><div className="archive-head"><div className="archive-title"><h1>Trip archive</h1><span>{status?.trip_count ?? trips.length} total</span></div><label className="search-field"><Search aria-hidden="true" /><Input aria-label="Search trips by date or ID" placeholder="Search date or trip ID" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
         <ScrollArea className="archive-scroll"><div className="archive-list">
