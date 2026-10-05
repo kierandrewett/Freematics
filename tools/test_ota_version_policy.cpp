@@ -58,12 +58,47 @@ void testMissingAndMalformedMarkersFailClosed() {
   assert(strcmp(version, "1.7.5") == 0);
 }
 
+void testSourceCommitMarkerAcrossChunksAndUniqueness() {
+  const char* commit = "0123456789abcdef0123456789abcdef01234567";
+  freematics::ota::FirmwareSourceCommitScanner scanner;
+  const unsigned char first[] = "prefix FREEMATICS_SOURCE_COMMIT=0123456789abcdef";
+  const unsigned char second[] = "0123456789abcdef01234567\0 suffix";
+  scanner.update(first, sizeof(first) - 1);
+  char found[freematics::ota::FirmwareSourceCommitScanner::kCommitCapacity];
+  assert(!scanner.read(found));
+  scanner.update(second, sizeof(second) - 1);
+  assert(scanner.read(found));
+  assert(strcmp(found, commit) == 0);
+
+  const unsigned char markerLiteralThenValid[] =
+      "FREEMATICS_SOURCE_COMMIT=\0"
+      "FREEMATICS_SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567\0"
+      "FREEMATICS_SOURCE_COMMIT=\0";
+  freematics::ota::FirmwareSourceCommitScanner withCodeMarker;
+  withCodeMarker.update(markerLiteralThenValid, sizeof(markerLiteralThenValid) - 1);
+  assert(withCodeMarker.read(found));
+  assert(strcmp(found, commit) == 0);
+
+  const unsigned char duplicate[] =
+      "FREEMATICS_SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567\0"
+      "FREEMATICS_SOURCE_COMMIT=0123456789abcdef0123456789abcdef01234567\0";
+  freematics::ota::FirmwareSourceCommitScanner nonUnique;
+  nonUnique.update(duplicate, sizeof(duplicate) - 1);
+  assert(!nonUnique.read(found));
+
+  const unsigned char malformed[] = "FREEMATICS_SOURCE_COMMIT=not-a-commit\0";
+  freematics::ota::FirmwareSourceCommitScanner invalid;
+  invalid.update(malformed, sizeof(malformed) - 1);
+  assert(!invalid.read(found));
+}
+
 } // namespace
 
 int main() {
   testVersionParsingAndOrdering();
   testVersionMarkerAcrossChunks();
   testMissingAndMalformedMarkersFailClosed();
+  testSourceCommitMarkerAcrossChunksAndUniqueness();
   puts("OTA firmware version policy: all tests passed");
   return 0;
 }

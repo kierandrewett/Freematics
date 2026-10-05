@@ -32,6 +32,7 @@ const uint8_t kSha256Bytes = 32;
 const uint32_t kPendingIdentityMagic = 0x46544F41; // "FTOA"
 const uint8_t kMaxRedirects = 3;
 const uint32_t kSidecarMaximum = 255;
+const uint32_t kCommitResponseMaximum = 64 * 1024;
 const size_t kPartitionHashChunkBytes = 1024;
 const unsigned kHttpTimeoutMs = 15UL * 60UL * 1000UL;
 // The release version is parsed from the downloaded image before it can be
@@ -163,6 +164,7 @@ struct FirmwareWriter {
   const volatile bool* cancelRequested;
   mbedtls_sha256_context sha;
   freematics::ota::FirmwareVersionScanner versionScanner;
+  freematics::ota::FirmwareSourceCommitScanner sourceCommitScanner;
 };
 
 bool writeFirmware(void* context, const unsigned char* bytes, size_t length)
@@ -183,8 +185,49 @@ bool writeFirmware(void* context, const unsigned char* bytes, size_t length)
     return false;
   }
   writer->versionScanner.update(bytes, length);
+  writer->sourceCommitScanner.update(bytes, length);
   writer->bytesWritten += (uint32_t)length;
   return true;
+}
+
+struct CommitResponse {
+  char data[256];
+  size_t length;
+};
+
+bool writeCommitResponse(void* context, const unsigned char* bytes, size_t length)
+{
+  CommitResponse* response = static_cast<CommitResponse*>(context);
+  if (!response || !bytes) return false;
+  const size_t available = sizeof(response->data) - response->length;
+  const size_t retained = length < available ? length : available;
+  if (retained) {
+    memcpy(response->data + response->length, bytes, retained);
+    response->length += retained;
+  }
+  return true;
+}
+
+bool getReleaseCommit(CellHTTP& cell, const char* tag,
+                      const volatile bool* cancelRequested,
+                      CellHTTPContinueCheck continueCheck, void* continueContext,
+                      char commit[41])
+{
+  if (!tag || !tag[0] || !commit) return false;
+  char path[256];
+  const int pathLength = snprintf(path, sizeof(path),
+      "/repos/kierandrewett/Freematics/commits/%s", tag);
+  if (pathLength <= 0 || (size_t)pathLength >= sizeof(path)) return false;
+  CommitResponse body = {};
+  CellHTTPStreamResponse response = {};
+  AssetWriter context = {cell, cancelRequested, continueCheck, continueContext,
+                         {}, {}, {}, {}, 0};
+  const bool fetched = cell.getStream("api.github.com", 443, path,
+      kCommitResponseMaximum, writeCommitResponse, &body, &response,
+      30000, continueRequested, &context);
+  cell.close();
+  return fetched && response.status == 200 && body.length &&
+      freematics::ota::parseGitHubCommitResponse(body.data, body.length, commit);
 }
 
 bool readBlob(const char* key, void* value, size_t valueLength)
@@ -440,6 +483,13 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
   }
   if (!sidecar.length || sidecar.length >= sizeof(sidecar.data)) return OTA_ATTEMPT_FAILED;
 
+  char releaseCommit[41] = {};
+  if (!getReleaseCommit(cell, asset.releaseTag, cancelRequested,
+                        continueCheck, continueContext, releaseCommit)) {
+    Serial.println("[OTA] Could not resolve the immutable release tag to a commit");
+    return cancelled(cancelRequested) ? OTA_ATTEMPT_CANCELLED : OTA_ATTEMPT_FAILED;
+  }
+
   uint8_t releaseDigest[kSha256Bytes];
   if (!freematics::ota::parseSha256Sidecar(kPackageName, kSidecarName,
           sidecar.data, sidecar.length, releaseDigest)) {
@@ -493,11 +543,25 @@ OtaAttemptResult performOtaReleaseUpdate(CellHTTP& cell, const volatile bool* ca
     esp_ota_abort(firmware.handle);
     return OTA_ATTEMPT_FAILED;
   }
+  if (!freematics::ota::releaseTagMatchesVersion(asset.releaseTag,
+                                                  candidateVersion)) {
+    Serial.println("[OTA] Firmware version does not match the fetched release tag");
+    esp_ota_abort(firmware.handle);
+    return OTA_ATTEMPT_FAILED;
+  }
   if (!freematics::ota::isStrictlyNewerFirmware(candidateVersion,
                                                  FREEMATICS_RELEASE)) {
     Serial.println("[OTA] Latest release is not newer; refusing downgrade or reinstall");
     esp_ota_abort(firmware.handle);
     return OTA_ATTEMPT_NO_UPDATE;
+  }
+  char candidateCommit[freematics::ota::FirmwareSourceCommitScanner::kCommitCapacity];
+  if (!firmware.sourceCommitScanner.read(candidateCommit) ||
+      !freematics::ota::matchesReleaseIdentity(asset.releaseTag,
+          candidateVersion, candidateCommit, releaseCommit)) {
+    Serial.println("[OTA] Firmware source commit does not match the fetched release tag");
+    esp_ota_abort(firmware.handle);
+    return OTA_ATTEMPT_FAILED;
   }
   if (cancelled(cancelRequested)) {
     esp_ota_abort(firmware.handle);

@@ -104,9 +104,14 @@ staging, the running firmware requires a valid candidate version strictly
 newer than its own `FREEMATICS_RELEASE`; same-version rebuilds, malformed
 versions, and downgrades are refused. Set `FREEMATICS_RELEASE` explicitly
 when building a tokenless OTA release, for example `1.0.1` after a `1.0.0`
-image. This is a downgrade guard, not release authentication: an attacker who
-can replace the release assets can still publish a malicious image with a
-higher version.
+image. The device also resolves the captured release tag through GitHub's
+commit API and requires the image's unique embedded
+`FREEMATICS_SOURCE_COMMIT` to match that tag's commit, while requiring the
+image version to exactly match the `vMAJOR.MINOR.PATCH` (or unprefixed)
+release tag. Missing, malformed, duplicate, or mismatched identity metadata is
+rejected before the image is staged. These checks bind asset identity to the
+release ref; they do not authenticate the publisher if the repository or
+release account is compromised.
 
 SHA-256 detects accidental corruption but does not authenticate a release if
 the release asset and sidecar are both replaced by an attacker. HTTPS protects
@@ -247,6 +252,9 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_version_policy.cpp -o /tmp/test_ota_version_policy
 /tmp/test_ota_version_policy
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
+  tools/test_ota_release_policy.cpp -o /tmp/test_ota_release_policy
+/tmp/test_ota_release_policy
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic \
   tools/test_ota_boot_identity.cpp -o /tmp/test_ota_boot_identity
 /tmp/test_ota_boot_identity

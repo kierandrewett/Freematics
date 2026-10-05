@@ -131,6 +131,78 @@ class FirmwareVersionScanner {
   char m_version[kVersionCapacity];
 };
 
+class FirmwareSourceCommitScanner {
+ public:
+  static const size_t kCommitCapacity = 41;
+
+  FirmwareSourceCommitScanner() : m_match(0), m_found(false),
+      m_invalid(false), m_length(0), m_count(0) {
+    m_candidate[0] = '\0';
+    m_commit[0] = '\0';
+  }
+
+  void update(const unsigned char* bytes, size_t length) {
+    if (!bytes || m_invalid) return;
+    for (size_t i = 0; i < length; ++i) consume(static_cast<char>(bytes[i]));
+  }
+
+  bool read(char commit[kCommitCapacity]) const {
+    if (!commit || m_invalid || m_count != 1) return false;
+    memcpy(commit, m_commit, kCommitCapacity);
+    return true;
+  }
+
+ private:
+  void consume(char byte) {
+    static const char marker[] = "FREEMATICS_SOURCE_COMMIT=";
+    if (m_found) {
+      if (byte == '\0') {
+        m_found = false;
+        m_match = 0;
+        if (m_length != 40) { m_length = 0; m_candidate[0] = '\0'; return; }
+        for (size_t i = 0; i < 40; ++i) {
+          if (!((m_candidate[i] >= '0' && m_candidate[i] <= '9') ||
+                (m_candidate[i] >= 'a' && m_candidate[i] <= 'f'))) {
+            m_length = 0;
+            m_candidate[0] = '\0';
+            return;
+          }
+        }
+        if (++m_count != 1) m_invalid = true;
+        else memcpy(m_commit, m_candidate, kCommitCapacity);
+        return;
+      }
+      if (m_length >= 40) {
+        m_found = false;
+        m_match = 0;
+        m_length = 0;
+        m_candidate[0] = '\0';
+        return;
+      }
+      m_candidate[m_length++] = byte;
+      m_candidate[m_length] = '\0';
+      return;
+    }
+    if (byte == marker[m_match]) {
+      if (marker[++m_match] == '\0') {
+        m_found = true;
+        m_length = 0;
+        m_candidate[0] = '\0';
+      }
+    } else {
+      m_match = byte == marker[0] ? 1 : 0;
+    }
+  }
+
+  size_t m_match;
+  bool m_found;
+  bool m_invalid;
+  size_t m_length;
+  size_t m_count;
+  char m_candidate[kCommitCapacity];
+  char m_commit[kCommitCapacity];
+};
+
 } // namespace ota
 } // namespace freematics
 

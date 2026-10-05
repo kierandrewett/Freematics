@@ -1,4 +1,5 @@
 #include "../ota_parked_policy.h"
+#include "../ota_sensor_activity.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -324,6 +325,30 @@ static void testWrapSafeContinuousQuietTimer() {
   assert(policy.quietDurationMs(boundary) == Policy::kRequiredQuietMs);
 }
 
+static void testHighRateEventsSurviveBlockingWorkUntilConsumed() {
+  OTASensorActivityLatch latch;
+  assert(latch.consume() == OTASensorActivityLatch::kNoEvent);
+
+  // Simulate the acquisition task observing an excursion while the standby
+  // owner is blocked hashing an image. The event must still deny activation.
+  latch.observeMotion(0.12f, 0.08f);
+  bool activate = true;
+  if (latch.consume() != OTASensorActivityLatch::kNoEvent) activate = false;
+  assert(!activate);
+  assert(latch.consume() == OTASensorActivityLatch::kNoEvent);
+
+  latch.observeSupply(13.4f);
+  assert(latch.consume() == OTASensorActivityLatch::kSupply);
+  latch.observeSupply(12.5f);
+  latch.observeMotion(0.01f, 0.08f);
+  assert(latch.consume() == OTASensorActivityLatch::kNoEvent);
+  latch.observeMotion(0.2f, 0.08f);
+  latch.observeSupply(11.9f);
+  assert(latch.consume() == (OTASensorActivityLatch::kMotion | OTASensorActivityLatch::kSupply));
+  latch.observeMotionRead(false);
+  assert(latch.consume() == OTASensorActivityLatch::kMotionSensorUnavailable);
+}
+
 int main() {
   testRequiresAnHourOfContinuousSensorEvidence();
   testMotionInvalidSampleAndLongGapRestartTimer();
@@ -337,6 +362,7 @@ int main() {
   testSupplyEvidenceMustRemainContinuousAndResting();
   testSupplyObservationGapInvalidatesParkedProof();
   testWrapSafeContinuousQuietTimer();
+  testHighRateEventsSurviveBlockingWorkUntilConsumed();
   puts("OTA parked eligibility: all tests passed");
   return 0;
 }

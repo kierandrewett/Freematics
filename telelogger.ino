@@ -36,6 +36,7 @@
 #include "ota_update.h"
 #include "ota_cancel_policy.h"
 #include "ota_parked_policy.h"
+#include "ota_sensor_activity.h"
 #include "ota_first_upload_policy.h"
 #include "sdaccess.h"
 #include "recording_checkpoint_policy.h"
@@ -121,6 +122,8 @@ uint64_t usbBootId = 0;
 uint32_t captureSequence = 0;
 freematics::recording::WrapUpCheckpointPolicy wrapUpCheckpointPolicy;
 OTAParkedPolicy otaParkedPolicy;
+OTASensorActivityLatch otaSensorActivityLatch;
+volatile bool otaParkedWatchActive = false;
 volatile bool otaCheckRequested = false;
 volatile bool otaAttemptStarted = false;
 volatile bool otaAttemptDone = false;
@@ -1545,6 +1548,22 @@ bool consumeOtaVehicleActivity()
   return true;
 }
 
+bool consumeOtaSensorActivity()
+{
+  portENTER_CRITICAL(&otaActivityMux);
+  const uint8_t events = otaSensorActivityLatch.consume();
+  portEXIT_CRITICAL(&otaActivityMux);
+  if (!events) return false;
+  noteOtaResetEvent(millis(), false);
+  if (events & OTASensorActivityLatch::kMotion)
+    Serial.println("[OTA] High-rate motion event observed; 60-minute parked proof restarted");
+  if (events & OTASensorActivityLatch::kSupply)
+    Serial.println("[OTA] High-rate supply excursion observed; 60-minute parked proof restarted");
+  if (events & OTASensorActivityLatch::kMotionSensorUnavailable)
+    Serial.println("[OTA] High-rate motion read failed; 60-minute parked proof restarted");
+  return true;
+}
+
 #if ENABLE_CAN_CAPTURE && ENABLE_OBD && STORAGE != STORAGE_NONE
 bool passiveCanCaptureComplete = false;
 
@@ -2462,6 +2481,11 @@ void acquireMEMS(void*)
     if (sys.devType > 12) {
       const float voltage = readVehicleVoltage();
       const uint32_t acquiredMs = millis();
+      if (otaParkedWatchActive) {
+        portENTER_CRITICAL(&otaActivityMux);
+        otaSensorActivityLatch.observeSupply(voltage);
+        portEXIT_CRITICAL(&otaActivityMux);
+      }
       portENTER_CRITICAL(&sensorMux);
       noteVoltage(intervalExtremes, voltage);
       if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordVoltage(acquiredMs, voltage);
@@ -2504,15 +2528,31 @@ void acquireMEMS(void*)
       float rawAcceleration[3];
       memcpy(rawAcceleration, snapshot.acceleration, sizeof(rawAcceleration));
       for (byte i = 0; i < 3; i++) snapshot.acceleration[i] -= accBias[i];
+      if (otaParkedWatchActive) {
+        const float x = snapshot.acceleration[0];
+        const float y = snapshot.acceleration[1];
+        const float z = snapshot.acceleration[2];
+        const float motionMagnitude = sqrtf(x * x + y * y + z * z);
+        portENTER_CRITICAL(&otaActivityMux);
+        otaSensorActivityLatch.observeMotion(motionMagnitude, STANDBY_MOTION_THRESHOLD);
+        portEXIT_CRITICAL(&otaActivityMux);
+      }
       snapshot.timestamp = millis();
       portENTER_CRITICAL(&sensorMux);
       memsSnapshot = snapshot;
       noteAcceleration(intervalExtremes, snapshot.acceleration);
       if (powerPhase != PHASE_WRAP_UP) sensorWaveforms.recordMotion(snapshot.timestamp, rawAcceleration, snapshot.gyro);
       portEXIT_CRITICAL(&sensorMux);
-    } else if (++failures >= 10) {
+    } else {
+      if (otaParkedWatchActive) {
+        portENTER_CRITICAL(&otaActivityMux);
+        otaSensorActivityLatch.observeMotionRead(false);
+        portEXIT_CRITICAL(&otaActivityMux);
+      }
+      if (++failures >= 10) {
       state.clear(STATE_MEMS_READY);
       Serial.println("[MEMS] Repeated read failures; retrying sensor initialisation");
+      }
     }
     delay(20);
   }
@@ -3200,8 +3240,15 @@ void telemetry(void* inst)
 
 OTAParkedPolicy::Denial finalOtaParkedCheck()
 {
+  // Any high-rate event during a blocking probe/OBD read invalidates the
+  // proof, even if the current sensor values have since returned to rest.
+  const bool sensorActivityBeforeCheck = consumeOtaSensorActivity();
   OTAParkedPolicy::Observation observation = {};
   observation.durableStorageHealthy = false;
+  if (sensorActivityBeforeCheck) {
+    observation.activity = true;
+    return otaParkedPolicy.observe(millis(), observation);
+  }
 #if STORAGE == STORAGE_SD
   // This check is called by the standby owner, after logger shutdown and while
   // the telemetry owner is parked. Prove current filesystem write/readback,
@@ -3231,6 +3278,11 @@ OTAParkedPolicy::Denial finalOtaParkedCheck()
                                    supplyAt, 1000UL, supply};
   obd.enterLowPowerMode();
 #endif
+  const bool sensorActivityDuringCheck = consumeOtaSensorActivity();
+  if (sensorActivityDuringCheck) {
+    observation.activity = true;
+    return otaParkedPolicy.observe(millis(), observation);
+  }
   return otaParkedPolicy.observe(millis(), observation);
 }
 
@@ -3299,10 +3351,14 @@ void standby()
     xSemaphoreGive(memsMutex);
   }
 #if ENABLE_OTA
+  otaParkedWatchActive = true;
   while (state.check(STATE_STANDBY)) {
     bool sensorReadFailed = false;
-    if (waitMotion(1000, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
-                   &sensorReadFailed)) break;
+    const bool motionWakeDuringParkPoll = waitMotion(1000, STANDBY_MOTION_THRESHOLD,
+        STANDBY_MOTION_CONFIRM_SAMPLES, &sensorReadFailed);
+    const bool latchedSensorActivity = consumeOtaSensorActivity();
+    if (motionWakeDuringParkPoll) break;
+    if (latchedSensorActivity) continue;
     const uint32_t now = millis();
     if ((int32_t)(now - otaNextCheckTime) < 0) continue;
     if (!telemetryParked) {
@@ -3366,6 +3422,10 @@ void standby()
     bool credentialUnavailable = false;
     float otaSupplyVoltage = 0;
     while (state.check(STATE_STANDBY) && !otaAttemptDone) {
+      if (consumeOtaSensorActivity()) {
+        vehicleActivity = true;
+        break;
+      }
       if (consumeOtaVehicleActivity()) {
         vehicleActivity = true;
         break;
@@ -3374,6 +3434,11 @@ void standby()
       if (waitMotion(250, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES,
                      &failedThisPoll)) {
         motionWake = true;
+        otaCancelRequested = true;
+        break;
+      }
+      if (consumeOtaSensorActivity()) {
+        vehicleActivity = true;
         otaCancelRequested = true;
         break;
       }
@@ -3503,26 +3568,42 @@ void standby()
           continue;
         }
 
+        if (consumeOtaSensorActivity()) {
+          discardVerifiedOtaUpdate();
+          otaAttemptResult = OTA_ATTEMPT_CANCELLED;
+          otaAttemptDone = false;
+          Serial.println("[OTA] Candidate discarded: high-rate sensor activity during image preparation");
+          break;
+        }
+
         sensorReadFailed = false;
         const bool motionDuringPrepare = waitMotion(1000, STANDBY_MOTION_THRESHOLD,
             STANDBY_MOTION_CONFIRM_SAMPLES, &sensorReadFailed);
+        const bool latchedActivityDuringPrepare = consumeOtaSensorActivity();
         unsafeToReboot = !telemetryEndpointConfigured() ||
                          !telemetryCredentialPersisted();
 #if STORAGE == STORAGE_SD
         unsafeToReboot = unsafeToReboot || !durableQueue.healthy();
 #endif
         const OTAParkedPolicy::Denial activationDenial =
-            unsafeToReboot || motionDuringPrepare || sensorReadFailed
+            unsafeToReboot || motionDuringPrepare || latchedActivityDuringPrepare || sensorReadFailed
                 ? OTAParkedPolicy::kMotionUnavailable : finalOtaParkedCheck();
-        if (unsafeToReboot || motionDuringPrepare || sensorReadFailed ||
+        if (unsafeToReboot || motionDuringPrepare || latchedActivityDuringPrepare || sensorReadFailed ||
             activationDenial != OTAParkedPolicy::kEligible) {
           discardVerifiedOtaUpdate();
           otaAttemptResult = OTA_ATTEMPT_CANCELLED;
           otaAttemptDone = false;
           if (unsafeToReboot) Serial.println("[OTA] Candidate discarded before activation: storage, endpoint or credential unavailable");
-          else if (motionDuringPrepare || sensorReadFailed) Serial.println("[OTA] Candidate discarded before activation: motion or sensor fault");
+          else if (motionDuringPrepare || latchedActivityDuringPrepare || sensorReadFailed) Serial.println("[OTA] Candidate discarded before activation: motion or sensor fault");
           else Serial.printf("[OTA] Candidate discarded before activation: parked safety gate changed (%u)\n",
                              (unsigned)activationDenial);
+          break;
+        }
+        if (consumeOtaSensorActivity()) {
+          discardVerifiedOtaUpdate();
+          otaAttemptResult = OTA_ATTEMPT_CANCELLED;
+          otaAttemptDone = false;
+          Serial.println("[OTA] Candidate discarded: high-rate sensor activity immediately before activation");
           break;
         }
         if (!activateVerifiedOtaUpdate()) {
@@ -3539,6 +3620,7 @@ void standby()
       otaAttemptDone = false;
     }
   }
+  otaParkedWatchActive = false;
 #else
   waitMotion(-1, STANDBY_MOTION_THRESHOLD, STANDBY_MOTION_CONFIRM_SAMPLES);
 #endif

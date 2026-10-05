@@ -8,10 +8,56 @@ namespace ota {
 
 inline bool allowedReleaseHost(const char* host)
 {
-  return host && (!strcmp(host, "github.com") ||
+  return host && (!strcmp(host, "github.com") || !strcmp(host, "api.github.com") ||
       !strcmp(host, "release-assets.githubusercontent.com") ||
       !strcmp(host, "github-releases.githubusercontent.com") ||
       !strcmp(host, "objects.githubusercontent.com"));
+}
+
+inline bool releaseTagMatchesVersion(const char* tag, const char* version)
+{
+  if (!tag || !version) return false;
+  const char* taggedVersion = tag[0] == 'v' ? tag + 1 : tag;
+  return !strcmp(taggedVersion, version);
+}
+
+inline bool matchesReleaseIdentity(const char* tag, const char* version,
+                                   const char* imageCommit,
+                                   const char* tagCommit)
+{
+  if (!releaseTagMatchesVersion(tag, version) || !imageCommit || !tagCommit ||
+      strlen(imageCommit) != 40 || strlen(tagCommit) != 40) return false;
+  for (size_t i = 0; i < 40; ++i) {
+    const char ch = imageCommit[i];
+    if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) ||
+        !((tagCommit[i] >= '0' && tagCommit[i] <= '9') ||
+          (tagCommit[i] >= 'a' && tagCommit[i] <= 'f'))) return false;
+  }
+  return !strcmp(imageCommit, tagCommit);
+}
+
+// GitHub's /repos/{owner}/{repo}/commits/{ref} response starts with the
+// canonical commit object's SHA. Keep parsing deliberately narrow and fail
+// closed if the response shape or SHA is unexpected.
+inline bool parseGitHubCommitResponse(const char* json, size_t length,
+                                      char commit[41])
+{
+  if (!json || !commit) return false;
+  size_t i = 0;
+  while (i < length && (json[i] == ' ' || json[i] == '\n' ||
+                        json[i] == '\r' || json[i] == '\t')) ++i;
+  static const char prefix[] = "{\"sha\":\"";
+  if (length - i < sizeof(prefix) - 1 + 41 ||
+      memcmp(json + i, prefix, sizeof(prefix) - 1)) return false;
+  const char* value = json + i + sizeof(prefix) - 1;
+  for (size_t n = 0; n < 40; ++n) {
+    if (!((value[n] >= '0' && value[n] <= '9') ||
+          (value[n] >= 'a' && value[n] <= 'f'))) return false;
+  }
+  if (value[40] != '"') return false;
+  memcpy(commit, value, 40);
+  commit[40] = '\0';
+  return true;
 }
 
 // Recover the immutable release tag from GitHub's redirect target for a

@@ -70,6 +70,40 @@ void testExtractsAnImmutableReleaseTagFromLatestRedirect()
   assert(strcmp(tag, "v1.2.3") == 0);
 }
 
+void testDownloadedImageMustMatchFetchedReleaseIdentity()
+{
+  const char* commit = "0123456789abcdef0123456789abcdef01234567";
+  const char* otherCommit = "1123456789abcdef0123456789abcdef01234567";
+  assert(freematics::ota::matchesReleaseIdentity("v1.2.3", "1.2.3",
+                                                  commit, commit));
+  assert(freematics::ota::matchesReleaseIdentity("1.2.3", "1.2.3",
+                                                  commit, commit));
+  assert(!freematics::ota::matchesReleaseIdentity("v1.2.4", "1.2.3",
+                                                   commit, commit));
+  assert(!freematics::ota::matchesReleaseIdentity("v1.2.3", "1.2.4",
+                                                   commit, commit));
+  assert(!freematics::ota::matchesReleaseIdentity("v1.2.3", "1.2.3",
+                                                   otherCommit, commit));
+  assert(!freematics::ota::matchesReleaseIdentity("v1.2.3", "1.2.3",
+                                                   "bad", commit));
+}
+
+void testParsesGitHubTagCommitResponse()
+{
+  const char* json = " {\"sha\":\"0123456789abcdef0123456789abcdef01234567\",\"url\":\"x\"}";
+  char commit[41] = {};
+  assert(freematics::ota::parseGitHubCommitResponse(json, strlen(json), commit));
+  assert(strcmp(commit, "0123456789abcdef0123456789abcdef01234567") == 0);
+  const char* malformed[] = {
+      "{}", "{\"sha\":\"bad\"}",
+      "{\"sha\":\"0123456789abcdef0123456789abcdef01234567x\"}",
+      "{\"other\":\"0123456789abcdef0123456789abcdef01234567\"}",
+  };
+  for (const char* response : malformed)
+    assert(!freematics::ota::parseGitHubCommitResponse(
+        response, strlen(response), commit));
+}
+
 void testRejectsUnexpectedReleaseRedirectPaths()
 {
   const char* paths[] = {
@@ -99,6 +133,8 @@ int main()
   testRejectsUnsafeAuthoritiesAndPaths();
   testRejectsTruncation();
   testExtractsAnImmutableReleaseTagFromLatestRedirect();
+  testDownloadedImageMustMatchFetchedReleaseIdentity();
+  testParsesGitHubTagCommitResponse();
   testRejectsUnexpectedReleaseRedirectPaths();
   return 0;
 }
