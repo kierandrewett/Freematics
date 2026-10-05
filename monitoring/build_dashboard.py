@@ -122,12 +122,13 @@ def voltage_waveform_sql() -> str:
         "), chart_rows AS ("
         "SELECT point_time_ms AS time_ms, voltage FROM ordered_points "
         "UNION ALL "
-        # A voltage capture normally arrives every 20 ms. A null at the midpoint
-        # of larger intervals makes missing persisted observations visible; it
-        # does not interpolate or invent a voltage value.
+        # A voltage capture normally arrives every 20 ms. A 40 ms interval can
+        # already mean one missing capture, so break at that boundary. A null at
+        # the midpoint makes missing persisted observations visible; it does
+        # not interpolate or invent a voltage value.
         "SELECT (previous_time_ms + point_time_ms) / 2 AS time_ms, NULL AS voltage "
         "FROM ordered_points WHERE previous_time_ms IS NOT NULL "
-        "AND point_time_ms - previous_time_ms > 40"
+        "AND point_time_ms - previous_time_ms >= 40"
         ") SELECT time_ms / 1000.0 AS time, voltage AS "
         '"Vehicle supply (Model B input)" FROM chart_rows '
         "WHERE time_ms BETWEEN CAST($__from AS INTEGER) AND CAST($__to AS INTEGER) "

@@ -447,7 +447,7 @@ class DashboardViewsTest(unittest.TestCase):
         self.assertIn("f.pid = '0x0A0'", sql)
         self.assertIn("s.device_monotonic_ms", sql)
         self.assertIn("LAG(point_time_ms)", sql)
-        self.assertIn("point_time_ms - previous_time_ms > 40", sql)
+        self.assertIn("point_time_ms - previous_time_ms >= 40", sql)
         self.assertNotIn("collector_received_ms", sql)
         self.assertNotIn("archive_mtime_ms", sql)
 
@@ -461,7 +461,7 @@ class DashboardViewsTest(unittest.TestCase):
             sample_rows = (
                 (0, 4294967290, 10000, "4294967295;1200"),
                 (1, 5, 10016, "15;1198"),
-                (2, 105, 10116, "115;1170"),
+                (2, 105, 10116, "55;1170"),
                 (3, 205, 10216, "bad;1400"),
             )
             for sequence, monotonic, timeline, raw in sample_rows:
@@ -486,8 +486,8 @@ class DashboardViewsTest(unittest.TestCase):
             self.assertEqual(rows, [
                 (10.005, 12.0),
                 (10.026, 11.98),
-                (10.076, None),
-                (10.126, 11.7),
+                (10.046, None),
+                (10.066, 11.7),
             ])
         finally:
             connection.close()
