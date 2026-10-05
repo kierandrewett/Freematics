@@ -328,7 +328,7 @@ int uhMetrics(UrlHandlerParam* param)
 		"# TYPE freematics_device_queue_bytes gauge\n"
 		"# HELP freematics_device_durable_queue_bytes Unacknowledged bytes retained on microSD.\n"
 		"# TYPE freematics_device_durable_queue_bytes gauge\n"
-		"# HELP freematics_device_missed_readings Collection cycles without a free RAM slot.\n"
+		"# HELP freematics_device_missed_readings Cumulative unrecorded sampling cycles since boot; does not identify the cause or recover missing measurements.\n"
 		"# TYPE freematics_device_missed_readings gauge\n"
 		"# HELP freematics_device_durable_queue_healthy Whether the microSD journal accepted its latest write.\n"
 		"# TYPE freematics_device_durable_queue_healthy gauge\n"

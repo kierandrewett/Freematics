@@ -2203,6 +2203,46 @@ def build_dashboard(view: str = "combined") -> dict:
             if layout is not None:
                 x, y, width, height = layout
                 panel["gridPos"] = {"h": height, "w": width, "x": x, "y": y}
+        missed_readings_sql = (
+            "SELECT s.timeline_ms / 1000.0 AS time, "
+            "MAX(CASE WHEN m.pid = '0x08E' THEN m.numeric_value END) AS \"Missed collection cycles\" "
+            "FROM sample AS s LEFT JOIN sample_metric AS m ON m.device_id = s.device_id "
+            "AND m.trip_id = s.trip_id AND m.sequence = s.sequence "
+            f"WHERE {sample_trip_where} AND s.{historical_range} "
+            "GROUP BY s.trip_id, s.sequence, s.timeline_ms ORDER BY time"
+        )
+        missed_readings_panel = timeseries(
+            54,
+            "Unrecorded sample cycles",
+            0,
+            104,
+            24,
+            6,
+            [history_target(
+                historical_series_with_gap_breaks(missed_readings_sql, ("Missed collection cycles",)),
+                format="time_series",
+            )],
+            unit="short",
+            description=(
+                "Cumulative firmware-reported sampling cycles that were not journaled, including the final "
+                "wrap-up checkpoint when it commits successfully. A rising step proves the device counted "
+                "lost cycles, but does not identify whether timing, buffer availability, or SD caused them. "
+                "A flat line is not proof that no loss occurred; missing checkpoint data means the final "
+                "counter could not be durably reported. Capture-sequence gaps remain separately visible "
+                "in the evidence table."
+            ),
+            overrides=[
+                by_name("Missed collection cycles", ("color", {"fixedColor": "orange", "mode": "fixed"}),
+                        ("custom.lineInterpolation", "stepAfter"), ("decimals", 0)),
+            ],
+        )
+        missed_readings_panel["fieldConfig"]["defaults"]["custom"].update({
+            "lineInterpolation": "stepAfter",
+            "showPoints": "never",
+            "spanNulls": False,
+            "insertNulls": False,
+        })
+        panels.append(missed_readings_panel)
     else:
         combined_scan = next(panel for panel in panels if panel["id"] == 47)
         combined_scan["gridPos"] = {"h": 3, "w": 6, "x": 0, "y": 76}

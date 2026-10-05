@@ -237,6 +237,7 @@ class DashboardViewsTest(unittest.TestCase):
             42: {"h": 8, "w": 24, "x": 0, "y": 80},
             44: {"h": 8, "w": 24, "x": 0, "y": 88},
             48: {"h": 8, "w": 24, "x": 0, "y": 96},
+            54: {"h": 6, "w": 24, "x": 0, "y": 104},
             50: {"h": 7, "w": 24, "x": 0, "y": 39},
             52: {"h": 7, "w": 24, "x": 0, "y": 46},
             53: {"h": 5, "w": 24, "x": 0, "y": 53},
@@ -574,6 +575,48 @@ class DashboardViewsTest(unittest.TestCase):
                 sql = sql.replace(variable, value)
             rows = connection.execute(sql).fetchall()
             self.assertEqual([row[2] for row in rows], [750.0, 760.0, None, 790.0])
+        finally:
+            connection.close()
+
+    def test_historical_missed_cycle_chart_shows_wrap_up_total_and_capture_gap(self) -> None:
+        panel = next(panel for panel in build_dashboard("trips")["panels"] if panel["id"] == 54)
+        self.assertEqual(panel["title"], "Unrecorded sample cycles")
+        self.assertIn("does not identify whether timing", panel["description"])
+        custom = panel["fieldConfig"]["defaults"]["custom"]
+        self.assertEqual(custom["lineInterpolation"], "stepAfter")
+        self.assertFalse(custom["spanNulls"])
+        self.assertFalse(custom["insertNulls"])
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript((MONITORING.parent / "collector" / "history_schema.sql").read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO trip(device_id, trip_id, archive_path, collector_login_ms, timeline_start_ms, timeline_end_ms, timestamp_quality, sample_count, archive_mtime_ms, updated_at_ms) "
+                "VALUES ('CAR', 'TRIP', '/data/CAR/TRIP.txt', 1000, 1000, 2000, 'device', 4, 2000, 2000)"
+            )
+            for sequence, timeline, capture_sequence, missed in (
+                (0, 1000, 0, 0), (1, 1250, 1, 0), (2, 1500, 2, 1), (3, 2000, 5, 4),
+            ):
+                connection.execute(
+                    "INSERT INTO sample(device_id, trip_id, sequence, device_monotonic_ms, timeline_ms, archive_mtime_ms, timestamp_quality, capture_session_id, capture_sequence) "
+                    "VALUES ('CAR', 'TRIP', ?, ?, ?, 2000, 'device', 'BOOT', ?)",
+                    (sequence, timeline - 1000, timeline, capture_sequence),
+                )
+                connection.execute(
+                    "INSERT INTO sample_metric(device_id, trip_id, sequence, pid, numeric_value) VALUES ('CAR', 'TRIP', ?, '0x08E', ?)",
+                    (sequence, missed),
+                )
+            sql = panel["targets"][0]["queryText"]
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                sql = sql.replace(variable, value)
+            self.assertEqual(connection.execute(sql).fetchall(), [
+                (1.0, 0), (1.25, 0), (1.5, 1), (1.75, None), (2.0, 4),
+            ])
         finally:
             connection.close()
 
