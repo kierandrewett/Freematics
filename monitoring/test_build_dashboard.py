@@ -763,6 +763,11 @@ class DashboardViewsTest(unittest.TestCase):
                         (sequence, "0x442", ecu_age),
                     ),
                 )
+                connection.execute(
+                    "INSERT INTO sample_field(device_id, trip_id, sequence, ordinal, pid, text_value) "
+                    "VALUES ('CAR', 'TRIP', ?, 0, '0x0A0', ?)",
+                    (sequence, ("1000;1300", "1270;1290", "1500;bad", "2520;1180")[sequence]),
+                )
             sql = panel["targets"][0]["queryText"]
             for variable, value in {
                 "${device:sqlstring}": "'CAR'",
@@ -777,6 +782,23 @@ class DashboardViewsTest(unittest.TestCase):
                 (1.5, None, None),
                 (2.0, None, None),
                 (2.5, 760.0, 14.1),
+            ])
+            supply_sql = panel["targets"][1]["queryText"]
+            for variable, value in {
+                "${device:sqlstring}": "'CAR'",
+                "${trip:sqlstring}": "'TRIP'",
+                "$__from": "0",
+                "$__to": "9999999999999",
+            }.items():
+                supply_sql = supply_sql.replace(variable, value)
+            supply_rows = connection.execute(supply_sql).fetchall()
+            self.assertEqual(supply_rows, [
+                (1.0, 13.0),
+                (1.135, None),  # Missing waveform samples between retained points.
+                (1.27, 12.9),
+                (1.895, None),  # Malformed raw field is ignored and leaves this gap.
+                (2.0, None),    # Missing capture interval in the shared timeline.
+                (2.52, 11.8),
             ])
         finally:
             connection.close()
